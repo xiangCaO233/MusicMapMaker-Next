@@ -478,12 +478,15 @@ bool calculateMarqueeTrackLayout(const SessionContext& ctx,
         rightX = camera.viewportWidth -
                  ctx.lastConfig.visual.previewConfig.margin.right;
     } else {
-        const auto projection = calculatePlayerTrackProjection(
-            camera.viewportWidth,
-            ctx.trackCount,
-            ctx.lastConfig.visual.trackLayout.left,
-            ctx.lastConfig.visual.trackLayout.right,
-            camera.horizontalOffsetX);
+        // 计算框选轨道边界时沿用当前视口，保证候选与随后构造的命中框同宽。
+        const auto& layout =
+            SessionUtils::visualForCamera(ctx, cameraId).trackLayout;
+        const auto projection =
+            calculatePlayerTrackProjection(camera.viewportWidth,
+                                           ctx.trackCount,
+                                           layout.left,
+                                           layout.right,
+                                           camera.horizontalOffsetX);
         leftX  = projection.leftX;
         rightX = projection.rightX;
     }
@@ -506,6 +509,9 @@ SelectionScreenContext makeSelectionScreenContext(
     const SessionContext& ctx, const std::string& cameraId,
     const System::ScrollCache* cache)
 {
+
+    // 坐标采用收到输入的视口布局，保留会话原有的编辑和吸附规则。
+    const auto& visual = SessionUtils::visualForCamera(ctx, cameraId);
     SelectionScreenContext screen;
     // 缺滚动映射时无法把时间转换到屏幕，返回无效上下文。
     // 不在框选热路径临时重建缓存或访问文件。
@@ -535,12 +541,12 @@ SelectionScreenContext makeSelectionScreenContext(
 
     screen.cache = cache;
     // 只借用会话当前配置，不在逐物件热路径复制配置容器或共享所有权。
-    screen.visual = &ctx.lastConfig.visual;
+    screen.visual = &visual;
     // 缓存指针只是观察引用，图集句柄则维持快照在本次框选期间的生命周期。
     // 即使引擎切换图集版本，本上下文仍使用同一份 UV 数据。
     screen.uvMap = std::move(uvMap);
     screen.judgmentLineY =
-        cameraIt->second.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
+        cameraIt->second.viewportHeight * visual.judgeline_pos;
     screen.leftX        = leftX;
     screen.singleTrackW = singleTrackW;
     if ( SessionUtils::isMainCanvasCameraId(cameraId) ) {
@@ -549,7 +555,7 @@ SelectionScreenContext makeSelectionScreenContext(
             cameraIt->second.viewportWidth,
             ctx.trackCount,
             ctx.bgmTrackCount,
-            ctx.lastConfig.visual.trackLayout,
+            visual.trackLayout,
             cameraIt->second.horizontalOffsetX,
             true,
             ctx.lastConfig.settings.isBmsEditingEnabled(),
@@ -561,9 +567,8 @@ SelectionScreenContext makeSelectionScreenContext(
     }
     screen.renderScaleY =
         calculateMarqueeRenderScaleY(ctx, cameraIt->second, cameraId);
-    screen.noteW = singleTrackW * ctx.lastConfig.visual.noteScaleX;
-    screen.noteH =
-        (singleTrackW / baseAspect) * ctx.lastConfig.visual.noteScaleY;
+    screen.noteW = singleTrackW * visual.noteScaleX;
+    screen.noteH = (singleTrackW / baseAspect) * visual.noteScaleY;
     // 用动画时间作为屏幕锚点，与当前显示位置一致。
     // 若改用音频真实时间，平滑滚动期间框选会与可见物件错位。
     // 粗筛窗口也必须覆盖放大后的定高部件，否则精筛看不到边缘候选。
@@ -1303,7 +1308,7 @@ bool collectMarqueeBoxCandidates(
     // 删除最长物件后缓存允许保守高估，完整重建时才收敛。
     // 该标量随原索引维护，不在拖框过程中另行统计全部物件。
     // 不在连续框选中重建索引或统计全谱；缩小范围时也不能漏掉原区间候选。
-    const auto& visual = ctx.lastConfig.visual;
+    const auto& visual = *box.screen.visual;
     const float bodyScaleY =
         Config::sanitizeHitboxScale(visual.interactionHitboxScaleY) *
         Config::sanitizeHitboxScale(
@@ -1614,8 +1619,7 @@ void collectMarqueeSampleCandidates(
 /// @warning 逻辑热路径：框选区域变化时调用；按框数量读取视口和图集缓存。
 /// @note 每个框使用其所属相机的投影，不能复用最后活动相机的屏幕参数。
 /// @note 无效矩形不进入结果，后续候选筛选只处理可用的框。
-std::vector<PreparedMarqueeBox> prepareMarqueeBoxes(
-    const SessionContext& ctx, const System::ScrollCache* cache)
+std::vector<PreparedMarqueeBox> prepareMarqueeBoxes(const SessionContext& ctx)
 {
     std::vector<PreparedMarqueeBox> boxes;
     // 预留当前框数容量，生成过程中不因逐框追加反复扩容。
@@ -1624,8 +1628,11 @@ std::vector<PreparedMarqueeBox> prepareMarqueeBoxes(
     for ( const auto& box : ctx.marqueeBoxes ) {
         PreparedMarqueeBox prepared;
         prepared.box    = box;
-        prepared.screen = makeSelectionScreenContext(ctx, box.cameraId, cache);
-        prepared.rect   = makeMarqueeScreenRect(box, prepared.screen);
+        prepared.screen = makeSelectionScreenContext(
+            ctx,
+            box.cameraId,
+            SessionUtils::scrollCacheForCamera(ctx, box.cameraId));
+        prepared.rect = makeMarqueeScreenRect(box, prepared.screen);
         // 屏幕投影或框面积无效时略过，不向二分筛选传递半有效输入。
         // 移动 prepared 避免额外复制内部 UV 共享句柄。
         if ( prepared.rect.valid ) {
@@ -1887,18 +1894,20 @@ void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
     }
 
     const auto  cameraIterator = m_ctx.cameras.find(cmd.cameraId);
-    const auto* cache =
-        m_ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+    const auto* cache = SessionUtils::scrollCacheForCamera(m_ctx, cmd.cameraId);
     if ( cameraIterator == m_ctx.cameras.end() || !cache ) {
         return;
     }
 
-    const auto& camera     = cameraIterator->second;
-    const auto  projection = calculateCanvasLaneProjection(
+    const auto&                    camera = cameraIterator->second;
+    const Config::EditorConfigView config{ SessionUtils::visualForCamera(
+                                               m_ctx, cmd.cameraId),
+                                           m_ctx.lastConfig.settings };
+    const auto                     projection = calculateCanvasLaneProjection(
         camera.viewportWidth,
         m_ctx.trackCount,
         m_ctx.bgmTrackCount,
-        m_ctx.lastConfig.visual.trackLayout,
+        config.visual.trackLayout,
         camera.horizontalOffsetX,
         true,
         m_ctx.lastConfig.settings.isBmsEditingEnabled(),
@@ -1917,7 +1926,7 @@ void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
     // 纵向使用当前动画锚点逆映射，与鼠标所见画面位置一致。
     // 缓存已包含滚动速度与缩放，不能再次按固定像素每秒换算。
     const float judgmentLineY =
-        camera.viewportHeight * m_ctx.lastConfig.visual.judgeline_pos;
+        camera.viewportHeight * config.visual.judgeline_pos;
     const double currentAbsY = cache->getAbsY(m_ctx.animateTime);
     double timestamp = cache->getTime(currentAbsY + judgmentLineY - cmd.mouseY);
     if ( !std::isfinite(timestamp) ) {
@@ -1929,12 +1938,13 @@ void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
         timestamp,
         cmd.mouseY,
         camera,
-        m_ctx.lastConfig,
+        config,
         m_ctx.bpmEvents,
         m_ctx.timelineRegistry,
         m_ctx.animateTime,
         m_ctx.cameras,
-        m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm);
+        m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm,
+        cache);
     // Ctrl 暂时绕过吸附，其他情况下采用公共拍点规则。
     // 最后钳制非负时间，资源拖入不创建负时间采样。
     if ( snap.isSnapped && !cmd.isCtrlDown ) {
@@ -2843,11 +2853,9 @@ void InteractionController::updateMarqueeSelection(bool forceFullSync)
     m_ctx.isMarqueeSelectionDirty = false;
     if ( m_ctx.marqueeBoxes.empty() ) return;
 
-    const auto* cache =
-        m_ctx.timelineRegistry.ctx().find<System::ScrollCache>();
     // 按每个框自己的相机准备屏幕数据，后续候选重复使用这些结果。
     // 没有有效框时不先清除选中集合，避免缺少视口时丢失选择。
-    const auto preparedBoxes = prepareMarqueeBoxes(m_ctx, cache);
+    const auto preparedBoxes = prepareMarqueeBoxes(m_ctx);
     if ( preparedBoxes.empty() ) {
         // 唯一的减选框缩成零面积时也要即时恢复基线，不能等到松手。
         // 经典模式仍保留无有效框时不改变选择的既有约定。

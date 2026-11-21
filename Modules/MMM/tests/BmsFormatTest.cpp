@@ -147,15 +147,16 @@ bool verifyBpmDefinitionReuse(const std::filesystem::path& root)
         const auto path = root / (std::string("repeated_bpm_") + mode + ".bms");
         if ( !map.saveToFile(path) || definitions(path) != 3 ) return false;
         const auto restored = MMM::BeatMap::loadFromFile(path);
-        // 读取器额外生成初始 BPM；其后每条通道事件都必须独立保留。
-        // 比较事件数可发现误把重复定义当成冗余变速并删除的实现。
+        // 头部对应原零点首红线，其余通道事件包括同值的回归速度必须保留。
+        // 数量少一条会漏红线，多一条则说明零点仍然重复写出。
+        // 重读时头部产生的红线也参与逐条比较，确保开头速度没有丢失。
         if ( restored.m_noteData.notes.size() != 1 ||
-             restored.m_timings.size() != map.m_timings.size() + 1 )
+             restored.m_timings.size() != map.m_timings.size() )
             return false;
         for ( std::size_t i = 0; i < map.m_timings.size(); ++i ) {
             // 按原有稳定顺序逐一匹配，而非只统计不同 BPM 的集合。
             // 重复切换到同一速度仍是时间线事件，必须有对应输出。
-            const auto& actual   = restored.m_timings[i + 1];
+            const auto& actual   = restored.m_timings[i];
             const auto& expected = map.m_timings[i];
             // 累积时间与每次 BPM 同时比较，防止只保持事件数量。
             // 接近值的差异大于断言容差，因此不能被宽松比较掩盖。
@@ -239,12 +240,13 @@ bool verifyDenseBpmTiming(const std::filesystem::path& root)
     // 只允许文本编码误差，不能通过删除事件降低输出分辨率。
     if ( !map.saveToFile(path) ) return false;
     const auto restored = MMM::BeatMap::loadFromFile(path);
-    if ( restored.m_timings.size() != map.m_timings.size() + 1 ||
+    // 首条由头部恢复，其余同刻及后续红线仍按原次序存在。
+    if ( restored.m_timings.size() != map.m_timings.size() ||
          restored.m_noteData.notes.size() != map.m_noteData.notes.size() ||
          restored.m_noteData.holds.size() != 1 )
         return false;
     for ( std::size_t i = 0; i < map.m_timings.size(); ++i ) {
-        const auto& actual   = restored.m_timings[i + 1];
+        const auto& actual   = restored.m_timings[i];
         const auto& expected = map.m_timings[i];
         // 相同 BPM 可重复引用定义，但每次切换的时刻和值均应保持。
         // 时刻容差与现有跨格式探针一致，不能容忍兼容吸附的毫秒级漂移。
@@ -471,11 +473,12 @@ int main(int argc, char** argv)
             timingError(source.m_noteData.notes, target.m_noteData.notes),
             timingError(source.m_noteData.holds, target.m_noteData.holds));
         /// @brief 收集实际音乐时轴，忽略目标格式不承载的纯视觉滚速。
-        // 读取器额外创建一条头部 BPM；只移除这一条，不合并重复变速。
-        // 按时刻稳定排序，避免来源容器顺序不同造成错误的配对。
-        const auto musicTimings = [](const MMM::BeatMap& map, bool initial) {
+        // BMS 头部恢复为零点红线。来源已在零点时，头部对应原事件；
+        // 否则它是额外的初始速度，比较事件列表时须先去掉这一条。
+        const auto musicTimings = [](const MMM::BeatMap& map,
+                                     bool                removeHeader) {
             // SCROLL 不参与音乐时钟；不能为了消除数量差过滤 BPM 或 STOP。
-            // 初始头部不是一次来源变速，只在目标侧扣除读取器补出的那条。
+            // 稳定排序保留同刻事件次序，避免把几个不同值合并成一条。
             std::vector<std::tuple<double, int, double>> values;
             for ( const auto& timing : map.m_timings )
                 if ( timing.m_timingEffect == MMM::TimingEffect::BPM ||
@@ -483,7 +486,7 @@ int main(int argc, char** argv)
                     values.emplace_back(timing.m_timestamp,
                                         static_cast<int>(timing.m_timingEffect),
                                         timing.m_timingEffectParameter);
-            if ( initial && !values.empty() ) values.erase(values.begin());
+            if ( removeHeader && !values.empty() ) values.erase(values.begin());
             std::stable_sort(
                 values.begin(), values.end(), [](const auto& a, const auto& b) {
                     return std::get<0>(a) < std::get<0>(b);
@@ -492,7 +495,15 @@ int main(int argc, char** argv)
         };
         // 真实曲库还包含同刻重复红线，逐条保留能防止编号复用被误写成事件去重。
         const auto beforeTimings = musicTimings(source, false);
-        const auto afterTimings  = musicTimings(target, true);
+        // 来源的零点 BPM 可能排在同刻 STOP 之后，不能只检查第一项。
+        const bool headerRepresentsSource =
+            std::any_of(source.m_timings.begin(),
+                        source.m_timings.end(),
+                        [](const auto& t) {
+                            return t.m_timingEffect == MMM::TimingEffect::BPM &&
+                                   t.m_timestamp == 0;
+                        });
+        const auto afterTimings = musicTimings(target, !headerRepresentsSource);
         // 数量不同即标记失败，后续配对的偏移只供定位，不能成为通过依据。
         // 只遍历两侧共同范围，避免异常来源在诊断时导致越界。
         bool   timingsPreserved = beforeTimings.size() == afterTimings.size();

@@ -36,6 +36,7 @@
 #include "canvas/ComposeLessonHintGeometry.h"
 #include "canvas/ComposeTargetEligibility.h"
 #include "canvas/PlanarObservationCamera.h"
+#include "common/ComparisonCanvas.h"
 #include "common/LogicCommands.h"
 #include "common/render/CanvasCameraMath.h"
 #include "common/render/RenderSnapshotBuffer.h"
@@ -56,16 +57,22 @@
 #include "logic/ecs/system/render/SkinTextureScale.h"
 #include "logic/session/CanvasCamera.h"
 #include "network/collaboration/CollaborationRoom.h"
+#include "ui/Icons.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/CanvasTabManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/imgui/manager/ToolbarView.h"
 #include "ui/layout/LayoutContext.h"
+#include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/ComposeLessonCatalog.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
 #include "ui/walkthrough/WelcomeView.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <fmt/format.h>
 #include <iterator>
 #include <limits>
@@ -480,6 +487,23 @@ bool isWheelOverCurrentWindowContent()
            !ImGui::IsAnyMouseDown() && isMouseHoveringCurrentWindowContent();
 }
 
+/// @brief 基于会话 ID 产生统一的标签文字色，混合主题文字色以保留可读性。
+/// @warning UI 热路径：使用固定色表，不为配色分配或持久化状态。
+ImVec4 comparisonTabTextColor(std::string_view owner)
+{
+    // 原始 ID 作为组键，比较后缀与标签顺序都不参与取色。
+    // 因此拖动标签、改谱名或关闭某个对比窗口不会改变其余标签颜色。
+    constexpr ImVec4 accents[] = {
+        { 0.20F, 0.68F, 1.00F, 1.0F }, { 0.27F, 0.87F, 0.53F, 1.0F },
+        { 1.00F, 0.63F, 0.17F, 1.0F }, { 0.76F, 0.52F, 0.98F, 1.0F },
+        { 0.16F, 0.82F, 0.82F, 1.0F }, { 1.00F, 0.44F, 0.56F, 1.0F }
+    };
+    const auto index =
+        ImHashStr(owner.data(), owner.size()) % std::size(accents);
+    return ImLerp(
+        ImGui::GetStyleColorVec4(ImGuiCol_Text), accents[index], 0.58F);
+}
+
 /// @brief 判断当前主画布 ImGui 窗口本帧是否真实可见。
 /// @return 窗口内容区域可见且不是隐藏 Dock Tab 时返回 true。
 /// @details WasActive、Hidden、Collapsed 与 SkipItems 覆盖普通窗口退化状态，
@@ -641,31 +665,68 @@ void drawWalkthroughLightBulb(ImDrawList* drawList, const ImVec2& center,
 
 }  // namespace
 
+/// @brief 工具面板打开状态及对比画布专用的布局配置。
+/// @details 配置与界面草稿仅由 UI 线程访问，逻辑通过独立的只读视口快照读取。
+/// 工具状态的生命周期与视口一致，藏在后台标签时仍可保留。
+/// 首次进入时继承主编辑器布局；随后主设置改变不重置这份快照。
+/// 逻辑每次完整发布以新指针替换旧版本，渲染与编辑共同借用同一版布局。
+/// 与窗口相关的面板尺寸和颜色编辑状态留在 UI 中，不随快照传输。
+/// 键数变化只切换有效布局，不改写其他键数的轨道和组件覆盖。
+/// 视口关闭后释放可变副本；共享谱面会话由原标签的关闭流程管理。
+/// 不能把配置成员引用保存到派发命令：关闭标签可早于逻辑消费。
+/// 某个对比页正在拖动布局时，其他标签仍可按原来的规则重绘谱面。
+/// 字体、音频和谱面元数据仍由原编辑环境提供，局部设置只覆盖布局及对应输入。
+struct Basic2DCanvas::ComparisonLayout {
+    Config::EditorConfig m_config;  ///< 当前视口可变布局和拖动约束。
+    UI::ToolbarView::LayoutPanelState m_panel;  ///< 本视口布局表单交互状态。
+    std::string m_popupName;                    ///< 由视口 ID 固定的面板身份。
+    int         m_publishedKeyCount{ -1 };      ///< 已发布快照展开的键数。
+    bool m_publishedPlanarLayoutMode{ false };  ///< 已发布的平面布局编辑状态。
+    bool m_open{ false };                       ///< 布局模式及弹层同时启用。
+    bool m_dirty{ true };  ///< 有布局变更等待同步到逻辑线程。
+};
+
 /// @brief 创建绑定到逻辑会话的二维主画布。
-/// @param name 稳定画布名，用于 ImGui 内部 ID 与皮肤配置。
-/// @param w 初始离屏目标宽度。
-/// @param h 初始离屏目标高度。
-/// @param syncBuffer 逻辑线程发布渲染快照的共享缓冲。
-/// @param cameraId 逻辑相机标识；为空时回退到 name。
+/// @param name UI 注册 ID，主窗口与每个对比窗口使用不同值。
+/// @param w 初始离屏目标宽度，未布局前只用于建立缓冲。
+/// @param h 初始离屏目标高度，布局后由 Resize 事件更新。
+/// @param syncBuffer 当前视口独有的快照缓冲，逻辑端可按同一相机 ID 找到它。
+/// @param cameraId 逻辑相机 ID，空值沿用窗口注册名。
+/// @param comparisonIndex 对比标签序号，为零时走原始谱面窗口的生命周期。
 /// @details 构造阶段创建独立交互控制器和背景视频播放器，
 /// 但 Vulkan 纹理及 pipeline 仍由渲染器初始化路径延后建立。
 /// 交互控制器只保存 cameraId，不取得 Canvas 所有权。
 Basic2DCanvas::Basic2DCanvas(
     const std::string& name, uint32_t w, uint32_t h,
     std::shared_ptr<Common::Render::RenderSnapshotBuffer> syncBuffer,
-    const std::string&                                    cameraId)
+    const std::string& cameraId, std::uint64_t comparisonIndex)
     : IUIView(name)
     , IRenderableView(name)
     , m_canvasName(name)
     , m_cameraId(cameraId.empty() ? name : cameraId)
+    , m_comparisonIndex(comparisonIndex)
     , m_syncBuffer(std::move(syncBuffer))
 {
     // 初始尺寸用于首个 RenderContext；后续尺寸变化通过事件同步给相机。
     m_targetWidth  = w;
     m_targetHeight = h;
+    if ( m_comparisonIndex != 0 ) {
+        m_comparisonLayout = std::make_unique<ComparisonLayout>();
+        m_comparisonLayout->m_config =
+            Config::AppConfig::instance().getEditorConfig();
+        m_comparisonLayout->m_popupName =
+            "##LayoutComponentsPopup/" + m_cameraId;
+        // 初始布局从当前普通编辑器取得一份副本，随后不受其它视图覆盖。
+        m_comparisonSettings.linearMapping =
+            !m_comparisonLayout->m_config.visual.enableLinearScrollMapping;
+    }
 
     m_interaction =
         std::make_unique<Basic2DCanvasInteraction>(m_canvasName, m_cameraId);
+    if ( m_comparisonLayout )
+        m_interaction->setLocalLayout(&m_comparisonLayout->m_config.visual,
+                                      &m_comparisonLayout->m_dirty,
+                                      &m_comparisonLayout->m_open);
     m_backgroundVideoPlayer = std::make_unique<BackgroundVideoPlayer>();
 }
 
@@ -2634,32 +2695,51 @@ void Basic2DCanvas::updateComposeWalkthrough(
 /// 本作用域只决定操作解释，不改变平台事件投递、离屏纹理或逻辑命令目标。
 /// 多画布各自保留当前投影与控制器，应用级方案选择不合并它们的手势状态。
 /// 输入方案只在 UI 线程生效，快照准备和 Vulkan 命令录制仍不读取可变方案。
+/// 原始窗口与对比窗口都向同一谱面会话提交工具命令。相机 ID 留在命令
+/// 中，使逻辑层按实际视口的滚动映射解释像素，而非按当前主标签换算。
+/// 只有原始窗口应处理脏谱面的保存确认和最后一张谱面的占位恢复。
+/// @warning 每帧读取 UI 和快照状态；窗口可见性、相机配置仅在变化边沿同步。
 void Basic2DCanvas::update(UI::UIManager* sourceManager)
 {
+    // UI 分流仍归类为主画布，快捷键和音频操作兼容旧的会话绑定。
+    // 具体坐标由视口 ID 选择，不能另建谱面或复制编辑历史。
     const UI::Interaction::SurfaceScope interactionScope(
         UI::Interaction::Surface::MainCanvas);
-    auto& engine = Logic::EditorEngine::instance();
+    auto&      engine     = Logic::EditorEngine::instance();
+    const bool comparison = m_comparisonIndex != 0;
+    const bool chinese =
+        Config::AppConfig::instance().getEditorSettings().language == "zh_cn";
+    const auto owner = Common::canvasSessionCameraId(m_cameraId);
+    auto*      tabs =
+        sourceManager->getView<UI::CanvasTabManager>("CanvasTabManager");
+    // 原始标签和对比标签都查询谱面的同一所有者。只有分组已存在时，
+    // 双窗口发生抢焦点的可能才成立；旧工作区继续保留原有焦点语义。
+    // 这里不查询任何会话可变配置，标签关系由 UI 线程的轻量索引提供。
+    const bool hasComparison = tabs && tabs->hasComparison(owner);
     // 布局状态只在进入/退出边沿创建和释放；退出恢复保存的实际相机投影。
     // 全局工具退出时所有画布都会释放各自的辅助编辑状态。
     // 保持原始相机配置，真正的最终视角由随后的录制阶段应用。
     const bool layoutEditing =
-        engine.getCurrentTool() == Logic::EditTool::Layout &&
+        (comparison ? m_comparisonLayout->m_open
+                    : engine.getCurrentTool() == Logic::EditTool::Layout) &&
         m_currentSnapshot && m_currentSnapshot->hasBeatmap;
+    // 两种编辑器分别进入工具；共享会话的全局工具切换不会销毁对比页状态。
+    // 布局的相机辅助控件跟随布局模式生灭，视觉值本身一直保留到关闭标签。
     if ( layoutEditing && !m_layoutEditor )
         // 状态对象只在工具进入边沿分配，不在连续拖动帧重复创建。
         m_layoutEditor = std::make_unique<CameraLayoutEditor>();
     if ( !layoutEditing && m_layoutEditor ) {
         m_layoutEditor.reset();
         // 仅工具切换的低频路径保存配置，拖动过程不会执行文件 IO。
-        Config::AppConfig::instance().save();
+        if ( !comparison ) Config::AppConfig::instance().save();
     }
     // cameraId 是窗口与会话的稳定连接键；索引会随标签关闭和重排变化，
     // 因此需要使用时重新解析，不能跨帧缓存旧索引。
-    auto findSessionIndex = [this, &engine]() -> int32_t {
+    auto findSessionIndex = [owner, &engine]() -> int32_t {
         const auto snapshot = engine.getSessionUiSnapshot();
         // 此次 cameraId 解析始终读取同一代际，避免借用可移动条目。
         for ( const auto& entry : snapshot->entries ) {
-            if ( entry.cameraId == m_cameraId ) {
+            if ( entry.cameraId == owner ) {
                 // 返回当前容器中的即时索引，调用方在同一同步步骤内使用。
                 return entry.index;
             }
@@ -2669,7 +2749,7 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
 
     // 关闭请求先经过脏谱面确认。未保存内容存在时恢复窗口 open 状态，
     // 由后面的模态框决定保存、丢弃或取消，不能立即销毁会话。
-    if ( !m_isOpen ) {
+    if ( !comparison && !m_isOpen ) {
         if ( !m_closeConfirmed && m_currentSnapshot &&
              m_currentSnapshot->isDirty ) {
             m_isOpen          = true;
@@ -2740,14 +2820,30 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
 
     // 会话结构重置先于新渲染快照发布，占位身份必须立即压过旧谱名。
     // 不等待逻辑线程生成下一份画面，也不能让旧 dirty 标志留在标签上。
-    const bool titleHasBeatmap = !isLogoPlaceholder && m_currentSnapshot &&
-                                 m_currentSnapshot->hasBeatmap;
-    const std::string title    = makeCanvasTabTitle(
+    const bool  titleHasBeatmap = !isLogoPlaceholder && m_currentSnapshot &&
+                                  m_currentSnapshot->hasBeatmap;
+    std::string title           = makeCanvasTabTitle(
         TR("canvas.editor").data(),
         titleHasBeatmap,
         m_currentSnapshot ? m_currentSnapshot->beatmapName : std::string_view{},
         m_currentSnapshot && m_currentSnapshot->isDirty,
         collaborationStatusLabel);
+    // 本地化短语兼容升级前的资源包，窗口内部身份始终取稳定相机 ID。
+    // 同一个谱面可以同时拥有普通、线性和透视视图，保留不同窗口标题。
+    if ( comparison ) {
+        // 编号放在前面，即使窄停靠节点裁去谱名后半段仍可区分窗口。
+        // ImGui 的稳定后缀仍由相机 ID 提供，不以可译文本查找工作区。
+        title = fmt::format(
+            "{} · {}",
+            fmt::format(
+                fmt::runtime(MMM::Translation::getActiveTranslator()
+                                 .translate(MMM::Hash::hashString(
+                                                "canvas.comparison.title"),
+                                            chinese ? "对比 {}" : "Compare {}")
+                                 .view()),
+                m_comparisonIndex),
+            title);
+    }
     // 标题 helper 统一组合编辑器名、谱名、脏标志与协作状态；
     // 无快照或 Logo 占位页时不会泄漏上一谱面的可见标题。
 
@@ -2769,17 +2865,54 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         }
         m_shouldFocusNextFrame = false;
     }
+    // 对比是工作区中的临时观察窗口，重启后不会凭旧 ini 再建一份会话。
+    // 仍允许 ImGui 在本次运行期间保存当前窗口所在的停靠节点内存状态。
+    const auto windowFlags = comparison ? ImGuiWindowFlags_NoSavedSettings
+                             : keepWelcomeFocus
+                                 ? ImGuiWindowFlags_NoFocusOnAppearing
+                                 : ImGuiWindowFlags_None;
+    // ImGui 将 Begin 时的文字样式存入停靠标签。内容区仍使用皮肤原色。
+    // 同一谱面的颜色是对比标签的分组标识；不把局部颜色传给相邻停靠窗。
+    // 只有窗口 Begin 读取分组颜色，进入内容后恢复皮肤前景色。
+    if ( hasComparison )
+        ImGui::PushStyleColor(ImGuiCol_Text, comparisonTabTextColor(owner));
     UI::LayoutContext lctx(*this,
                            windowName,
                            true,
-                           keepWelcomeFocus
-                               ? ImGuiWindowFlags_NoFocusOnAppearing
-                               : ImGuiWindowFlags_None,
+                           windowFlags,
                            showClose ? &m_isOpen : nullptr,
                            dockId,
                            ImGuiCond_Always);
-    reportBeatmapTabWalkthroughTarget(
-        sourceManager, ImGui::GetCurrentWindow(), !isLogoPlaceholder);
+    if ( hasComparison ) ImGui::PopStyleColor();
+    if ( tabs && titleHasBeatmap &&
+         sourceManager->workspacePresentation().usesDesktopLayout() ) {
+        // 使用原生 TabBar 已裁剪的悬停 ID，不把相邻标签或画布空白视为入口。
+        // 在内容可见性判断之前绘制，以便后台谱面的标签也能打开自己的菜单。
+        // 菜单随该窗口的 ID 栈建立，选择时把谱面所有者交给下一帧的窗口管理器。
+        const auto* window = ImGui::GetCurrentWindow();
+        if ( window->TabId && GImGui->HoveredId == window->TabId &&
+             ImGui::IsMouseReleased(ImGuiMouseButton_Right) &&
+             !ImGui::IsPopupOpen(
+                 nullptr,
+                 ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) )
+            UI::FeedbackOpenPopup("##BeatmapTabMenu");
+        // 菜单选项必须交回标签管理器，真正的新窗口只能在下一轮创建。
+        // 因而不会在遍历可见窗口时修改视图容器或重新建立 GPU 资源。
+        if ( ImGui::BeginPopup("##BeatmapTabMenu") ) {
+            if ( UI::FeedbackMenuItem(
+                     MMM::Translation::getActiveTranslator()
+                         .translate(
+                             MMM::Hash::hashString("canvas.comparison.open"),
+                             chinese ? "新建对比视图" : "New comparison view")
+                         .data()) )
+                tabs->requestComparisonCanvas(owner);
+            ImGui::EndPopup();
+        }
+    }
+    if ( !comparison ) {
+        reportBeatmapTabWalkthroughTarget(
+            sourceManager, ImGui::GetCurrentWindow(), !isLogoPlaceholder);
+    }
     // 标签目标先于内容可见性计算提交，使后台谱面也能提供可点击入口。
     // 内容区域目标则只在标签真正可见并拥有有效 RenderContext 时上报。
     // ImGuiCond_Always 只应用显式非零 dockId；普通帧传入零时保留
@@ -2794,13 +2927,40 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
     m_isCanvasVisible = isCurrentCanvasWindowVisible();
     // 可见性同步到会话调度器，使逻辑线程只准备当前可见 Canvas 的
     // 完整渲染数据，同时后台标签仍保留自身对象与轻量状态。
-    engine.setSessionCanvasVisible(m_cameraId, m_isCanvasVisible);
+    if ( !comparison ) {
+        // 原始标签在后台时，仍需给其它 Dock 节点的可见对比生产快照。
+        // 只原始窗口发布聚合后的可见性，防止隐藏的对比覆盖其状态。
+        engine.setSessionCanvasVisible(
+            m_cameraId,
+            m_isCanvasVisible || (hasComparison && tabs->hasVisibleComparison(
+                                                       *sourceManager, owner)));
+    }
+
+    // 关闭属于对比窗口自身，既不发出保存确认，也不重置原始谱面。
+    // 原始会话关闭时由标签管理器统一回收所属的全部对比。
+    // 已关标签不得再注册逻辑相机，即使停靠系统本帧仍留有窗口标识。
+    // 新视口用不同序号创建，迟到的按钮与 Resize 事件不会命中后来者。
+    if ( comparison && !m_isOpen ) return;
 
     if ( m_isCanvasVisible ) {
         // 只有真实可见标签创建 RenderContext；其 RAII 生命周期负责
         // 检查目标尺寸并在离开作用域前完成离屏表面布局。
-        RenderContext rctx(
-            this, m_canvasName.c_str(), m_targetWidth, m_targetHeight, nullptr);
+        const float dpiScale =
+            Config::AppConfig::instance().getWindowContentScale();
+        const bool mobile =
+            !sourceManager->workspacePresentation().usesDesktopLayout();
+        // 只在横向为本地工具留白，画布高度直接使用与主窗口相同的内容区。
+        // 小屏上的操作区按触控密度分配，空间不足时优先保留画布交互宽度。
+        // 这也是独立纹理和拾取使用的净宽，不能把按钮区面积算进轨道宽。
+        const float railWidth =
+            comparison ? std::floor((mobile ? 52.0F : 36.0F) * dpiScale) : 0.0F;
+        RenderContext rctx(this,
+                           m_canvasName.c_str(),
+                           m_targetWidth,
+                           m_targetHeight,
+                           nullptr,
+                           railWidth,
+                           48.0F * dpiScale);
 
         // 键盘或鼠标使当前窗口获得根级焦点时，同步活动 Session。
         // 只有索引确实变化才发布，避免每帧重复触发会话切换副作用。
@@ -2844,7 +3004,7 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         // 动态插值另行传递，因为它只移动谱面顶点，没有更新原始命中框。
         // 输入映射与待录制的轨道投影共用矩阵；背景仍使用自己的屏幕投影。
         // 每帧只构造一次平面逆矩阵，后续拾取和拖动都复用固定大小缓存。
-        auto& cameraVisual = Config::AppConfig::instance().getVisualConfig();
+        auto& cameraVisual = canvasVisualConfig();
         // 相机拖动和精确输入共用变更检测，逻辑厚度补偿必须与 UI 投影同源。
         // 只发布固定大小观察参数，不能在交互中等待会话更新或广播完整配置。
         const bool previousPoseEnabled = cameraVisual.canvasCameraPoseEnabled;
@@ -2873,11 +3033,17 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
              previousMotion != cameraVisual.canvasMotionCompensation ||
              previousThickness != cameraVisual.canvasThicknessCompensation ) {
             // 摄像机手势与数值输入共用即时方案捕获，磁盘写入不会等待在 UI。
-            Config::AppConfig::instance().saveLayoutChanges();
-            // 姿态也影响每个音符的补偿倍率，不能仅在长度或强度变化时同步。
-            // 通过配置修订让下一逻辑轮次采用当前视角，不取得会话长锁。
-            engine.updateCanvasCameraConfig(cameraVisual);
+            if ( comparison ) {
+                m_comparisonLayout->m_dirty = true;
+            } else {
+                Config::AppConfig::instance().saveLayoutChanges();
+                // 姿态也影响每个音符的补偿倍率，不能仅在长度或强度变化时同步。
+                // 通过配置修订让下一逻辑轮次采用当前视角，不取得会话长锁。
+                engine.updateCanvasCameraConfig(cameraVisual);
+            }
         }
+        // 编辑布局元素时用平面投影解释句柄；进入相机工具则由其接管输入。
+        // 离开工具后恢复配置指定的投影，透视拾取必须和渲染矩阵同步。
         const bool cameraViewEnabled =
             hasCameraScene && !layoutEditing &&
             (cameraVisual.canvasCameraPoseEnabled ||
@@ -2892,22 +3058,42 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                                                  canvasSize.y,
                                                  cameraViewEnabled),
             m_lastAppliedYOffset);
-        if ( m_currentSnapshot && !cameraViewEnabled )
+        if ( !comparison && m_currentSnapshot && !cameraViewEnabled )
             // 教学屏幕提示未投影，仅在二维视图沿用旧的目标定位。
             reportCanvasWalkthroughTargets(sourceManager,
                                            *m_currentSnapshot,
                                            canvasScreenPosition,
                                            canvasSize);
 
+        // 3D 对比的透视不影响主窗口的教学提示，注册目标仍使用原始视图。
+        // 主画布和对比同时停靠可见时，只有指针选定的视口解释当次编辑动作。
         // 后台谱面收到内容区滚轮时先切换活动会话和窗口焦点，
         // 本帧若 cameraId 已切换成功即可继续消费这一次滚轮操作。
-        bool isActiveCanvas = engine.getActiveCameraId() == m_cameraId;
-        if ( !isActiveCanvas && myIndex != -1 &&
-             isWheelOverCurrentWindowContent() ) {
+        const bool focused =
+            ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+        bool isActiveCanvas =
+            engine.getActiveCameraId() == owner && (!hasComparison || focused);
+        // 同一会话的多个窗口不能同时提交编辑。首次在另一内容区按下或滚动
+        // 时切换到该窗口，工具继续使用收到输入的视口坐标。
+        // 只允许在纹理区域触发编辑焦点切换，避免复选框点击落入绘制工具。
+        // 三维窗口随后再通过自己的输入逆矩阵求轨道平面坐标。
+        const auto mouse = ImGui::GetIO().MousePos;
+        const bool pointerOnSurface =
+            isMouseHoveringCurrentWindowContent() &&
+            mouse.x >= canvasScreenPosition.x &&
+            mouse.y >= canvasScreenPosition.y &&
+            mouse.x < canvasScreenPosition.x + canvasSize.x &&
+            mouse.y < canvasScreenPosition.y + canvasSize.y;
+        if ( !isActiveCanvas && myIndex != -1 && pointerOnSurface &&
+             (isWheelOverCurrentWindowContent() ||
+              (hasComparison &&
+               (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
+                ImGui::IsMouseClicked(ImGuiMouseButton_Middle)))) ) {
             ImGui::SetWindowFocus();
             engine.setActiveSessionIndex(myIndex);
             m_shouldFocusNextFrame = true;
-            isActiveCanvas         = engine.getActiveCameraId() == m_cameraId;
+            isActiveCanvas         = engine.getActiveCameraId() == owner;
             XINFO(
                 "Basic2DCanvas: Wheel switched active session to index {} "
                 "(cameraId={})",
@@ -2925,7 +3111,7 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
             updateCollaborationViewports(
                 sourceManager, canvasScreenPosition, canvasSize);
             bool lessonButtonHovered = false;
-            if ( m_currentSnapshot && !cameraViewEnabled ) {
+            if ( !comparison && m_currentSnapshot && !cameraViewEnabled ) {
                 // 教学命中装饰同样依赖二维像素，透视模式跳过装饰而保留普通编辑。
                 // 教程先判定本帧释放是否合法，以便交互控制器随后选择提交或
                 // 取消 CmdEndBrush；目标装饰不创建 ImGui Item，不拦截画布输入。
@@ -2957,6 +3143,78 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
             m_interaction->updateReadOnlyHover(
                 m_currentSnapshot, m_logicalWidth, m_logicalHeight);
             m_interaction->updateTransientUi();
+        }
+        // 整个竖栏处在画布几何边界外，按钮按下不会开始画笔或框选。
+        // 浮层锚点使用这帧的实际宽高，停靠尺寸变化时不使用旧坐标。
+        const float reserved = rctx.getReservedRightWidth();
+        if ( comparison && reserved > 4.0F * dpiScale ) {
+            drawComparisonToolbar(*sourceManager,
+                                  { canvasScreenPosition.x + canvasSize.x,
+                                    canvasScreenPosition.y },
+                                  { reserved, canvasSize.y });
+        }
+    }
+
+    // 窗口切换或选项变更才跨线程同步。隐藏标签仍保留选项和摄像机，
+    // 逻辑侧据 visible 跳过不可见的快照准备，避免后台标签消耗 GPU。
+    // 隐藏态是逻辑生成快照的门闩。大小、配置和显隐的首次发布要建立同一个相机。
+    // 已登记的相机随后由 Resize 协议处理几何；改变工具设置不重置横向位置。
+    const bool visibilityChanged =
+        m_comparisonSettings.visible != m_isCanvasVisible;
+    m_comparisonSettings.visible = m_isCanvasVisible;
+    // 从未显示的标签先不注册零尺寸相机，避免空快照进入纹理和拾取流程。
+    // 已经登记的窗口改变显隐时仍发最终状态，让逻辑停止或恢复对应输出。
+    if ( comparison && (m_isCanvasVisible || m_comparisonSettingsPublished) ) {
+        auto&     layout   = *m_comparisonLayout;
+        const int keyCount = layoutKeyCount();
+        // 模式边沿也需要替换快照，即使用户只从相机页切回元素页。
+        // 正交编辑只改变当前几何投影，快照不能覆盖对比页保存的自由姿态。
+        const bool planarLayoutMode =
+            layoutEditing && !m_layoutEditor->cameraMode();
+        const bool layoutChanged =
+            layout.m_dirty || layout.m_publishedKeyCount != keyCount ||
+            layout.m_publishedPlanarLayoutMode != planarLayoutMode;
+        // 工具动作只在发生修改时发布，普通帧不复制配置或跨线程持有可变引用。
+        if ( layoutChanged ) {
+            // UI
+            // 先复制并展开当前键数，再转交只读所有权，后台不借用编辑中的容器。
+            // 颜色、命中尺度和轨道间距一起生效，避免快照中混入旧的局部字段。
+            // 比较标记在命令入队后由会话消费，不需要 UI 等待逻辑线程。
+            auto visual =
+                std::make_shared<Config::VisualConfig>(layout.m_config.visual);
+            visual->applyKeyCountLayout(keyCount);
+            visual->enableLinearScrollMapping =
+                m_comparisonSettings.linearMapping;
+            // 元素编辑以二维比例操作。临时取消投影补偿，保留原相机预设供退出时恢复。
+            if ( planarLayoutMode ) {
+                visual->canvasCameraPoseEnabled       = false;
+                visual->debugCanvasCameraAngleDegrees = 0.0F;
+                visual->debugCanvasCameraYawDegrees   = 0.0F;
+                visual->debugCanvasCameraDistance     = 1.0F;
+            }
+            m_comparisonSettings.visual = std::move(visual);
+            m_comparisonSettings.disableVerticalObjectDrag =
+                layout.m_config.settings.disableVerticalObjectDrag;
+            layout.m_publishedKeyCount         = keyCount;
+            layout.m_publishedPlanarLayoutMode = planarLayoutMode;
+            layout.m_dirty                     = false;
+        }
+        if ( !m_comparisonSettingsPublished || visibilityChanged ||
+             layoutChanged ) {
+            // 初次注册使用扣除竖栏后的逻辑尺寸。目标纹理尺寸已经包含
+            // framebuffer 缩放，不能用来解释屏幕坐标。首次 Resize 可能
+            // 在逻辑相机注册前消费；之后的尺寸变化由普通 Resize 事件承担。
+            engine.pushCommand(Logic::CmdUpdateViewport{
+                .cameraId   = m_cameraId,
+                .width      = m_comparisonSettingsPublished
+                                  ? 0.0F
+                                  : static_cast<float>(m_logicalWidth),
+                .height     = m_comparisonSettingsPublished
+                                  ? 0.0F
+                                  : static_cast<float>(m_logicalHeight),
+                .comparison = m_comparisonSettings,
+            });
+            m_comparisonSettingsPublished = true;
         }
     }
 
@@ -3066,7 +3324,7 @@ void Basic2DCanvas::updateCollaborationViewports(
         return;
     }
 
-    const auto& visual = Config::AppConfig::instance().getVisualConfig();
+    const auto& visual = canvasVisualConfig();
     // 渲染模式是本地显示偏好，不写入 ParticipantViewport；不同用户
     // 可独立选择填充、轮廓或轨道边缘而不影响网络协议。
     const auto  viewportRenderMode = Config::AppConfig::instance()
@@ -3774,7 +4032,7 @@ bool Basic2DCanvas::drawCameraLayoutControls()
     if ( !m_layoutEditor ) return false;
     // 共用同一实例，按钮切换和三维手势不会出现两份模式状态。
     auto& app    = Config::AppConfig::instance();
-    auto& visual = app.getVisualConfig();
+    auto& visual = canvasVisualConfig();
     // 移动标量绘制于工具面板，发生在画布 update 之外。
     // 不能等下一帧再比较旧值，否则届时起点已经是修改后的值。
     // 固定五组字段按值复制，不复制布局库或谱面快照。
@@ -3783,6 +4041,42 @@ bool Basic2DCanvas::drawCameraLayoutControls()
     const auto length    = visual.canvasCameraLength;
     const auto motion    = visual.canvasMotionCompensation;
     const auto thickness = visual.canvasThicknessCompensation;
+    if ( m_comparisonLayout && !m_layoutEditor->cameraMode() ) {
+        // 3D 开关与相机位置、长度和补偿共同归属于该布局副本。
+        // 加载旧布局时可能只有实验相机字段，开关需先反映实际透视状态。
+        // 输入与渲染使用同一个启用条件，避免旧预设看起来关闭却仍投影。
+        const bool legacyPerspective = Common::Render::planarObservationEnabled(
+            visual.debugCanvasCameraAngleDegrees,
+            visual.debugCanvasCameraYawDegrees,
+            visual.debugCanvasCameraDistance);
+        bool perspective = visual.canvasCameraPoseEnabled || legacyPerspective;
+        const bool chinese = app.getEditorSettings().language == "zh_cn";
+        if ( UI::FeedbackCheckbox(
+                 MMM::Translation::getActiveTranslator()
+                     .translate(
+                         MMM::Hash::hashString("canvas.comparison.perspective"),
+                         chinese ? "3D 视角" : "3D view")
+                     .data(),
+                 &perspective) ) {
+            // 保留调好的姿态供下次启用。旧预设先迁移，关闭时也不丢其视角。
+            // 第一次从默认姿态启用时给出可见俯角，避免打开后仍像二维视图。
+            const bool defaultPose =
+                visual.canvasCameraRotation == std::array<float, 3>{} &&
+                visual.canvasCameraPosition == std::array<float, 3>{ 0, 0, 1 };
+            if ( legacyPerspective || (perspective && defaultPose) ) {
+                if ( !legacyPerspective )
+                    visual.debugCanvasCameraAngleDegrees = 35.0F;
+                // 复用旧投影迁移函数，透视预览与自由相机参数页可共用同一姿态。
+                // 只清除旧格式参数；真正的观察位置和旋转继续由自由相机持有。
+                Common::Render::enableCanvasCameraPose(visual);
+                visual.debugCanvasCameraAngleDegrees = 0.0F;
+                visual.debugCanvasCameraYawDegrees   = 0.0F;
+                visual.debugCanvasCameraDistance     = 1.0F;
+            }
+            visual.canvasCameraPoseEnabled = perspective;
+            m_comparisonLayout->m_dirty    = true;
+        }
+    }
     m_layoutEditor->drawControls(visual);
     if ( position != visual.canvasCameraPosition ||
          rotation != visual.canvasCameraRotation ||
@@ -3792,10 +4086,129 @@ bool Basic2DCanvas::drawCameraLayoutControls()
         // 只在真实修改边沿捕获预设，复用画布拖动相同的后台保存队列。
         // 同一套参数必须通知厚度补偿与逻辑投影，不能只改变预览矩阵。
         // 这里不等待会话更新长锁，也不做同步磁盘写入。
-        app.saveLayoutChanges();
-        Logic::EditorEngine::instance().updateCanvasCameraConfig(visual);
+        if ( m_comparisonLayout ) {
+            m_comparisonLayout->m_dirty = true;
+        } else {
+            app.saveLayoutChanges();
+            Logic::EditorEngine::instance().updateCanvasCameraConfig(visual);
+        }
     }
     return m_layoutEditor->cameraMode();
+}
+
+/// @brief 取得当前窗口拥有或借用的布局，供布局编辑和录制使用。
+/// @details 对比布局对象由视口持有，因此交互和渲染始终访问相同地址。
+/// 仅主画布访问全局 AppConfig；渲染端不能将参考继续保存到异步工作。
+/// @warning UI 每帧查询，无所有权复制，不查询可变逻辑会话。
+Config::VisualConfig& Basic2DCanvas::canvasVisualConfig() const
+{
+    return m_comparisonLayout ? m_comparisonLayout->m_config.visual
+                              : Config::AppConfig::instance().getVisualConfig();
+}
+
+/// @brief 在当前停靠窗口净画布的右侧绘制局部布局与视觉映射工具。
+/// @param manager 提供当前工作区模式和共用工具面板实现。
+/// @param railPosition 画布右上角及竖栏可用左边界的屏幕坐标。
+/// @param railSize 停靠系统同一帧为竖栏预留的逻辑尺寸。
+/// @details 子窗口隔离按钮 ID 和命中范围，多对比页可同时显示工具。
+/// 弹层借用已有布局工具的内容，独立窗口身份防止相邻视图覆盖颜色选择器。
+/// 竖栏绘制后恢复画布游标，因而不会在对比页顶部多出一行控件。
+/// 对比按钮依当前停靠宽度分配，本地开关不会改写常规工具选中状态。
+/// @warning UI 热路径，仅提交有限控件和记录本地改动，配置在更新末尾发布。
+/// 面板只在可见帧提交；页签切到后台不会在工作区浮出旧工具。
+/// 进入布局时记录的是当前可见视口，放回同一 Dock 节点也不共享按钮状态。
+/// 捕获拖动和编辑模式的释放仍由对应画布负责。
+/// 工具位置随停靠内容区重新计算，屏幕坐标包含标题栏而本地画布坐标不包含。
+/// 移动外壳仍处理页签菜单，布局竖栏不需要截获长按事件。
+/// 颜色状态读取皮肤定义，从同一水平线开始绘制贴边工具。
+/// 面板通过稳定 ID 管理下拉项，不随谱名、语言或谱面脏标记改变。
+void Basic2DCanvas::drawComparisonToolbar(UI::UIManager& manager,
+                                          ImVec2 railPosition, ImVec2 railSize)
+{
+    auto&       layout = *m_comparisonLayout;
+    const float dpiScale =
+        Config::AppConfig::instance().getWindowContentScale();
+    const bool   mobile = !manager.workspacePresentation().usesDesktopLayout();
+    const ImVec2 canvasCursor = ImGui::GetCursorScreenPos();
+    // 画布和按钮从同一个内容上沿开始，工具命中区全部位于纹理右边。
+    // 留出少量间隔区分内容和工具；触控按钮仍至少保持工作台的行高。
+    // 竖栏不足以容纳短标签时仍显示图标，让小停靠窗口能继续切换映射。
+    const float gap = std::floor(4.0F * dpiScale);
+    ImGui::SetCursorScreenPos({ railPosition.x + gap, railPosition.y });
+    if ( ImGui::BeginChild("##ComparisonToolbar",
+                           { railSize.x - gap, railSize.y },
+                           ImGuiChildFlags_None,
+                           ImGuiWindowFlags_NoScrollbar) ) {
+        const float size = ImGui::GetContentRegionAvail().x;
+        // 短标签仅在宽度允许时出现，防止长译文盖过相邻画布。
+        // 没有可用文本时仍保留工具按钮及完整触控高度。
+        const bool  showLabels = mobile && size >= 36.0F * dpiScale;
+        const float height = mobile ? std::max(size, 48.0F * dpiScale) : size;
+        /// @brief 统一沿用主工具栏图标按钮、活动色和悬浮反馈。
+        const auto button = [&](const char* icon,
+                                const char* id,
+                                const char* tooltip,
+                                const char* shortLabel,
+                                bool        active) {
+            if ( active ) {
+                const auto color =
+                    ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
+                ImGui::PushStyleColor(ImGuiCol_Button, color);
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, color);
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, color);
+            } else {
+                UI::Utils::UIThemeUtils::pushTransparentButtonStyles();
+            }
+            // 样式覆盖只在按钮提交期间有效，外层窗口的皮肤颜色不会变化。
+            // 热区和音效由工具栏的常规按钮实现提供，短文本只用于触控布局。
+            const bool clicked = UI::ToolbarView::drawIconButton(
+                icon, id, shortLabel, size, height, showLabels);
+            ImGui::PopStyleColor(3);
+            if ( !mobile && ImGui::IsItemHovered() )
+                ImGui::SetTooltip("%s", tooltip);
+            return clicked;
+        };
+
+        if ( button(UI::ICON_MMM_TRACK_LAYOUT,
+                    "##Layout",
+                    TR("ui.toolbar.layout").data(),
+                    TR("ui.toolbar.short.layout").data(),
+                    layout.m_open) )
+            layout.m_open = !layout.m_open;
+        if ( button(UI::ICON_MMM_EYE,
+                    "##Mapping",
+                    TR("ui.toolbar.scroll_timing_mapping").data(),
+                    TR("ui.toolbar.short.scroll_timing_mapping").data(),
+                    !m_comparisonSettings.linearMapping) ) {
+            // 映射模式改变会让逻辑选择另一套分段积分，但仍保持同一谱面时间。
+            // 按钮立即使用本地值绘制，发布后谱面坐标一并跟进。
+            m_comparisonSettings.linearMapping =
+                !m_comparisonSettings.linearMapping;
+            layout.m_dirty = true;
+        }
+    }
+    // EndChild 先提交其命中范围，随后回到父窗口的画布位置。
+    // 参数面板以独立浮层绘制，表单的内容高度不会参与与停靠窗口的分配。
+    ImGui::EndChild();
+    ImGui::SetCursorScreenPos(canvasCursor);
+    if ( layout.m_open ) {
+        auto* dock = manager.getView<UI::MainDockSpaceUI>("MainDockSpaceUI");
+        // 拿不到 dock 的启动过渡不重置打开态；工具视图注册后自动呈现面板。
+        // 用短期引用绑定表单，避免共享工具栏记住旧窗口或借用可变会话。
+        if ( dock ) {
+            UI::ToolbarView::ComparisonLayoutPanel panel{
+                *this,
+                layout.m_config,
+                layout.m_panel,
+                layout.m_popupName.c_str(),
+                { railPosition.x, railPosition.y },
+                { railSize.x, railSize.y },
+                mobile,
+                layout.m_dirty
+            };
+            dock->toolbarView().renderComparisonLayout(dpiScale, panel);
+        }
+    }
 }
 
 /// @brief 查询窗口在会话关闭规则下的有效打开状态。
@@ -3804,6 +4217,9 @@ bool Basic2DCanvas::drawCameraLayoutControls()
 /// 使上层不会在 update 完成关闭编排之前提前销毁 Canvas。
 bool Basic2DCanvas::isOpen() const
 {
+    // 脏标记来自共享谱面。对比窗口关闭后立即允许 UI 回收，
+    // 保存确认和最后窗口占位由拥有谱面的主窗口继续负责。
+    if ( m_comparisonIndex != 0 ) return m_isOpen;
     if ( shouldKeepOpenForLastSessionReset() ) {
         return true;
     }

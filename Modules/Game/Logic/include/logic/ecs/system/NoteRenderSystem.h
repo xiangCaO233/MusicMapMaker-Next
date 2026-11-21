@@ -51,6 +51,7 @@ public:
      * @param mainViewportHeight 主画布视口高度 (用于预览区缩放对齐)
      * @param hitFXSystem 打击特效系统 (可选)
      * @param previewAreaRatio 触控期间的预览范围；零表示沿用持久配置。
+     * @param viewportCache 用于覆盖这份快照的时间位置映射。
      * @warning
      * 热路径：逻辑线程为每个活动视口生成渲染快照时执行；禁止文件系统访问、完整
      * entt 遍历、完整排序、try/catch 和 shared_ptr 所有权复制。
@@ -64,10 +65,10 @@ public:
         RenderSnapshot* snapshot, const std::string& cameraId,
         double currentTime, float viewportWidth, float viewportHeight,
         float judgmentLineY, int32_t trackCount, int32_t bgmTrackCount,
-        int32_t draftTrackCount, const Config::EditorConfig& config,
+        int32_t draftTrackCount, const Config::EditorConfigView& config,
         float              mainViewportHeight = 1000.0f,
-        class HitFXSystem* hitFXSystem        = nullptr,
-        float              previewAreaRatio   = 0.0f);
+        class HitFXSystem* hitFXSystem = nullptr, float previewAreaRatio = 0.0f,
+        const ScrollCache* viewportCache = nullptr);
 
 private:
     // --- 内部逻辑拆分方法 ---
@@ -79,14 +80,14 @@ private:
         const std::vector<const TimelineComponent*>& bpmEvents,
         Batcher& batcher, double currentTime, float viewportWidth,
         float viewportHeight, float judgmentLineY,
-        const Config::EditorConfig& config, const ScrollCache* cache);
+        const Config::EditorConfigView& config, const ScrollCache* cache);
 
     /// @warning 热路径：Preview
     /// 视口每次快照生成时执行；禁止进行资源加载或阻塞等待。
     static void generatePreviewSnapshot(
         RenderSnapshot* snapshot, Batcher& batcher, double currentTime,
         float viewportWidth, float viewportHeight, float judgmentLineY,
-        int32_t trackCount, const Config::EditorConfig& config,
+        int32_t trackCount, const Config::EditorConfigView& config,
         float mainViewportHeight, float previewAreaRatio, float& leftX,
         float& rightX, float& topY, float& bottomY, float& trackAreaW,
         float& singleTrackW, float& renderScaleY);
@@ -97,7 +98,7 @@ private:
         entt::registry& registry, const entt::registry& timelineRegistry,
         RenderSnapshot* snapshot, Batcher& batcher, double currentTime,
         float viewportWidth, float viewportHeight, float judgmentLineY,
-        int32_t trackCount, const Config::EditorConfig& config,
+        int32_t trackCount, const Config::EditorConfigView& config,
         int32_t bgmTrackCount, int32_t draftTrackCount,
         const ScrollCache* cache, float& leftX, float& rightX, float& topY,
         float& bottomY, float& trackAreaW, float& singleTrackW,
@@ -107,9 +108,9 @@ private:
     /// O(trackCount) 绘制。
     static void renderTrackLayout(Batcher& batcher, float viewportWidth,
                                   float viewportHeight, float judgmentLineY,
-                                  int32_t                     trackCount,
-                                  const Config::EditorConfig& config,
-                                  const entt::registry&       timelineRegistry,
+                                  int32_t                         trackCount,
+                                  const Config::EditorConfigView& config,
+                                  const entt::registry& timelineRegistry,
                                   double currentTime, const ScrollCache* cache,
                                   float& leftX, float& rightX, float& topY,
                                   float& bottomY, float& trackAreaW,
@@ -129,7 +130,7 @@ private:
     static void drawJudgmentArea(Batcher& batcher, int32_t trackCount,
                                  float leftX, float judgmentLineY,
                                  float singleTrackW, float trackAreaW,
-                                 const Config::EditorConfig& config,
+                                 const Config::EditorConfigView& config,
                                  glm::vec4 color = { 1.0F, 1.0F, 1.0F, 1.0F });
 
     /// @param allowHoverSubdivisionPreview
@@ -144,7 +145,7 @@ private:
     /// @param isMainCanvas 仅主画布应用三维屏幕线宽保护，缩略预览保持二维。
     static void drawBeatLines(
         Batcher& batcher, float viewportWidth, float viewportHeight,
-        float judgmentLineY, const Config::EditorConfig& config,
+        float judgmentLineY, const Config::EditorConfigView& config,
         const std::vector<const TimelineComponent*>& bpmEvents,
         double currentTime, const ScrollCache* cache, float leftX, float topY,
         float bottomY, float trackAreaW, float renderScaleY,
@@ -155,8 +156,8 @@ private:
     /// @warning 热路径：Preview timing 线每次动态快照生成时执行；只遍历
     /// ScrollCache 已缓存段。
     static void drawTimingLines(Batcher& batcher, float viewportHeight,
-                                float                       judgmentLineY,
-                                const Config::EditorConfig& config,
+                                float                           judgmentLineY,
+                                const Config::EditorConfigView& config,
                                 double currentTime, const ScrollCache* cache,
                                 float leftX, float topY, float bottomY,
                                 float trackAreaW, float renderScaleY);
@@ -166,7 +167,7 @@ private:
     static void renderNotes(entt::registry& registry, RenderSnapshot* snapshot,
                             const std::string& cameraId, double currentTime,
                             float judgmentLineY, int32_t trackCount,
-                            const Config::EditorConfig& config,
+                            const Config::EditorConfigView& config,
                             Batcher& batcher, float leftX, float clipLeftX,
                             float clipRightX, float rightX, float topY,
                             float bottomY, float singleTrackW,
@@ -206,7 +207,7 @@ private:
     /// 热路径：每次音符层渲染前执行；禁止文件系统访问和共享指针所有权复制。
     static NoteRenderContext prepareNoteRenderContext(
         entt::registry& registry, RenderSnapshot* snapshot, double currentTime,
-        float singleTrackW, const Config::EditorConfig& config);
+        float singleTrackW, const Config::EditorConfigView& config);
 
     /// @warning 热路径：主画布拾取盒生成时执行；输入必须是已剔除实体列表。
     static void generateNoteHitboxes(
@@ -214,14 +215,14 @@ private:
         const NoteRenderContext&         ctx,
         const std::vector<entt::entity>& noteEntities, float judgmentLineY,
         float leftX, float topY, float bottomY, float singleTrackW,
-        float renderScaleY, const Config::EditorConfig& config,
+        float renderScaleY, const Config::EditorConfigView& config,
         const CanvasLaneProjection* laneProjection);
 
     /// @warning
     /// 热路径：音符基础层每次快照生成时执行；依赖预排序输入，禁止每帧完整排序。
     static void renderNoteBaseLayer(
         entt::registry& registry, RenderSnapshot* snapshot,
-        const NoteRenderContext& ctx, const Config::EditorConfig& config,
+        const NoteRenderContext& ctx, const Config::EditorConfigView& config,
         const std::vector<entt::entity>& noteEntities, Batcher& batcher,
         float currentTime, float judgmentLineY, float leftX, float rightX,
         float topY, float bottomY, float singleTrackW, float renderScaleY,
@@ -233,7 +234,7 @@ private:
     /// entt view 遍历。
     static void renderNoteGlowLayer(
         entt::registry& registry, RenderSnapshot* snapshot,
-        const NoteRenderContext& ctx, const Config::EditorConfig& config,
+        const NoteRenderContext& ctx, const Config::EditorConfigView& config,
         const std::vector<entt::entity>& noteEntities, float currentTime,
         float judgmentLineY, float leftX, float clipLeftX, float rightX,
         float topY, float bottomY, float singleTrackW, float renderScaleY,
@@ -245,7 +246,7 @@ private:
     /// ECS 或访问文件系统。
     static void renderOverlapMasks(
         entt::registry& registry, RenderSnapshot* snapshot,
-        const NoteRenderContext& ctx, const Config::EditorConfig& config,
+        const NoteRenderContext& ctx, const Config::EditorConfigView& config,
         const std::vector<entt::entity>& noteEntities, float judgmentLineY,
         float leftX, float clipLeftX, float clipRightX, float topY,
         float bottomY, float singleTrackW, float renderScaleY,
@@ -254,8 +255,9 @@ private:
     /// @warning 热路径：单个 Tap 几何生成时执行；不得分配 GPU
     /// 资源或访问文件系统。
     static void renderTap(Batcher& batcher, const NoteComponent& note,
-                          const Config::EditorConfig& config, float x, float y,
-                          float w, float h, float aspect, glm::vec4 color);
+                          const Config::EditorConfigView& config, float x,
+                          float y, float w, float h, float aspect,
+                          glm::vec4 color);
 
     /// @param currentTime 当前画布时间，用于无状态推导模拟判定进度。
     /// @param topY 轨道裁剪区上边界。
@@ -263,7 +265,7 @@ private:
     /// @warning 热路径：单个 Hold
     /// 几何生成时执行；循环范围必须由可见时间段限制。
     static void renderHold(Batcher& batcher, const NoteComponent& note,
-                           const Config::EditorConfig& config,
+                           const Config::EditorConfigView& config,
                            RenderSnapshot* snapshot, float x, float w, float h,
                            float singleTrackW, glm::vec4 headColor,
                            glm::vec4 bodyColor, glm::vec4 endColor,
@@ -291,7 +293,7 @@ private:
     /// @warning 热路径：单个 Flick 几何生成时执行；不得触发排序或全量 ECS
     /// 查询。
     static void renderFlick(Batcher& batcher, const NoteComponent& note,
-                            const Config::EditorConfig& config,
+                            const Config::EditorConfigView& config,
                             RenderSnapshot* snapshot, float x, float y, float w,
                             float h, float endpointCenterX, float endpointW,
                             float endpointH, glm::vec4 headColor,
@@ -302,7 +304,7 @@ private:
     /// 几何生成时执行；子节点循环必须只处理当前可见载体范围。
     static void renderPolyline(
         const ScrollCache* cache, Batcher& batcher, const NoteComponent& note,
-        const Config::EditorConfig& config, RenderSnapshot* snapshot,
+        const Config::EditorConfigView& config, RenderSnapshot* snapshot,
         double currentAbsY, double currentTime, float judgmentLineY,
         float leftX, float topY, float bottomY, float singleTrackW,
         float renderScaleY, glm::vec4 colorHead, glm::vec4 colorHoldBody,
@@ -328,7 +330,7 @@ private:
         glm::vec4 colorHold, entt::entity entity, bool generateHitboxes,
         HoverPart glowPart, int glowSubIndex,
         const CanvasLaneProjection* laneProjection, bool simulateJudgment,
-        const Config::EditorConfig& config);
+        const Config::EditorConfigView& config);
 
     /// @warning 热路径：Polyline 可见性判断内联执行；保持纯计算且不可引入分配。
     static bool isCarrierVisible(double startOffset, double endOffset,
@@ -352,7 +354,7 @@ private:
         RenderSnapshot* snapshot, float judgmentLineY, float leftX,
         float singleTrackW, float renderScaleY, double currentAbsY,
         double currentTime, float topY, float bottomY, float noteW, float noteH,
-        glm::vec4 colorNode, const Config::EditorConfig& config,
+        glm::vec4 colorNode, const Config::EditorConfigView& config,
         entt::entity entity, bool generateHitboxes, HoverPart glowPart,
         int glowSubIndex, const CanvasLaneProjection* laneProjection);
 
@@ -362,7 +364,7 @@ private:
         RenderSnapshot* snapshot, float judgmentLineY, float leftX,
         float singleTrackW, float renderScaleY, double currentAbsY,
         double currentTime, float topY, float bottomY, float noteW, float noteH,
-        glm::vec4 colorHead, const Config::EditorConfig& config,
+        glm::vec4 colorHead, const Config::EditorConfigView& config,
         entt::entity entity, bool generateHitboxes, HoverPart glowPart,
         int glowSubIndex, const CanvasLaneProjection* laneProjection);
 
@@ -373,7 +375,7 @@ private:
         float singleTrackW, float renderScaleY, double currentAbsY,
         double currentTime, float topY, float bottomY, float noteW, float noteH,
         glm::vec4 colorHoldEnd, glm::vec4 colorArrow,
-        const Config::EditorConfig& config, entt::entity entity,
+        const Config::EditorConfigView& config, entt::entity entity,
         bool generateHitboxes, HoverPart glowPart, int glowSubIndex,
         const CanvasLaneProjection* laneProjection);
 
@@ -388,9 +390,9 @@ private:
     /// @param topY 与正式物件共用的源平面上界，允许三维扩展产生负坐标。
     /// @param bottomY 同一画布的源平面下界，不能从判定线位置反推。
     /// @warning 热路径：绘制工具预览时执行；不得提交逻辑命令或访问文件系统。
-    static void renderBrushPreview(RenderSnapshot*             snapshot,
-                                   const NoteRenderContext&    ctx,
-                                   const Config::EditorConfig& config,
+    static void renderBrushPreview(RenderSnapshot*                 snapshot,
+                                   const NoteRenderContext&        ctx,
+                                   const Config::EditorConfigView& config,
                                    Batcher& batcher, float judgmentLineY,
                                    float leftX, float singleTrackW,
                                    float renderScaleY, float topY,

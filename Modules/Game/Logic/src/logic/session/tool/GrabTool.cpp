@@ -1,4 +1,5 @@
 #include "logic/session/tool/GrabTool.h"
+#include "common/ComparisonCanvas.h"
 #include "common/LogicCommands.h"
 #include "common/PolylineGeometry.h"
 #include "common/walkthrough/WalkthroughEditEvent.h"
@@ -34,6 +35,19 @@ namespace MMM::Logic
 
 namespace
 {
+/// @brief 对比视口的纵向锁定覆盖会话默认值，其它视口继续使用主工具的规则。
+/// @warning 拖动热路径仅查询已有相机状态，不访问文件或复制布局配置。
+bool disablesVerticalDrag(const SessionContext& ctx,
+                          const std::string&    cameraId)
+{
+    if ( Common::isComparisonCanvas(cameraId) ) {
+        const auto entry = ctx.cameras.find(cameraId);
+        if ( entry != ctx.cameras.end() && entry->second.comparison )
+            return entry->second.comparison->disableVerticalObjectDrag;
+    }
+    return ctx.lastConfig.settings.disableVerticalObjectDrag;
+}
+
 /// @brief 折线子段拖拽结束时用于判断零长度 Hold 的容差。
 constexpr double POLYLINE_SUB_DRAG_ZERO_DURATION = 1e-5;
 
@@ -380,17 +394,19 @@ struct UnifiedDragTarget {
 std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
     SessionContext& ctx, const CmdUpdateDrag& cmd)
 {
-    // 先确认相机和滚动缓存存在，再读取尺寸与时间映射。
+
+    // 坐标采用收到输入的视口布局，保留会话原有的编辑和吸附规则。
+    const auto& visual = SessionUtils::visualForCamera(
+        ctx, cmd.cameraId);  // 先确认相机和滚动缓存存在，再读取尺寸与时间映射。
     // 初始化尚未完成时不创建临时缓存，避免拖动路径触发昂贵重建。
     const auto cameraIterator = ctx.cameras.find(cmd.cameraId);
     if ( cameraIterator == ctx.cameras.end() ) return std::nullopt;
-    const auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+    const auto* cache = SessionUtils::scrollCacheForCamera(ctx, cmd.cameraId);
     if ( !cache ) return std::nullopt;
 
-    const auto& camera = cameraIterator->second;
-    const float judgmentLineY =
-        camera.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
-    float renderScaleY = 1.0F;
+    const auto& camera        = cameraIterator->second;
+    const float judgmentLineY = camera.viewportHeight * visual.judgeline_pos;
+    float       renderScaleY  = 1.0F;
     // Preview 需要解除相对主画布的压缩后才能反算逻辑时间。
     // 两个既有预览标识共用该规则，普通主画布倍率保持一。
     if ( cmd.cameraId == "Preview" || cmd.cameraId == "PreviewCanvas" ) {
@@ -399,17 +415,15 @@ std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
         const float mainViewportHeight =
             mainCamera ? mainCamera->viewportHeight : camera.viewportHeight;
         const float mainEffectiveHeight =
-            (ctx.lastConfig.visual.trackLayout.bottom -
-             ctx.lastConfig.visual.trackLayout.top) *
+            (visual.trackLayout.bottom - visual.trackLayout.top) *
             mainViewportHeight;
-        const float previewTop = ctx.lastConfig.visual.previewConfig.margin.top;
+        const float previewTop = visual.previewConfig.margin.top;
         const float previewBottom =
-            camera.viewportHeight -
-            ctx.lastConfig.visual.previewConfig.margin.bottom;
+            camera.viewportHeight - visual.previewConfig.margin.bottom;
         // 主画布使用归一化轨道高度，预览使用像素边距。
         // 两者换成像素后再结合 areaRatio，避免把整个窗口高度当作有效轨道高度。
         const float denominator =
-            mainEffectiveHeight * ctx.lastConfig.visual.previewConfig.areaRatio;
+            mainEffectiveHeight * visual.previewConfig.areaRatio;
         if ( std::abs(denominator) > 1e-6F ) {
             renderScaleY = (previewBottom - previewTop) / denominator;
         }
@@ -429,14 +443,15 @@ std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
         targetTime,
         cmd.mouseY,
         camera,
-        ctx.lastConfig,
+        Config::EditorConfigView{ visual, ctx.lastConfig.settings },
         ctx.bpmEvents,
         ctx.timelineRegistry,
         ctx.animateTime,
         ctx.cameras,
         ctx.currentBeatmap
             ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
-            : 120.0);
+            : 120.0,
+        cache);
     // Ctrl 绕过本次吸附，保留原始鼠标时间。
     // 是否在最终物件层钳制时间由后续拖动更新决定，此处只计算目标。
     if ( snap.isSnapped && !cmd.isCtrlDown ) {
@@ -450,7 +465,7 @@ std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
         camera.viewportWidth,
         ctx.trackCount,
         ctx.bgmTrackCount,
-        ctx.lastConfig.visual.trackLayout,
+        visual.trackLayout,
         isMainCanvas ? camera.horizontalOffsetX : 0.0F,
         isMainCanvas,
         isMainCanvas && ctx.lastConfig.settings.isBmsEditingEnabled(),
@@ -571,6 +586,196 @@ bool sameDraggedNoteState(const NoteComponent& lhs, const NoteComponent& rhs)
         }
     }
     return true;
+}
+
+/// @brief 在移动批次中将主折线的尾端与静止物件的头部接合。
+/// @param ctx 当前会话及该帧的玩家、草稿轨道范围。
+/// @param moving 手势开始时记录的参与对象，避免将同批移动的对象误判为落点。
+/// @param entries 已准备好的移动快照；只有验证成功才改写当前折线对应的条目。
+/// @details 只处理按下的折线，组内其它物件仍按原批次提交。
+/// 只以目标根头为接点，沿途经过的物件或中间节点不参与。
+/// 无位移点击、拖回原点或模糊落点沿用普通移动的收尾。
+/// 预览中的 NoteComponent 只有落点位置可用，撤销的数据仍以起拖时快照为准。
+/// 分段属性从源与目标的内嵌子段取得，运行期投影只参与原实体的删除记录。
+/// 轨号匹配在同一个域内发生；不把同屏的草稿或自动采样和正式音符相接。
+/// @warning 只在整条折线释放时查找候选，拖动预览不遍历注册表或改写历史。
+void appendPolylineDropJoin(SessionContext& ctx, const auto& moving,
+                            std::vector<BatchNoteAction::Entry>& entries)
+{
+    const auto root = ctx.draggedEntity;
+    // 统一拖动可能拒绝落点或转换到采样域。缺少音符 after 时没有可接合路径。
+    const auto sourceEntry =
+        std::find_if(entries.begin(), entries.end(), [root](const auto& entry) {
+            return entry.entity == root;
+        });
+    if ( sourceEntry == entries.end() || !sourceEntry->before ||
+         !sourceEntry->after ||
+         sourceEntry->after->m_type != ::MMM::NoteType::POLYLINE ||
+         sameDraggedNoteState(*sourceEntry->before, *sourceEntry->after) )
+        return;
+
+    auto&       registry = ctx.noteRegistry;
+    const auto& source   = *sourceEntry->after;
+    // 统一移动允许整条折线从草稿进入玩家区，按释放时的轨道域验证。
+    const auto minimumTrack = source.m_isDraft ? -ctx.draftTrackCount : 0;
+    const auto maximumTrack = source.m_isDraft ? -1 : ctx.trackCount - 1;
+    // 按合法正交路径计算尾端；损坏的旧路径沿用普通移动，避免接合时吞掉物件。
+    // 校验先于轨差相加，同时保证尾部时间有限。
+    /// @brief 原路径与清理后的接缝共用生产折线契约。
+    const auto isCanonical = [&](const NoteComponent& note) {
+        return Common::isCanonicalPolyline(note.m_subNotes,
+                                           note.m_timestamp,
+                                           note.m_trackIndex,
+                                           minimumTrack,
+                                           maximumTrack);
+    };
+    if ( !isCanonical(source) ) return;
+
+    // Hold 取终时，Flick 取终轨；用户拖的是根头，鼠标所在轨不能用于接合。
+    const auto&  tail       = source.m_subNotes.back();
+    const bool   tailIsHold = tail.type == ::MMM::NoteType::HOLD;
+    const double tailTime = tail.timestamp + (tailIsHold ? tail.duration : 0.0);
+    const int    tailTrack = tail.trackIndex + (tailIsHold ? 0 : tail.dtrack);
+    // 与绘制工具接合的时间容差一致。多个同轨候选时保留普通移动结果。
+    constexpr double JOIN_TIME_TOLERANCE = 0.003;
+    entt::entity     targetEntity        = entt::null;
+    const auto       notes               = registry.view<const NoteComponent>();
+    for ( auto entity : notes ) {
+        const auto& candidate = notes.get<const NoteComponent>(entity);
+        // 只比较当前拍位的根，避免重复考虑父折线与它的子投影。
+        // 动作由折线尾部位置触发，鼠标仍可停在源头或远离接缝。
+        if ( candidate.m_isSubNote || candidate.m_isDraft != source.m_isDraft ||
+             candidate.m_trackIndex != tailTrack ||
+             !std::isfinite(candidate.m_timestamp) ||
+             std::abs(candidate.m_timestamp - tailTime) > JOIN_TIME_TOLERANCE ||
+             moving.contains(entity) ||
+             !SessionUtils::isNoteEditable(candidate, ctx.lastConfig.settings) )
+            continue;
+        // 叠在同一接点的两条路径没有可辨认的用户目标，避免按 ECS
+        // 顺序吞掉其中一条。
+        if ( targetEntity != entt::null ) return;
+        targetEntity = entity;
+    }
+    if ( targetEntity == entt::null ) return;
+    const auto& target = notes.get<const NoteComponent>(targetEntity);
+    // 这里只准备值。直到动作条目齐备前，目标及现有子实体都仍可供普通移动使用。
+
+    // 只微调本次已移动路径，让接点精确对齐，静止物件的后续拍位保持原值。
+    // 源子段全部使用同一时间差；仅移动尾段会断开它和前序段的连接。
+    auto         joined     = source;
+    const double adjustment = target.m_timestamp - tailTime;
+    joined.m_timestamp += adjustment;
+    for ( auto& segment : joined.m_subNotes ) segment.timestamp += adjustment;
+
+    const auto sourceSize = joined.m_subNotes.size();
+    if ( target.m_type == ::MMM::NoteType::POLYLINE ) {
+        if ( !isCanonical(target) ) return;
+        // 保持目标子段的绝对拍位与标识，清理仅处理接缝产生的退化或同类段。
+        joined.m_subNotes.insert(joined.m_subNotes.end(),
+                                 target.m_subNotes.begin(),
+                                 target.m_subNotes.end());
+        auto& head = joined.m_subNotes[sourceSize];
+        // 目标根的头部采样绑定成为对应子段的缺省绑定。
+        // 子段有显式绑定或颜色时，可见属性仍以较具体的子段设置为准。
+        if ( !head.sampleBinding ) head.sampleBinding = target.m_sampleBinding;
+        head.customColors = mergeStandalonePolylineColors(
+            head.customColors, target.m_customColors);
+    } else if ( target.m_type == ::MMM::NoteType::HOLD ||
+                target.m_type == ::MMM::NoteType::FLICK ) {
+        // 拒绝旧数据中的坏跨度，不能让清理把非法目标当作退化接缝吞掉。
+        if ( target.m_type == ::MMM::NoteType::HOLD ) {
+            if ( target.m_duration < 0.0 ||
+                 !std::isfinite(target.m_timestamp + target.m_duration) )
+                return;
+        } else {
+            // 先用宽整数校验终轨，之后几何清理才能安全使用正常轨号。
+            const auto endTrack =
+                static_cast<std::int64_t>(target.m_trackIndex) +
+                target.m_dtrack;
+            if ( endTrack < minimumTrack || endTrack > maximumTrack ) return;
+        }
+        // 独立长条和滑键成为后续段，普通单键只复用接点。
+        // 转成子段时保留现有显示与播放字段，避免重新构造默认外观。
+        joined.m_subNotes.push_back({
+            .type            = target.m_type,
+            .timestamp       = target.m_timestamp,
+            .duration        = target.m_duration,
+            .trackIndex      = target.m_trackIndex,
+            .dtrack          = target.m_dtrack,
+            .metadata        = target.m_metadata,
+            .sampleBinding   = target.m_sampleBinding,
+            .customColors    = target.m_customColors,
+            .collaborationId = target.m_collaborationId,
+        });
+    } else if ( target.m_type != ::MMM::NoteType::NOTE ) {
+        // 未定义加入路径语义的类型继续留在原位。
+        return;
+    }
+
+    // 同类连接段沿用现有折线清理。反向滑键抵消后也要检查新的相邻段。
+    bool       cleanedChanged = false;
+    const auto cleaned =
+        cleanPolylineSubSegments(joined.m_subNotes, cleanedChanged);
+    // 两条单段旧折线的反向 Flick 可能完全抵消，不能提交空路径。
+    if ( cleaned.empty() ) return;
+    applyCleanedPolylineSubSegments(joined, cleaned);
+    // 旧数据和反向 Flick 接合可使折线退化成独立段。
+    // 多段结果必须仍满足正交与交替规则，不能把渲染出的连线当作持久化几何。
+    if ( joined.m_timestamp < 0.0 ||
+         (joined.m_type == ::MMM::NoteType::POLYLINE && !isCanonical(joined)) )
+        return;
+    if ( !target.m_annotation.empty() ) {
+        // 两个根的批注随接合保留在同一物件，避免删除目标根时丢失文字。
+        if ( !joined.m_annotation.empty() ) joined.m_annotation += '\n';
+        joined.m_annotation += target.m_annotation;
+    }
+    // 让新投影继承父数组中确定的子段 ID，包括旧谱面中原先缺号的子段。
+    ensureNoteCollaborationIdentity(joined);
+
+    // 已验证之后才改写批次。同一次撤销恢复两根原物件及移动前的起点。
+    // 根保留源身份，选择及同一物件的协作引用仍能指向接合结果。
+    sourceEntry->after = joined;
+    /// @brief 用父身份识别要重建的投影，同轨同时间的其它子段不受影响。
+    const auto isChildOf = [](const NoteComponent& note, entt::entity parent) {
+        return note.m_isSubNote && note.m_parentPolyline == parent;
+    };
+    std::erase_if(entries, [&](const auto& entry) {
+        // 旧投影将因重建被删除，不能同时保留指向相同实体的位置更新。
+        return entry.before && isChildOf(*entry.before, root);
+    });
+    entries.push_back(
+        { .entity         = targetEntity,
+          .before         = target,
+          .after          = std::nullopt,
+          .beforeSelected = isEntitySelected(registry, targetEntity) });
+    // 收集目标根的选择状态供撤销恢复，删除后选择索引不能继续包含它。
+    for ( auto entity : notes ) {
+        const auto& child = notes.get<const NoteComponent>(entity);
+        if ( !isChildOf(child, root) && !isChildOf(child, targetEntity) )
+            continue;
+        const auto initial = moving.find(entity);
+        // 源子实体的坐标已经用于预览，撤销应取按下时的快照。
+        // 静止目标从未改写位置，当前组件即为撤销所需的原值。
+        entries.push_back({
+            .entity = entity,
+            .before = initial != moving.end() ? initial->second.note : child,
+            .after  = std::nullopt,
+            .beforeSelected = isEntitySelected(registry, entity),
+        });
+    }
+    // 读取旧投影必须完成后才分配新实体，避免迭代中改变 View。
+    // 创建最终子投影，保留每个保留段的逻辑身份并统一父实体和顺序。
+    // 删除条目排在新建前，同一子段的旧投影不会留在新路径里重复命中。
+    for ( std::size_t index = 0; index < joined.m_subNotes.size(); ++index ) {
+        const auto& segment = joined.m_subNotes[index];
+        auto        child   = makeNoteComponentFromSubNote(
+            segment, true, root, static_cast<int>(index));
+        // 草稿标志由最终根决定；独立子段本身没有轨道域字段。
+        child.m_isDraft    = joined.m_isDraft;
+        child.m_annotation = segment.annotation;
+        entries.push_back(
+            { registry.create(), std::nullopt, std::move(child) });
+    }
 }
 
 /// @brief 判断自动采样拖动可变字段是否保持不变。
@@ -1124,11 +1329,15 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
         if ( !SessionUtils::isMainCanvasCameraId(cmd.cameraId) ) return false;
         const auto cameraIterator = ctx.cameras.find(cmd.cameraId);
         if ( cameraIterator == ctx.cameras.end() ) return false;
+        // 玩家边界决定是否接管为跨区移动，必须与该视口的实际轨道一致。
+        // 从普通画布切来时，不能沿用上一画布的宽度或轨道中心。
+        const auto& layout =
+            SessionUtils::visualForCamera(ctx, cmd.cameraId).trackLayout;
         const auto playerProjection = calculatePlayerTrackProjection(
             cameraIterator->second.viewportWidth,
             ctx.trackCount,
-            ctx.lastConfig.visual.trackLayout.left,
-            ctx.lastConfig.visual.trackLayout.right,
+            layout.left,
+            layout.right,
             cameraIterator->second.horizontalOffsetX);
         if ( !playerProjection.valid ||
              (cmd.mouseX >= playerProjection.leftX &&
@@ -1223,7 +1432,7 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
         static_cast<std::int64_t>(target->absoluteTrack) - primaryTrack;
     // 禁用纵向拖动时只把组时间位移归零，横向移动仍正常计算。
     // 吸附目标可以变化，但不应间接改变参与对象的时间。
-    if ( ctx.lastConfig.settings.disableVerticalObjectDrag ) {
+    if ( disablesVerticalDrag(ctx, cmd.cameraId) ) {
         deltaTime = 0.0;
     }
 
@@ -1413,6 +1622,9 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
 /// @note 连续写入用于即时预览；外部读取者应遵循会话既有线程归属。
 void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
 {
+
+    // 坐标采用收到输入的视口布局，保留会话原有的编辑和吸附规则。
+    const auto& visual = SessionUtils::visualForCamera(ctx, cmd.cameraId);
     if ( ctx.draggedEntity == entt::null ) return;
     // 首段身体只移动原有后缀；不能落入整条平移或跨域转换路径。
     // PolylineNode/0 仍移动整条；内部节点在后面的子段路径中处理。
@@ -1443,27 +1655,25 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
     // --- 1. 计算鼠标指向的目标位置 (Time, Track) ---
     // 以所属相机的判定线和动画时间逆映射，保持鼠标与可见物件对应。
     // Preview 额外解除压缩，主画布缩放已包含在滚动缓存中。
-    float judgmentLineY =
-        it->second.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
-    float renderScaleY = 1.0f;
+    float judgmentLineY = it->second.viewportHeight * visual.judgeline_pos;
+    float renderScaleY  = 1.0f;
     if ( cmd.cameraId == "Preview" ) {
         const auto* mainCamera =
             SessionUtils::findMainCanvasCamera(ctx.cameras);
         float mainViewportHeight =
             mainCamera ? mainCamera->viewportHeight : it->second.viewportHeight;
-        float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
-                                ctx.lastConfig.visual.trackLayout.top) *
-                               mainViewportHeight;
-        float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
-        float by           = it->second.viewportHeight -
-                             ctx.lastConfig.visual.previewConfig.margin.bottom;
+        float mainEffectiveH =
+            (visual.trackLayout.bottom - visual.trackLayout.top) *
+            mainViewportHeight;
+        float ty = visual.previewConfig.margin.top;
+        float by =
+            it->second.viewportHeight - visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
         renderScaleY =
-            previewDrawH /
-            (mainEffectiveH * ctx.lastConfig.visual.previewConfig.areaRatio);
+            previewDrawH / (mainEffectiveH * visual.previewConfig.areaRatio);
     }
 
-    auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+    auto* cache = SessionUtils::scrollCacheForCamera(ctx, cmd.cameraId);
     if ( !cache ) return;
 
     double currentAbsY = cache->getAbsY(ctx.animateTime);
@@ -1479,14 +1689,15 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         targetTime,
         cmd.mouseY,
         it->second,
-        ctx.lastConfig,
+        Config::EditorConfigView{ visual, ctx.lastConfig.settings },
         bpmEvents,
         ctx.timelineRegistry,
         ctx.animateTime,
         ctx.cameras,
         ctx.currentBeatmap
             ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
-            : 120.0);
+            : 120.0,
+        cache);
     // 吸附只修改当前目标时间，初始时间始终保留按下时的值。
     // Ctrl 释放后可以重新吸附，不需要重新开始拖动。
     if ( snap.isSnapped && !cmd.isCtrlDown ) {
@@ -1498,8 +1709,8 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
     const auto projection = calculatePlayerTrackProjection(
         it->second.viewportWidth,
         ctx.trackCount,
-        ctx.lastConfig.visual.trackLayout.left,
-        ctx.lastConfig.visual.trackLayout.right,
+        visual.trackLayout.left,
+        visual.trackLayout.right,
         SessionUtils::isMainCanvasCameraId(cmd.cameraId)
             ? it->second.horizontalOffsetX
             : 0.0F);
@@ -1520,7 +1731,7 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
             it->second.viewportWidth,
             ctx.trackCount,
             ctx.bgmTrackCount,
-            ctx.lastConfig.visual.trackLayout,
+            visual.trackLayout,
             it->second.horizontalOffsetX,
             true,
             ctx.lastConfig.settings.isBmsEditingEnabled(),
@@ -1612,8 +1823,7 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
     // 禁用纵向对象拖动仅约束整体平移，不禁用改变局部持续时间。
     // 内部子段移动与末端拉伸继续遵守各自规则。
     const bool movesWholeObjects = isMultiDrag && !isPolylineSubDrag;
-    if ( movesWholeObjects &&
-         ctx.lastConfig.settings.disableVerticalObjectDrag ) {
+    if ( movesWholeObjects && disablesVerticalDrag(ctx, cmd.cameraId) ) {
         deltaT = 0.0;
     }
 
@@ -2309,6 +2519,9 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
             }
         }
 
+        // 草稿与混合选区也在同一个移动批次中记录接合。
+        // 放在跨域校验之后，拒绝或取消的拖动没有机会改写静止物件。
+        appendPolylineDropJoin(ctx, m_initialStates, noteEntries);
         for ( const auto& [entity, state] : m_initialSampleStates ) {
             const auto* current =
                 ctx.sampleRegistry.try_get<const SampleComponent>(entity);
@@ -2420,6 +2633,7 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
 /// @param cmd 拖拽结束命令。
 /// @warning 释放低频路径：汇总参与组件并构造历史动作，随后刷新打击事件。
 /// @note cmd 当前不提供最终坐标，最后一次更新已写入的组件即为提交目标。
+/// 整根折线只在合法的释放分支检查接合，取消永远先走原位恢复。
 /// @note 普通位置提交分支没有精确未变过滤，行为不同于统一跨域提交。
 /// @note 活动身份为空时直接返回；调用者不能用重复释放代替开始失败的清理。
 void GrabTool::handleEndDrag(SessionContext& ctx, const CmdEndDrag& cmd)
@@ -2543,6 +2757,10 @@ void GrabTool::handleEndDrag(SessionContext& ctx, const CmdEndDrag& cmd)
         }
     }
 
+    // 局部子段拖动继续沿用折线内部整形，整根移动才检查外部接点。
+    // 接合替换的是本次普通拖动的结果，不能额外加入一条撤销记录。
+    if ( !m_isPolylineSubDrag )
+        appendPolylineDropJoin(ctx, m_initialStates, entries);
     // 把整组位置编辑作为一个 BatchNoteAction 提交。
     // 参与对象已删除时跳过，无有效条目则不创建空批次。
     if ( !entries.empty() ) {

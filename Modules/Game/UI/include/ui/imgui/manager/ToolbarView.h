@@ -19,6 +19,7 @@
 namespace MMM::UI
 {
 class IEditorApplicationService;
+class ICanvasView;
 
 /**
  * @brief 编辑工具栏视图
@@ -35,6 +36,52 @@ public:
     /// @param sourceManager 当前 UI 管理器。
     /// @warning UI 热路径：每帧执行，禁止引入阻塞或文件系统操作。
     void update(UIManager* sourceManager) override;
+
+    /// @brief 每份布局面板独占尺寸、控件选择和连续操作状态。
+    struct LayoutPanelState {
+        /// @brief 布局组件弹层上一帧宽度。
+        float m_layoutPopupWidth{ 260.0f };
+        /// @brief 布局组件弹层上一帧高度。
+        float m_layoutPopupHeight{ 100.0f };
+        /// @brief 布局组件颜色是否有尚未写入配置文件的修改。
+        bool m_layoutComponentColorDirty{ false };
+        /// @brief 背景电平图折叠菜单是否有尚未写入配置文件的连续调整。
+        bool m_layoutSpectrumConfigDirty{ false };
+        /// @brief 物件与背景折叠菜单是否有尚未写入配置文件的连续调整。
+        bool m_layoutVisualConfigDirty{ false };
+        /// @brief 布局面板当前编辑的尺寸类别，只属于本地界面状态。
+        int m_noteSizePart{ 0 };
+        /// @brief 上一帧布局组件颜色选择器是否打开。
+        bool m_layoutComponentColorPickerOpen{ false };
+    };
+
+    /// @brief 对比视图在本帧把独立配置、锚点和返回标记借给布局面板。
+    struct ComparisonLayoutPanel {
+        ICanvasView&          canvas;        ///< 当前对比画布。
+        Config::EditorConfig& config;        ///< 临时编辑配置，不写入应用。
+        LayoutPanelState&     state;         ///< 对比面板独立控件状态。
+        const char*           windowName;    ///< 包含每个视口的稳定 ID。
+        glm::vec2             railPosition;  ///< 右侧工具条左上角。
+        glm::vec2             railSize;      ///< 右侧工具条实际尺寸。
+        bool                  mobile;        ///< 移动密度和触控布局。
+        bool&                 changed;       ///< 发生修改时由画布发布快照。
+    };
+
+    /// @brief 在对比视图右侧工具按钮旁绘制完整布局面板。
+    /// @warning 每帧只在打开时绘制；对比配置不会进入全局保存流程。
+    void renderComparisonLayout(float dpiScale, ComparisonLayoutPanel& panel);
+
+    /// @brief 绘制带可选短标签的图标按钮。
+    /// @param icon 图标字符串。
+    /// @param id 不显示的 ImGui ID。
+    /// @param shortLabel 图标下方显示的短标签。
+    /// @param width 按钮宽度。
+    /// @param height 按钮高度。
+    /// @param showLabel 是否显示短标签。
+    /// @return 被点击时返回 true。
+    static bool drawIconButton(const char* icon, const char* id,
+                               const char* shortLabel, float width,
+                               float height, bool showLabel);
 
     /// @brief 在皮肤切换完成后刷新仍依赖皮肤的当前调色盘。
     void refreshPaletteAfterSkinChange();
@@ -85,20 +132,8 @@ private:
     bool m_showLayoutPopup{ false };
     /// @brief 本帧布局工具按钮的屏幕左上角坐标，用于定位弹层。
     glm::vec2 m_lastLayoutBtnPos{ 0.0f, 0.0f };
-    /// @brief 布局组件弹层上一帧宽度。
-    float m_layoutPopupWidth{ 260.0f };
-    /// @brief 布局组件弹层上一帧高度。
-    float m_layoutPopupHeight{ 100.0f };
-    /// @brief 布局组件颜色是否有尚未写入配置文件的修改。
-    bool m_layoutComponentColorDirty{ false };
-    /// @brief 背景电平图折叠菜单是否有尚未写入配置文件的连续调整。
-    bool m_layoutSpectrumConfigDirty{ false };
-    /// @brief 物件与背景折叠菜单是否有尚未写入配置文件的连续调整。
-    bool m_layoutVisualConfigDirty{ false };
-    /// @brief 布局面板当前编辑的尺寸类别，只属于本地界面状态。
-    int m_noteSizePart{ 0 };
-    /// @brief 上一帧布局组件颜色选择器是否打开。
-    bool m_layoutComponentColorPickerOpen{ false };
+    /// @brief 主工具栏保留自己的弹层尺寸与连续编辑状态。
+    LayoutPanelState m_layoutPanel;
     /// @brief 时间线缩放浮层的显示状态，不存储缩放值副本。
     bool m_showZoomPopup{ false };
     /// @brief 本帧缩放按钮屏幕坐标，随横竖工具栏重新定位。
@@ -269,7 +304,8 @@ private:
     /// @param dpiScale 当前 DPI 缩放。
     /// @param sourceManager 提供当前引导目标的突出层。
     /// @warning UI 热路径：仅在布局工具激活时绘制固定数量控件。
-    void renderLayoutPopup(float dpiScale, UIManager* sourceManager);
+    void renderLayoutPopup(float dpiScale, UIManager* sourceManager,
+                           ComparisonLayoutPanel* comparison = nullptr);
 
     /// @brief 绘制分拍线显示模式与自动渐隐范围弹窗。
     /// @param dpiScale 当前 DPI 缩放。
@@ -286,18 +322,6 @@ private:
     /// @warning UI
     /// 热路径：弹层打开时每帧执行，仅绘制滚动区可见轨道行并提交命令。
     void renderSoundEffectTool(float dpiScale);
-
-    /// @brief 绘制带可选短标签的图标按钮。
-    /// @param icon 图标字符串。
-    /// @param id 不显示的 ImGui ID。
-    /// @param shortLabel 图标下方显示的短标签。
-    /// @param width 按钮宽度。
-    /// @param height 按钮高度。
-    /// @param showLabel 是否显示短标签。
-    /// @return 被点击时返回 true。
-    bool drawIconButton(const char* icon, const char* id,
-                        const char* shortLabel, float width, float height,
-                        bool showLabel) const;
 
     /// @brief 从当前皮肤默认方案初始化调色盘颜色。
     void initializeColorPalette();

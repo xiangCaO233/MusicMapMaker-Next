@@ -20,6 +20,8 @@ namespace MMM::Config
 struct EditorSettings;
 /// @brief 相机吸附查询只借用完整配置。
 struct EditorConfig;
+struct EditorConfigView;
+struct VisualConfig;
 /// @brief 音画校准仅通过引用传入同步参数。
 struct SyncConfig;
 }  // namespace MMM::Config
@@ -43,6 +45,11 @@ class BeatMap;
 /// @brief 背景探测接口仅借用谱面基本信息，无需传播完整定义。
 struct BaseMapMeta;
 }  // namespace MMM
+
+namespace MMM::Logic::System
+{
+struct ScrollCache;
+}
 
 namespace MMM::Logic::SessionUtils
 {
@@ -85,6 +92,21 @@ bool isNoteEditable(const NoteComponent&          note,
 
 /// @brief 判断给定视口是否为主编辑画布。
 bool isMainCanvasCameraId(const std::string& cameraId);
+
+/// @brief 取得相机对应的时间与位置映射，辅助视口沿用主缓存。
+/// @warning 交互与渲染热路径：仅借用缓存和视口，不重建时间线。
+const System::ScrollCache* scrollCacheForCamera(const SessionContext& ctx,
+                                                const std::string&    cameraId);
+
+/// @brief 借用视口生效的布局，空视口及普通窗口使用会话视觉配置。
+/// @warning 坐标与渲染热路径，不复制发布快照所有权。
+const Config::VisualConfig& visualForCamera(const SessionContext& ctx,
+                                            const std::string&    cameraId);
+
+/// @brief 按主映射修订同步备用映射，供所有对比相机共用。
+/// @warning 逻辑热路径：只有首次需要或主缓存失效才复制配置并重建。
+void refreshComparisonScrollCache(SessionContext&             ctx,
+                                  const Config::EditorConfig& config);
 
 /// @brief 在视口表中查找当前会话的主编辑画布。
 const CameraInfo* findMainCanvasCamera(
@@ -138,11 +160,11 @@ int calculateBeatIndex(double                                       time,
 /// @return SnapResult 磁吸计算结果
 SnapResult getSnapResult(
     double rawTime, float mouseY, const CameraInfo& camera,
-    const Config::EditorConfig&                  config,
+    const Config::EditorConfigView&              config,
     const std::vector<const TimelineComponent*>& bpmEvents,
     entt::registry& timelineRegistry, double animateTime,
     const std::unordered_map<std::string, CameraInfo>& cameras,
-    double                                             fallbackBpm);
+    double fallbackBpm, const System::ScrollCache* viewportCache = nullptr);
 
 /// @brief 根据当前动画时间同步打击事件的索引。
 /// @param ctx 会话上下文引用

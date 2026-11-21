@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Bundle;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 import java.io.File;
@@ -14,6 +15,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.util.HashSet;
@@ -36,6 +38,8 @@ import org.json.JSONObject;
 final class DocumentStorage {
     /** 独立请求码不会抢占 SDL 已有的 Activity 返回处理。 */
     static final int REQUEST = 7341;
+    /** 项目分片目录名与 ProjectStorage 保持一致，不能匹配根目录下的 .mmm 谱面文件。 */
+    private static final String PROJECT_METADATA_DIRECTORY = ".mmm";
     /** Activity 只用于系统选择器与 ContentResolver，不跨应用申请存储路径。 */
     private final Activity activity;
     /** 工作副本和映射都属于本应用私有目录，不需要共享存储权限。 */
@@ -359,6 +363,90 @@ final class DocumentStorage {
     }
 
     /**
+     * @brief 仅在提供器完整列出根目录且没有同名条目时确认项目配置目录缺失。
+     * @param tree 本次由系统选择器返回的授权目录。
+     * @note 云端提供器可能返回仍在加载的游标，或以游标附加字段报告错误。
+     * @warning 只在重选已登记的工程时查询一层，不打开任何谱面或媒体文件。
+     */
+    private boolean projectMetadataAbsent(Uri tree) {
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(
+                tree, DocumentsContract.getTreeDocumentId(tree));
+        String[] columns = {DocumentsContract.Document.COLUMN_DISPLAY_NAME};
+        try (Cursor cursor = activity.getContentResolver().query(children, columns, null, null, null)) {
+            if (cursor == null) return false;
+            while (cursor.moveToNext()) {
+                // 同名普通文件也可能是冲突，不能把后续创建目录视为安全。
+                if (PROJECT_METADATA_DIRECTORY.equals(cursor.getString(0))) return false;
+            }
+            Bundle extras = cursor.getExtras();
+            return !extras.getBoolean(DocumentsContract.EXTRA_LOADING)
+                    && !extras.containsKey(DocumentsContract.EXTRA_ERROR);
+        } catch (RuntimeException error) {
+            // 授权撤回或提供器离线时仍可使用本地副本，不能据此重置工作区。
+            return false;
+        }
+    }
+
+    /**
+     * @brief 原子替换一个工作区分片，空对象由 ProjectStorage 读取为默认状态。
+     * @param destination 私有工程内待重置的分片。
+     * @note 分片是加载所需文件，直接删除会连带触发整套工程设置回退。
+     */
+    private void resetWorkspaceFile(Path destination) throws IOException {
+        // 临时文件与工程同属应用私有文件系统，且不占用原生保存使用的 .tmp 路径。
+        Path temporary = Files.createTempFile(root.toPath(), "workspace-reset-", ".tmp");
+        try {
+            Files.write(temporary, "{}\n".getBytes(StandardCharsets.UTF_8));
+            Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
+    }
+
+    /**
+     * @brief 外部 .mmm 已删除时，重置缓存的工作区与其外部文档映射。
+     * @param tree 本次选中的授权目录，必须对应 mount 已记录的身份。
+     * @param directory 既有工作副本，只清空两份工作区分片。
+     * @param mount 已登记的工作副本与外部内容基线。
+     * @warning 持有 fileGate 的文件工作线程执行，失败时下次仍可重试。
+     */
+    private void resetDeletedProjectWorkspace(Uri tree, File directory, JSONObject mount) throws Exception {
+        JSONObject files = mount.getJSONObject("files");
+        String prefix = PROJECT_METADATA_DIRECTORY + "/";
+        boolean hadExternalMetadata = false;
+        for (Iterator<String> paths = files.keys(); paths.hasNext();) {
+            if (paths.next().startsWith(prefix)) {
+                hadExternalMetadata = true;
+                break;
+            }
+        }
+        // 从未出现在外部的本地工作区可能尚未写回，目录缺失本身不能作为重置依据。
+        if (!hadExternalMetadata || !projectMetadataAbsent(tree)) return;
+
+        Path metadata = directory.toPath().resolve(PROJECT_METADATA_DIRECTORY);
+        if (Files.isDirectory(metadata)) {
+            // 音频工具也有单独的布局分片，两份一起重置，谱面、恢复备份与其它配置继续复用。
+            resetWorkspaceFile(metadata.resolve("workspace.json"));
+            resetWorkspaceFile(metadata.resolve("project_audio_tool.json"));
+        }
+
+        // 删除目录也使原有分片 URI 和哈希失效。下一次保存应创建分片，同时照常校验谱面冲突。
+        JSONObject retained = new JSONObject();
+        for (Iterator<String> paths = files.keys(); paths.hasNext();) {
+            String path = paths.next();
+            if (!path.startsWith(prefix)) retained.put(path, files.get(path));
+        }
+        mount.put("files", retained);
+        try {
+            persist();
+        } catch (Exception error) {
+            // 索引写入失败时保留原基线作为重试线索，避免内存与磁盘分别处理不同的外部状态。
+            mount.put("files", files);
+            throw error;
+        }
+    }
+
+    /**
      * @brief 生成完整工作副本后才发布映射，失败不会把不完整工程交给 C++。
      * @return 目录或单文件的普通私有路径，URI 始终留在本服务。
      * @details 已存在副本可能含未发布修改，重复选择不自动覆盖其内容。
@@ -371,7 +459,12 @@ final class DocumentStorage {
         String key = digest(uri.toString().getBytes(StandardCharsets.UTF_8));
         File directory = new File(root, key);
         // 已有副本可能含尚未发布的修改，重复选择不能静默用外部字节覆盖它。
-        if (mounts.has(key) && directory.isDirectory()) return mounts.getJSONObject(key).getString("path");
+        JSONObject existing = mounts.optJSONObject(key);
+        if (existing != null && directory.isDirectory()) {
+            if (requestKind == 2 && existing.optBoolean("tree"))
+                resetDeletedProjectWorkspace(uri, directory, existing);
+            return existing.getString("path");
+        }
         JSONObject files = new JSONObject();
         JSONObject mount = new JSONObject().put("source", uri.toString()).put("tree", requestKind == 2)
                 .put("writable", (flags & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) != 0).put("files", files);

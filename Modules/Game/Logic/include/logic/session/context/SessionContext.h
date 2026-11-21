@@ -1,5 +1,7 @@
 #pragma once
 
+#include "common/ComparisonCanvas.h"
+
 #include "common/walkthrough/WalkthroughEditEvent.h"
 
 #include "common/ChartObjectKind.h"
@@ -49,6 +51,8 @@ struct CameraInfo {
     float       viewportHeight{ 600.0f };  ///< 视口逻辑高度
     /// @brief 内容相对基础轨道布局的横向逻辑像素偏移。
     float horizontalOffsetX{ 0.0F };
+    /// @brief 仅对比视口覆盖全局映射及观察方式。
+    std::optional<Common::ComparisonCanvasSettings> comparison{};
 };
 
 /// @brief 矩形框选区域

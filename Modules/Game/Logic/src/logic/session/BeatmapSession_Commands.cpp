@@ -1,5 +1,6 @@
 #include "BeatmapSession_CommandState.h"
 #include "common/ClockTimeText.h"
+#include "common/ComparisonCanvas.h"
 #include "common/LogicCommands.h"
 #include "common/platform/DocumentStorage.h"
 #include "config/EditorSettings.h"
@@ -3696,17 +3697,38 @@ void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
 /// @warning Resize 事件路径：只更新常量级相机状态，不触发文件或全谱操作。
 void BeatmapSession::handleCommand(const CmdUpdateViewport& cmd)
 {
-    if ( m_ctx->cameras.find(cmd.cameraId) == m_ctx->cameras.end() ) {
-        // 首次见到相机时使用零偏移和命令尺寸建立独立 CameraInfo。
-        m_ctx->cameras[cmd.cameraId] =
-            CameraInfo{ cmd.cameraId, cmd.width, cmd.height };
-    } else {
-        auto& camera = m_ctx->cameras[cmd.cameraId];
-        // 先用旧宽与新宽换算横移，随后才覆盖 viewportWidth。
-        camera.horizontalOffsetX = resizeCanvasHorizontalOffset(
-            camera.horizontalOffsetX, camera.viewportWidth, cmd.width);
-        camera.viewportWidth  = cmd.width;
-        camera.viewportHeight = cmd.height;
+    if ( cmd.closeComparison ) {
+        // 逻辑线程先停止生产，再解除注册表持有，避免尾随快照重建已关闭的键。
+        m_ctx->cameras.erase(cmd.cameraId);
+        m_ctx->syncBuffers.erase(cmd.cameraId);
+        m_ctx->lastCameraSnapshotTimes.erase(cmd.cameraId);
+        std::erase_if(m_ctx->marqueeBoxes, [&](const MarqueeBox& box) {
+            return box.cameraId == cmd.cameraId;
+        });
+        EditorEngine::instance().releaseComparisonCanvasBuffer(cmd.cameraId);
+        return;
+    }
+
+    auto camera = m_ctx->cameras.find(cmd.cameraId);
+    if ( camera == m_ctx->cameras.end() ) {
+        // 已关闭视口迟到的 Resize 不得重新建立相机。
+        if ( Common::isComparisonCanvas(cmd.cameraId) && !cmd.comparison )
+            return;
+        camera = m_ctx->cameras.try_emplace(cmd.cameraId, cmd.cameraId).first;
+    }
+
+    auto& info = camera->second;
+    if ( cmd.comparison ) {
+        info.comparison = cmd.comparison;
+        // 下一份快照可以直接使用备用映射，连续命令也不混用主坐标。
+        SessionUtils::refreshComparisonScrollCache(*m_ctx, m_ctx->lastConfig);
+    }
+    if ( cmd.width > 0.0F && cmd.height > 0.0F ) {
+        // 配置更新传入零尺寸，只更新视图选项而不重置水平中心。
+        info.horizontalOffsetX = resizeCanvasHorizontalOffset(
+            info.horizontalOffsetX, info.viewportWidth, cmd.width);
+        info.viewportWidth  = cmd.width;
+        info.viewportHeight = cmd.height;
     }
 }
 

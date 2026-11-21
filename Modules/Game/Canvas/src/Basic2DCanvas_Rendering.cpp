@@ -50,13 +50,11 @@ glm::mat4 Basic2DCanvas::getCanvasProjectionMatrix()
     // 轨道与音符共用平面，背景层和全屏后处理不进入该变换。
     // 渲染线程只读 UI 同线程维护的配置，不访问会话更新长锁。
     // 空会话没有轨道场景，Logo 占位仍使用二维投影而非实验摄像机。
-    const auto& visual   = Config::AppConfig::instance().getVisualConfig();
+    const auto& visual   = canvasVisualConfig();
     const bool  hasScene = m_currentSnapshot && m_currentSnapshot->hasBeatmap &&
                            (!m_layoutEditor || m_layoutEditor->cameraMode());
-    // 元素布局只临时覆盖观察矩阵，保留已保存的自由相机姿态。
-    // 自由相机预览与退出布局后的渲染完全共用这条路径。
-    // 元素布局通过 hasScene 临时回到正交矩阵。
-    // 因此切换模式不需要重建顶点或等待逻辑线程重新发布快照。
+    // 元素布局临时回到二维，退出后恢复当前视口独立的自由相机。
+    // 视口局部参数仍走完整投影模型，轨道横移与厚度补偿沿用已有几何。
     if ( hasScene && visual.canvasCameraPoseEnabled ) {
         m_isObservationCamera = true;
         m_observationProjection =

@@ -36,6 +36,9 @@ public:
     /// @brief 首次建树前恢复客户端比例和中心活动标签，不消费桌面 ini。
     void restore(float timingRatio, float previewRatio, ImGuiID selectedTab,
                  float workbenchRatio = .17f);
+    /// @brief 下次提交时重建移动停靠根，以默认比例归位窗口并聚焦当前画布。
+    /// @warning 仅响应显式还原请求，查找画布时只访问已登记的 UI 窗口。
+    void reset(float timingRatio, float previewRatio, float workbenchRatio);
     /// @brief 在显式提交边沿读取实际比例和中心标签，隐藏区保留原比例。
     /// @warning 只查询固定数量节点，不构造 JSON 或执行文件访问。
     void capture(float& timingRatio, float& previewRatio, ImGuiID& selectedTab,
@@ -43,13 +46,22 @@ public:
     /// @brief 帧末恢复启动活动窗口，首次用户按下后停止覆盖启动焦点请求。
     /// @warning 固定 ID 查询；不抢业务弹窗焦点，不等待视图创建。
     void finishFrame();
-    /// @brief 长按当前窗口的原生停靠标签后提供关闭菜单，不绘制标签 X。
-    /// @param canClose 调用方的生命周期策略，最后一个主画布必须为 false。
+    /// @brief 业务窗口消费的一次性菜单动作，菜单自身不关闭或创建窗口。
+    enum class TabMenuAction {
+        None,            ///< 无菜单项被激活。
+        OpenComparison,  ///< 请求为当前谱面新建对比标签。
+        Close,           ///< 按调用方原有流程关闭标签。
+    };
+
+    /// @brief 长按当前窗口的原生停靠标签后提供菜单，不绘制标签 X。
+    /// @param closeLabel 空指针表示该标签受关闭保护或没有关闭动作。
+    /// @param comparisonLabel 空指针表示该标签不属于真实谱面。
     /// @param enabled 抽屉或其他模态独占输入时禁止开始新手势。
-    /// @return 用户在菜单中明确选择关闭，而不是仅松开长按触点。
+    /// @return 用户在新触点中明确选择的菜单项，发起长按的释放不返回动作。
     /// @warning 每个停靠窗口每帧调用；只查询当前标签，不等待或扫描业务对象。
-    bool tabCloseRequested(const char* closeLabel, float scale, bool canClose,
-                           bool enabled);
+    TabMenuAction tabMenuAction(const char* closeLabel,
+                                const char* comparisonLabel, float scale,
+                                bool enabled);
     /// @brief 菜单和关闭释放帧拦截画布原始输入，防止菜单触点穿透。
     bool tabMenuOwnsPointer() const
     {
@@ -94,6 +106,8 @@ private:
     ImGuiID m_lastMainSelection{};
     /// @brief 最近显隐组合，不把旋转或宿主变宽误判为需要重建。
     int m_visibility{ -1 };
+    /// @brief 下一次提交宿主时消费，避免在抽屉按钮绘制期间更改停靠树。
+    bool m_resetPending{};
     /// @brief 各辅助分区占根宽度的比例，隐藏前保留用户实际调整值。
     float m_timingRatio{ .28f }, m_previewRatio{ .2f },
         m_workbenchRatio{ .17f };

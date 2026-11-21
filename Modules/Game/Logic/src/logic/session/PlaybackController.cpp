@@ -1068,7 +1068,7 @@ void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
     // 有效负缩放仍保留符号，像素拖动方向应与实际渲染方向一致。
 
     double targetVisualTime = visualTime;
-    auto*  cache = m_ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+    auto*  cache = SessionUtils::scrollCacheForCamera(m_ctx, cmd.cameraId);
     // 只借用会话内已有缓存，本次换算不复制缓存或取得跨线程共享所有权。
     if ( cache ) {
         // 滚速事件使像素与时间不再线性，必须先移动绝对纵坐标再反查时间。
@@ -1078,7 +1078,10 @@ void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
             // 缩放前后的积分坐标成比例，中点锚定只需要这一比例。
             // 不先反查锚点时间：负 SV 和 Jump 中同一位置未必有唯一时间。
             const double judgmentY =
-                camera.viewportHeight * m_ctx.lastConfig.visual.judgeline_pos;
+                camera.viewportHeight *
+                // 缩放锚点跟随收到输入的视口，而回放时间仍由会话持有。
+                SessionUtils::visualForCamera(m_ctx, cmd.cameraId)
+                    .judgeline_pos;
             const double oldScale = cache->getAnimatedZoomScale();
             const float  zoom     = std::clamp(cmd.timelineZoom, .1F, 10.0F);
             double       baseZoom = cache->getBaseZoom();
@@ -1091,7 +1094,16 @@ void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
             m_ctx.animatedTimelineZoom  = m_ctx.animatedTimelineZoomTarget =
                 zoom;
             m_ctx.animatedTimelineZoomAnimationActive = false;
-            cache->setAnimatedZoomScale(zoom / baseZoom);
+            const double nextScale                    = zoom / baseZoom;
+            // 播放与时间线缩放是同一谱面会话的传输状态；两套映射保持同一倍率。
+            // 仅更新当前视口的缓存会让同一轮逻辑中的另一个视口继续使用旧比例。
+            // 当前轮用更新后的倍率反算锚点时间，随后以该时间准备所有快照。
+            auto& storage = m_ctx.timelineRegistry.ctx();
+            if ( auto* main = storage.find<System::ScrollCache>() )
+                main->setAnimatedZoomScale(nextScale);
+            if ( auto* alternate =
+                     storage.find<System::ComparisonScrollCache>() )
+                alternate->cache.setAnimatedZoomScale(nextScale);
             const double ratio = cache->getAnimatedZoomScale() / oldScale;
             // 旧中点偏移随倍率放大，再把新中点移动量叠加到同一表达式。
             // 这条路径只查询已有索引，不遍历事件或重新积分。

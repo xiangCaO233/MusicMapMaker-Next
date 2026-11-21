@@ -1,4 +1,6 @@
 #include "ui/imgui/CanvasTabManager.h"
+
+#include "common/ComparisonCanvas.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/project/ProjectEvents.h"
@@ -13,6 +15,7 @@
 #include "ui/imgui/WorkspaceDockRestore.h"
 #include "ui/walkthrough/WelcomeView.h"
 #include "ui/workspace/IWorkspacePresentation.h"
+#include <fmt/format.h>
 
 #include <algorithm>
 
@@ -282,6 +285,99 @@ void CanvasTabManager::focusPendingSessionCanvas(
     canvas->requestFocus();
 }
 
+/// @brief 将正在绘制的窗口发出的请求保存在 UI 线程队列。
+/// @param owner 谱面的主相机标识，调用结束后不要求原字符串继续存活。
+/// @details 画布的绘制顺序来自 UIManager 注册表，不能在窗口输入回调中
+/// 直接插入新视图，否则当前遍历可能失效。管理器下一轮统一消费请求。
+void CanvasTabManager::requestComparisonCanvas(std::string_view owner)
+{
+    m_pendingComparisons.emplace_back(owner);
+}
+
+/// @brief 判断主标签是否应采用对比组的文字颜色。
+/// @param owner 谱面会话的主相机标识。
+/// @return 任一尚未清理的对比属于该会话时返回真，包括遮挡在其他标签后的视图。
+/// @warning 每帧只对已创建的窗口标识做字符串视图比较，不查询逻辑 Session。
+bool CanvasTabManager::hasComparison(std::string_view owner) const
+{
+    return std::any_of(m_comparisonCanvases.begin(),
+                       m_comparisonCanvases.end(),
+                       [owner](const std::string& id) {
+                           return Common::canvasSessionCameraId(id) == owner;
+                       });
+}
+
+/// @brief 将对比标签的可见性合入同一个谱面会话的更新条件。
+/// @param manager 借用 UI 注册表查询当前窗口对象。
+/// @param owner 正在同步可见性的原始画布 ID。
+/// @return 至少一个同属会话的对比正显示画面时返回真。
+/// @warning 每帧调用，不更改逻辑会话的活动索引，不获取长锁。
+bool CanvasTabManager::hasVisibleComparison(UIManager&       manager,
+                                            std::string_view owner) const
+{
+    return std::any_of(m_comparisonCanvases.begin(),
+                       m_comparisonCanvases.end(),
+                       [&](const std::string& id) {
+                           if ( Common::canvasSessionCameraId(id) != owner )
+                               return false;
+                           const auto* canvas = manager.getCanvasView(id);
+                           return canvas && canvas->isCanvasContentVisible();
+                       });
+}
+
+/// @brief 将对比窗口的寿命绑定到拥有谱面的原始视图。
+/// @param manager 当前帧的 UI 视图与工作区服务宿主。
+/// @details 对比窗口只拥有同步缓冲和 GPU 表面。主会话的关闭与保存仍
+/// 由原有流程负责，单独关闭一个对比不应影响同一会话的其它窗口。
+/// @warning 每帧只检查 UI 视图和复用的条目数组。显式关闭或创建时才
+/// 释放或分配离屏资源，不能在标签之间切换时重新建立谱面会话。
+void CanvasTabManager::syncComparisonCanvases(UIManager& manager)
+{
+    auto&      workspace = *manager.getCanvasWorkspaceService();
+    const auto hasOwner  = [this](std::string_view owner) {
+        // Logo 原位复用时相机 ID 仍在，必须额外检查谱面身份。
+        return std::any_of(m_workspaceEntries.begin(),
+                           m_workspaceEntries.end(),
+                           [owner](const CanvasWorkspaceEntry& entry) {
+                               return entry.cameraId == owner &&
+                                      !entry.isLogoPlaceholder;
+                           });
+    };
+
+    // 普通关闭由 UIManager 先移走视图；主谱面退出则由这里主动移除对比。
+    // 两条分支都通过同一工作区端口通知逻辑线程停止生产快照。
+    // 只解除这个视口的缓冲键，不能调用关闭 Session 的路径。
+    std::erase_if(m_comparisonCanvases, [&](const std::string& id) {
+        const bool hasView = manager.getCanvasView(id) != nullptr;
+        if ( hasView && hasOwner(Common::canvasSessionCameraId(id)) )
+            return false;
+
+        workspace.closeComparisonCanvas(id);
+        if ( hasView ) manager.unregisterView(id);
+        return true;
+    });
+
+    // 请求在本帧的主工作区快照上重新校验，丢弃同帧关闭过的谱面。
+    // 运行期序号不随其他标签移除而复用，延迟的 Resize 不会落入新窗口。
+    for ( const auto& owner : m_pendingComparisons ) {
+        if ( !hasOwner(owner) ) continue;
+        const auto index = ++m_nextComparisonIndex;
+        auto       id    = fmt::format(
+            "{}{}{}", owner, Common::COMPARISON_CANVAS_SUFFIX, index);
+        auto view =
+            workspace.createMainCanvas({ id, false, false, index }, 200, 200);
+        auto* canvas = view->asCanvasView();
+        if ( manager.workspacePresentation().usesDesktopLayout() )
+            canvas->requestDockToCenter();
+        // 桌面的首次停靠仅决定创建设备上的起始位置。随后用户可自由拆分，
+        // 移动布局的中央区域则继续由自己的布局宿主控制。
+        canvas->requestFocus();
+        manager.registerView(id, std::move(view));
+        m_comparisonCanvases.push_back(std::move(id));
+    }
+    m_pendingComparisons.clear();
+}
+
 /// @brief 同步工作区会话与 UIManager 中的主画布视图集合。
 /// @param sourceManager 当前 UI 管理器。
 /// @details 按“移除失效视图、创建缺失视图、处理聚焦、回收关闭会话、推进项目
@@ -369,6 +465,8 @@ void CanvasTabManager::update(UIManager* sourceManager)
             }
         }
     }
+
+    syncComparisonCanvases(*sourceManager);
 
     // 项目 ini 在运行中加载后，核对真正绘制过的画布，补回偶发丢失的 DockId。
     reconcileProjectWorkspaceDocks(sourceManager, entries);

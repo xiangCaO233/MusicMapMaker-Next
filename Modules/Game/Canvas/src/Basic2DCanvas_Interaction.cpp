@@ -2762,6 +2762,23 @@ void Basic2DCanvasInteraction::rebuildNoteLayoutInstances(
     }
 }
 
+/// @brief 仅在对比画布构造时绑定自己的视觉配置和状态标记。
+void Basic2DCanvasInteraction::setLocalLayout(Config::VisualConfig* visual,
+                                              bool* dirty, const bool* editing)
+{
+    m_localVisual        = visual;
+    m_localLayoutDirty   = dirty;
+    m_localLayoutEditing = editing;
+}
+
+/// @brief 获取视口图形及布局交互的共同配置来源。
+/// @warning 每帧直接借用 UI 持有的参数，不等待逻辑更新。
+Config::VisualConfig& Basic2DCanvasInteraction::visualConfig() const
+{
+    return m_localVisual ? *m_localVisual
+                         : Config::AppConfig::instance().getVisualConfig();
+}
+
 /// @brief 切换可视化范围编辑，保持每个新画布默认使用 Note 尺寸手柄。
 /// @warning 低频切换入口：只在模式真实变化时结束并保存之前的布局事务。
 void Basic2DCanvasInteraction::setPickingBoundsEditing(bool enabled)
@@ -2826,7 +2843,7 @@ void Basic2DCanvasInteraction::finishLayoutEditing()
     m_layoutTouchGrabOffset = {};
     if ( m_layoutConfigurationChanged ) {
         // 连续拖动只修改内存配置，最终释放时合并为一次磁盘保存和反馈。
-        Config::AppConfig::instance().save();
+        if ( !m_localVisual ) Config::AppConfig::instance().save();
         ::MMM::UI::PlayInteractionMouseUpFeedback();
     }
     m_trackLayoutDragHandle = TrackLayoutDragHandle::None;
@@ -3063,10 +3080,22 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     // 不需要访问逻辑 ECS。
     rebuildNoteLayoutInstances(currentSnapshot);
 
-    auto&      appConfig = Config::AppConfig::instance();
-    const auto keyCount  = currentSnapshot.hasBeatmap
-                               ? std::max(currentSnapshot.trackCount, 1)
-                               : 0;
+    auto& layoutVisual = visualConfig();
+    /// @brief 连续调节沿用原流程，只有主画布保存全局布局预设。
+    const auto layoutChanged = [&] {
+        m_layoutConfigurationChanged = true;
+        if ( m_localLayoutDirty ) {
+            *m_localLayoutDirty = true;
+        } else {
+            auto& app = Config::AppConfig::instance();
+            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
+                Logic::CmdUpdateEditorConfig{ app.getEditorConfig() }));
+            app.saveLayoutChanges();
+        }
+    };
+    const auto keyCount = currentSnapshot.hasBeatmap
+                              ? std::max(currentSnapshot.trackCount, 1)
+                              : 0;
     /// @brief 从原始部件边界计算当前模式的显示与命中边界。
     /// @warning 布局热路径：只读固定配置并做常量几何，不访问 ECS 或分配。
     const auto noteLayoutBounds = [&](const NoteLayoutInstance& instance) {
@@ -3084,7 +3113,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             r.height(),
             instance.kind
         };
-        const auto& visual = appConfig.getVisualConfig();
+        const auto& visual = layoutVisual;
         // 全局基础倍率继续生效，四角编辑只改变部件附加倍率。
         // 因而旧配置中的整体扩展不会在进入可视化模式时丢失。
         // 原始边界和显示边界必须分开，避免跨帧重复应用相同的倍率。
@@ -3104,8 +3133,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         return a.entity == b.entity && a.kind == b.kind && a.part == b.part &&
                a.subIndex == b.subIndex && a.nodeToken == b.nodeToken;
     };
-    auto layout = sanitizeTrackLayout(
-        appConfig.getVisualConfig().trackLayoutForKeyCount(keyCount));
+    auto layout =
+        sanitizeTrackLayout(layoutVisual.trackLayoutForKeyCount(keyCount));
     // 无谱面时使用 keyCount=0 的独立布局配置；真实谱面至少按一轨处理。
     const float cameraOffsetX = currentSnapshot.canvasHorizontalOffsetX;
     float       worldPointerX = pointerX - cameraOffsetX;
@@ -3159,7 +3188,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         return HorizontalRegionBounds{};
     };
     float judgmentLinePosition = sanitizeJudgmentLinePosition(
-        appConfig.getVisualConfig().judgmentLinePositionForKeyCount(keyCount));
+        layoutVisual.judgmentLinePositionForKeyCount(keyCount));
     // 触控边缘与角点的半径为 24dp，对应完整 48dp 命中带。
     // 该范围只影响输入判定，显示把手仍使用原来的精细线宽和尺寸。
     // 密集重叠区域继续遵循下面的目标优先级，不同时修改多个组件。
@@ -3170,7 +3199,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     // 经典鼠标与纯鼠标方案继续使用原来的七像素角点半径。
     // 命中半径随 DPI 放大并保留逻辑像素下限；移动中心句柄范围大于
     // 边缘/角点，使精细缩放仍优先落在边界附近。
-    const float dpiScale = appConfig.getWindowContentScale();
+    const float dpiScale =
+        Config::AppConfig::instance().getWindowContentScale();
     const float edgeHitRadius =
         std::max(6.0f, (touch ? 24.0f : 7.0f) * dpiScale);
     const float moveHandleRadius =
@@ -3233,8 +3263,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
 
             // 使用当前键数配置过滤隐藏组件，避免吸附到用户看不见的文字边界。
             const auto& components =
-                appConfig.getVisualConfig().canvasComponentsForKeyCount(
-                    keyCount);
+                layoutVisual.canvasComponentsForKeyCount(keyCount);
             for ( const auto& instance :
                   currentSnapshot.canvasComponentInstances ) {
                 // 快照可能仍含上一帧实例，配置可见性是最终筛选依据。
@@ -3374,9 +3403,9 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         for ( auto it = currentSnapshot.canvasComponentInstances.rbegin();
               it != currentSnapshot.canvasComponentInstances.rend();
               ++it ) {
-            const auto& placement = appConfig.getVisualConfig()
-                                        .canvasComponentsForKeyCount(keyCount)
-                                        .placement(it->type);
+            const auto& placement =
+                layoutVisual.canvasComponentsForKeyCount(keyCount).placement(
+                    it->type);
             // 快照可能仍含上一代实例，当前配置可见性作为最终命中门槛。
             if ( !placement.visible ) continue;
 
@@ -3636,7 +3665,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             m_noteScaleDragTarget      = hoveredNote;
             m_noteScaleDragHandle      = hoveredNoteHandle;
             m_noteScaleDragStartBounds = *hoveredNoteBounds;
-            const auto& visual         = appConfig.getVisualConfig();
+            const auto& visual         = layoutVisual;
             m_notePartDragTarget       = hoveredNoteInstance;
             // 外观与拾取模式共享手柄身份，起始值分别来自各自的配置。
             const auto size =
@@ -3662,8 +3691,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             m_canvasComponentDragTarget = hoveredComponent;
             m_canvasComponentDragHandle = hoveredComponentHandle;
             const auto placement =
-                appConfig.getVisualConfig()
-                    .canvasComponentsForKeyCount(keyCount)
+                layoutVisual.canvasComponentsForKeyCount(keyCount)
                     .resolvedPlacement(*hoveredComponent,
                                        hoveredComponentInstance->instanceIndex,
                                        currentSnapshot.trackCount,
@@ -3679,8 +3707,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 hoveredComponentInstance->instanceIndex;
             m_synchronizedKpsTransformStarts.clear();
             const auto& canvasComponents =
-                appConfig.getVisualConfig().canvasComponentsForKeyCount(
-                    keyCount);
+                layoutVisual.canvasComponentsForKeyCount(keyCount);
             const bool draggedKpsTrack =
                 hoveredComponentInstance->instanceIndex >= 0;
             // 移动同步与尺寸同步分开判定；全量位置同步优先于逐轨相对同步。
@@ -3800,7 +3827,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                           : Logic::NOTE_RENDER_MIN_SCALE,
             editingBounds ? Config::MAX_HITBOX_SCALE
                           : Logic::NOTE_RENDER_MAX_SCALE);
-        auto&  visual = appConfig.getVisualConfig();
+        auto&  visual = layoutVisual;
         float* scaleX = &visual.notePartScaleX(m_notePartDragTarget->sizePart);
         float* scaleY = &visual.notePartScaleY(m_notePartDragTarget->sizePart);
         // 非拥有指针只在本次同步计算中使用，AppConfig 始终持有字段。
@@ -3825,11 +3852,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             // 完整配置仍走既有发布入口，使实际拾取和框选同步使用同一范围。
             *scaleX = candidate.x;
             *scaleY = candidate.y;
-            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
-                Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
-            m_layoutConfigurationChanged = true;
-            // 复用布局预设的最新值合并和最终落盘，不向谱面撤销栈写动作。
-            Config::AppConfig::instance().saveLayoutChanges();
+            layoutChanged();
         }
     }
 
@@ -3838,8 +3861,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         // 可编辑 placement，不覆盖其它轨道数配置。
         constexpr float componentPositionEpsilon = 1e-6f;
         auto&           canvasComponents =
-            appConfig.getVisualConfig().editableCanvasComponentsForKeyCount(
-                keyCount);
+            layoutVisual.editableCanvasComponentsForKeyCount(keyCount);
         auto& component = canvasComponents.editablePlacement(
             *m_canvasComponentDragTarget,
             m_canvasComponentDragInstanceIndex,
@@ -4195,11 +4217,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                     candidate.fontSizeRatio);
             }
             // 连续预览通过逻辑线程快照回流；持久化留到鼠标释放统一完成。
-            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
-                Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
-            m_layoutConfigurationChanged = true;
-            // 修改边沿立即收存并排队写盘，默认项自动转为自定义方案。
-            Config::AppConfig::instance().saveLayoutChanges();
+            layoutChanged();
         }
     }
 
@@ -4283,13 +4301,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         // 鼠标停住时结果不变，不重复发送完整编辑器配置。
         if ( !horizontalLayoutsEqual(layout, candidate) ) {
             // 当前区与所有跟随区在同一个命令中预览，释放时仍只保存一次。
-            appConfig.getVisualConfig().editableTrackLayoutForKeyCount(
-                keyCount) = candidate;
-            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
-                Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
-            m_layoutConfigurationChanged = true;
-            // 修改边沿立即收存并排队写盘，默认项自动转为自定义方案。
-            Config::AppConfig::instance().saveLayoutChanges();
+            layoutVisual.editableTrackLayoutForKeyCount(keyCount) = candidate;
+            layoutChanged();
             layout = candidate;
         }
     }
@@ -4317,21 +4330,14 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             const float     candidatePosition =
                 sanitizeJudgmentLinePosition(normalizedY);
             const float currentPosition =
-                appConfig.getVisualConfig().judgmentLinePositionForKeyCount(
-                    keyCount);
+                layoutVisual.judgmentLinePositionForKeyCount(keyCount);
             if ( !std::isfinite(currentPosition) ||
                  std::abs(currentPosition - candidatePosition) >
                      positionEpsilon ) {
                 // 非有限旧值也视为变化，借本次交互把配置恢复到合法范围。
-                appConfig.getVisualConfig()
-                    .editableJudgmentLinePositionForKeyCount(keyCount) =
+                layoutVisual.editableJudgmentLinePositionForKeyCount(keyCount) =
                     candidatePosition;
-                UI::Interaction::dispatchCommand(
-                    Event::LogicCommandEvent(Logic::CmdUpdateEditorConfig{
-                        appConfig.getEditorConfig() }));
-                m_layoutConfigurationChanged = true;
-                // 修改边沿立即收存并排队写盘，默认项自动转为自定义方案。
-                Config::AppConfig::instance().saveLayoutChanges();
+                layoutChanged();
                 judgmentLinePosition = candidatePosition;
             }
         } else {
@@ -4361,8 +4367,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 m_canvasComponentSnapTargetsX.clear();
                 m_canvasComponentSnapTargetsY.clear();
                 const auto& canvasComponents =
-                    appConfig.getVisualConfig().canvasComponentsForKeyCount(
-                        keyCount);
+                    layoutVisual.canvasComponentsForKeyCount(keyCount);
                 const std::size_t targetObjectCount =
                     currentSnapshot.canvasComponentInstances.size();
                 m_canvasComponentSnapTargetsX.reserve(targetObjectCount * 3U +
@@ -4448,23 +4453,17 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             }
 
             constexpr float layoutEpsilon = 1e-6f;
-            const auto&     current =
-                appConfig.getVisualConfig().trackLayoutForKeyCount(keyCount);
-            const bool changed =
+            const auto& current = layoutVisual.trackLayoutForKeyCount(keyCount);
+            const bool  changed =
                 std::abs(current.left - candidate.left) > layoutEpsilon ||
                 std::abs(current.top - candidate.top) > layoutEpsilon ||
                 std::abs(current.right - candidate.right) > layoutEpsilon ||
                 std::abs(current.bottom - candidate.bottom) > layoutEpsilon;
             if ( changed ) {
                 // 拖动中发布配置用于即时预览，但只在释放时保存到磁盘。
-                appConfig.getVisualConfig().editableTrackLayoutForKeyCount(
-                    keyCount) = candidate;
-                UI::Interaction::dispatchCommand(
-                    Event::LogicCommandEvent(Logic::CmdUpdateEditorConfig{
-                        appConfig.getEditorConfig() }));
-                m_layoutConfigurationChanged = true;
-                // 修改边沿立即收存并排队写盘，默认项自动转为自定义方案。
-                Config::AppConfig::instance().saveLayoutChanges();
+                layoutVisual.editableTrackLayoutForKeyCount(keyCount) =
+                    candidate;
+                layoutChanged();
                 layout = candidate;
             }
         }
@@ -4482,10 +4481,9 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         finishLayoutEditing();
     }
 
-    layout = sanitizeTrackLayout(
-        appConfig.getVisualConfig().trackLayoutForKeyCount(keyCount));
+    layout = sanitizeTrackLayout(layoutVisual.trackLayoutForKeyCount(keyCount));
     judgmentLinePosition = sanitizeJudgmentLinePosition(
-        appConfig.getVisualConfig().judgmentLinePositionForKeyCount(keyCount));
+        layoutVisual.judgmentLinePositionForKeyCount(keyCount));
     // 写回配置后重新投影，确保本帧句柄紧随拖动结果。
     const auto displayAuxiliaryProjection =
         Logic::calculateCanvasLaneProjection(targetWidth,
@@ -4678,7 +4676,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                       arrowThickness);
 
     const auto& canvasComponents =
-        appConfig.getVisualConfig().canvasComponentsForKeyCount(keyCount);
+        layoutVisual.canvasComponentsForKeyCount(keyCount);
     const bool groupAllKpsPositions =
         canvasComponents.kps.visible &&
         canvasComponents.syncAllKpsComponentPositions;
@@ -4811,9 +4809,9 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
 
     for ( const auto& instance : currentSnapshot.canvasComponentInstances ) {
         // 文本组件沿用渲染快照的内容边界，确保编辑框和实际字形一致。
-        const auto& placement = appConfig.getVisualConfig()
-                                    .canvasComponentsForKeyCount(keyCount)
-                                    .placement(instance.type);
+        const auto& placement =
+            layoutVisual.canvasComponentsForKeyCount(keyCount).placement(
+                instance.type);
         if ( !placement.visible ) continue;
 
         const auto bounds = canvasComponentContentBounds(instance);
@@ -4980,7 +4978,7 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
 {
     // 批注栏位置由当前轨道布局和辅助轨道投影共同决定。
     // 这里不读取批注表窗口状态，画布批注是独立数据的只读快照视图。
-    const auto& visual = Config::AppConfig::instance().getVisualConfig();
+    const auto& visual = visualConfig();
     const auto& layout =
         visual.trackLayoutForKeyCount(currentSnapshot.trackCount);
     const auto projection = Logic::calculateCanvasLaneProjection(
@@ -5797,7 +5795,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         UI::Interaction::mouseDragging(ImGuiMouseButton_Left);
     // 中键占用期间不得把左键拖拽状态继续报告给逻辑层。
 
-    const auto& visual = Config::AppConfig::instance().getVisualConfig();
+    const auto& visual = visualConfig();
     const auto& layout =
         visual.trackLayoutForKeyCount(currentSnapshot->trackCount);
     if ( currentSnapshot->hasBeatmap && !currentSnapshot->isPlaying &&
@@ -5901,8 +5899,10 @@ void Basic2DCanvasInteraction::handleInteractions(
         localMousePos.x <= trackRightX && normY >= layout.top &&
         normY <= layout.bottom;
     const bool isLayoutEditing =
-        Logic::EditorEngine::instance().getCurrentTool() ==
-        Logic::EditTool::Layout;
+        m_localLayoutEditing
+            ? *m_localLayoutEditing
+            : Logic::EditorEngine::instance().getCurrentTool() ==
+                  Logic::EditTool::Layout;
 
     if ( !isLayoutEditing &&
          (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
@@ -6686,9 +6686,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                     autoScrolled);
                 if ( autoScrolled ) {
                     // CmdSeek 接收音频时间，需移除仅用于视觉显示的偏移量。
-                    const double visualOffset = Config::AppConfig::instance()
-                                                    .getVisualConfig()
-                                                    .getEffectiveVisualOffset();
+                    const double visualOffset =
+                        visualConfig().getEffectiveVisualOffset();
                     UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
                         Logic::CmdSeek{ autoScrollTargetTime - visualOffset }));
                 }
@@ -7396,7 +7395,7 @@ void Basic2DCanvasInteraction::updateReadOnlyHover(
     // 层数只影响提示，不触发后台方向键切换或物件选择。
     m_hoverLayerCount  = candidate.entity == entt::null ? 0 : 1;
     m_hoverLayerIndex  = 0;
-    const auto& visual = Config::AppConfig::instance().getVisualConfig();
+    const auto& visual = visualConfig();
     const auto& layout =
         visual.trackLayoutForKeyCount(currentSnapshot->trackCount);
     const auto projection = Logic::calculateCanvasLaneProjection(

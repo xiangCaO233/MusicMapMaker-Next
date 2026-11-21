@@ -44,6 +44,9 @@ public:
         std::uint32_t height) override;
 
     /// @copydoc UI::ICanvasWorkspaceService::createPreviewCanvas
+    /// @brief 通知拥有谱面的会话释放独立对比相机。
+    void closeComparisonCanvas(const std::string& cameraId) override;
+
     [[nodiscard]] std::unique_ptr<UI::IUIView> createPreviewCanvas(
         const std::string& name, std::uint32_t width,
         std::uint32_t height) override;

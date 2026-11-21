@@ -82,6 +82,10 @@ struct Fixture {
     float hostWidth{ 900.85f };
     /// @brief 菜单只返回意图；测试不销毁窗口，便于连续检查各个叶节点。
     int closeRequests{};
+    /// @brief 最后一个谱面还能触发创建对比，独立统计该动作。
+    int comparisonRequests{};
+    /// @brief 只给真实谱面提供创建入口，其他测试窗口维持原有菜单。
+    bool mainCanOpenComparison{};
     /// @brief 模拟最后主画布受保护，其余测试标签仍可关闭。
     bool mainClosable{ false };
     /// @brief 独立长标题窗口，复用稳定后缀来检查重命名与滚动裁剪。
@@ -116,12 +120,15 @@ struct Fixture {
                      nullptr,
                      m_persistWindows ? 0 : ImGuiWindowFlags_NoSavedSettings);
         ImGui::PopStyleVar();
-        if ( layout.tabCloseRequested(
-                 "Close",
-                 1,
-                 std::string_view(name) != "Main" || mainClosable,
-                 true) )
-            ++closeRequests;
+        using Action      = MMM::UI::MobileDockLayout::TabMenuAction;
+        const bool main   = std::string_view(name) == "Main";
+        const auto action = layout.tabMenuAction(
+            !main || mainClosable ? "Close" : nullptr,
+            main && mainCanOpenComparison ? "Compare" : nullptr,
+            1,
+            true);
+        if ( action == Action::Close ) ++closeRequests;
+        if ( action == Action::OpenComparison ) ++comparisonRequests;
         // 比较实际节点标签边界，避免三个窗口同时错位仍被等高断言放过。
         const auto* node = ImGui::GetCurrentWindow()->DockNode;
         if ( node && node->TabBar )
@@ -271,11 +278,11 @@ struct Fixture {
         settle();
     }
 
-    /// @brief 点击真实弹层的关闭项，测试返回值而不是直接调用业务关闭接口。
+    /// @brief 点击真实弹层的第一项，测试动作返回值而不是直接调用业务接口。
     /// @return 是否确实存在可点击菜单，避免失败后访问空窗口。
     /// @details 返回值只说明发出了触摸序列，是否成功关闭必须由计数单独断言。
     /// 菜单是否出现与关闭计数分别检查，不能把发出触摸序列直接视为关闭成功。
-    bool clickCloseMenu()
+    bool clickFirstMenuItem()
     {
         // 菜单不存在时返回失败，不能用空指针继续制造一次假点击。
         auto& context = *ImGui::GetCurrentContext();
@@ -284,7 +291,7 @@ struct Fixture {
             return false;
         // 读取经过视口避让后的实际位置，不假设菜单始终在标签正下方。
         const auto* popup = context.OpenPopupStack.back().Window;
-        // 唯一关闭项有 48 像素命中高度，选择中心避开窗口内边距。
+        // 菜单第一项有 48 像素命中高度，选择中心避开窗口内边距。
         const ImVec2 point{ popup->Pos.x + popup->Size.x * .5f,
                             popup->Pos.y + popup->WindowPadding.y + 24 };
         auto&        io = ImGui::GetIO();
@@ -528,12 +535,25 @@ int main()
     check(menuOpen() && fixture.closeRequests == 0,
           "long press opens menu without closing on release");
     // 菜单出现和关闭是两个独立动作，第一次松手不能增加计数。
-    check(fixture.clickCloseMenu() && fixture.closeRequests == 1,
+    check(fixture.clickFirstMenuItem() && fixture.closeRequests == 1,
           "menu closes only after explicit selection");
     // 最后主画布没有关闭项，当前没有其他操作时也不显示空菜单。
     fixture.holdTab("Main");
     check(!menuOpen() && fixture.closeRequests == 1,
           "last main canvas exposes no close item or empty menu");
+    // 同一个受保护标签启用创建权限后，长按可以打开只含对比动作的菜单。
+    // 释放仍不能误触；必须再点菜单项，而且不能产生关闭意图。
+    // 这里保持 mainClosable=false，排除测试实际点击的是旧关闭入口。
+    // 使用与其他标签相同的长按与菜单点击流程，覆盖手势层的实际动作分发。
+    fixture.mainCanOpenComparison = true;
+    fixture.holdTab("Main");
+    check(menuOpen() && fixture.comparisonRequests == 0,
+          "long press on last beatmap opens comparison menu without activating "
+          "it");
+    check(fixture.clickFirstMenuItem() && fixture.comparisonRequests == 1 &&
+              fixture.closeRequests == 1,
+          "selecting comparison on last beatmap emits only open comparison");
+    fixture.mainCanOpenComparison = false;
     // 从可关闭标签再次打开菜单，单独检验不选择任何操作时的外部取消。
     fixture.holdTab("Other");
     check(menuOpen(), "closable tab menu can reopen");
@@ -554,7 +574,7 @@ int main()
         const int before = fixture.closeRequests;
         fixture.holdTab(name);
         const bool opened  = menuOpen();
-        const bool clicked = opened && fixture.clickCloseMenu();
+        const bool clicked = opened && fixture.clickFirstMenuItem();
         if ( !opened || !clicked || fixture.closeRequests != before + 1 )
             XERROR("Auxiliary menu {}: opened={}, clicked={}, count={}/{}",
                    name,
@@ -571,7 +591,7 @@ int main()
     fixture.mainClosable = true;
     const int before     = fixture.closeRequests;
     fixture.holdTab("Main");
-    check(menuOpen() && fixture.clickCloseMenu() &&
+    check(menuOpen() && fixture.clickFirstMenuItem() &&
               fixture.closeRequests == before + 1,
           "additional main canvas can close");
     // 长标题仍保留原生窗口名与 ID，宽度约束只影响标签外观。
@@ -609,7 +629,7 @@ int main()
     // 自动滚动只改变文字，缩窄后的真实标签仍须能长按并明确关闭。
     const int beforeCaptionClose = fixture.closeRequests;
     fixture.holdTab(fixture.longTitle.c_str());
-    check(menuOpen() && fixture.clickCloseMenu() &&
+    check(menuOpen() && fixture.clickFirstMenuItem() &&
               fixture.closeRequests == beforeCaptionClose + 1,
           "bounded caption preserves native long press interaction");
     // 分析页必须真正出现在中央标签栏，不能仅确认分类函数返回了 true。
@@ -635,7 +655,7 @@ int main()
     // 分析页没有最后画布保护，必须提供可操作关闭入口。
     // 此处只返回关闭意图，生产注销仍由下一帧公共生命周期执行。
     fixture.holdTab("Wave###AudioWaveformViewGlobal");
-    check(menuOpen() && fixture.clickCloseMenu() &&
+    check(menuOpen() && fixture.clickFirstMenuItem() &&
               fixture.closeRequests == beforeAnalysisClose + 1,
           "audio analysis tab can close through touch menu");
     // 工作台只由主区选中的真实画布打开，后台会话存在不能让欢迎和设置占着它。
@@ -743,7 +763,7 @@ int main()
     // 计数是消费业务意图的观测值，不直接修改被测内部状态。
     const int beforeToolClose = fixture.closeRequests;
     fixture.holdTab("Tools###MobileWorkbench");
-    check(menuOpen() && fixture.clickCloseMenu() &&
+    check(menuOpen() && fixture.clickFirstMenuItem() &&
               fixture.closeRequests == beforeToolClose + 1,
           "workbench tab supports touch close menu");
     // 合并后的预览仍可隐藏和重开，主区标签和其它节点不得被整树重建覆盖。
@@ -785,25 +805,27 @@ int main()
     std::size_t       iniSize{};
     const char*       iniText = ImGui::SaveIniSettingsToMemory(&iniSize);
     const std::string savedIni(iniText, iniSize);
-    // 全新上下文没有旧运行期窗口或节点，因此能检验真正的启动恢复路径。
-    // 保存字符串独立拥有内存，不持有已销毁上下文的缓冲区。
-    ImGui::DestroyContext();
-    ImGui::CreateContext();
-    auto& restoredIo       = ImGui::GetIO();
-    restoredIo.IniFilename = nullptr;
-    restoredIo.DisplaySize = { 1000, 700 };
-    restoredIo.DeltaTime   = 1.0f / 60;
-    // 不启动平台视口或 GPU 后端，布局恢复应仅依赖原生设置和字体度量。
-    // 新字体图集必须在第一次 NewFrame
-    // 前构建，避免把前置条件失败误判为布局问题。
-    restoredIo.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    restoredIo.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
-    // 加载发生在首个移动宿主提交之前，顺序与生产环境一致。
+    /// @brief 用独立保存的 ini 重启宿主，清除运行期节点和窗口登记。
+    /// @param ini 拥有内存的设置副本，不得借用被销毁上下文的缓冲区。
+    /// @details 仅保留夹具的显示条件。布局只能由新对象和传入的设置恢复。
+    const auto restartWithIni = [&](const std::string& ini) {
+        ImGui::DestroyContext();
+        ImGui::CreateContext();
+        auto& restarted = ImGui::GetIO();
+        // 禁用文件名，防止新上下文读到本机的布局或在帧末向磁盘写入。
+        restarted.IniFilename = nullptr;
+        restarted.DisplaySize = { 1000, 700 };
+        restarted.DeltaTime   = 1.0f / 60;
+        // 不启动平台视口或 GPU 后端，布局恢复只依赖原生设置和字体度量。
+        restarted.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+        restarted.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        // 在首个移动宿主提交前载入设置，与生产环境顺序一致。
+        ImGui::LoadIniSettingsFromMemory(ini.data(), ini.size());
+        fixture.layout = MobileDockLayout{};
+    };
+    restartWithIni(savedIni);
     // 若外壳首帧仍无条件重建整树，下面保存的上下分割 ID 将无法保留。
-    ImGui::LoadIniSettingsFromMemory(savedIni.data(), savedIni.size());
-    // 新布局对象同样不保留旧绑定；只允许读取正式的原生设置和缺省比例。
     // 选中标签设置为零，防止强制恢复焦点掩盖窗口归属错误。
-    fixture.layout = MobileDockLayout{};
     fixture.layout.restore(savedTiming, savedPreview, 0);
     fixture.settle();
     check(
@@ -811,6 +833,65 @@ int main()
             ImGui::FindWindowByName("Other")->DockId == upper &&
             ImGui::FindWindowByName("Preview###PreviewWindow")->DockId == upper,
         "fresh context restores custom native topology");
+    // 模拟用户把画布和时间线拖成浮窗、将预览合并进文档列后隐藏辅助区。
+    // 以另一个主区页签的焦点触发恢复，工作台仍应回到实际编辑画布右侧。
+    fixture.m_canvasPage = fixture.m_workbenchRequested = true;
+    fixture.settle();
+    // DockId 为零是 ImGui 保存浮窗的合法状态，常规显示不能自行拉回。
+    ImGui::DockBuilderDockWindow("Chart###Canvas_workbench", 0);
+    ImGui::DockBuilderDockWindow("Timing###Timeline", 0);
+    ImGui::SetWindowFocus("Other");
+    // 隐藏期间不提交 Begin，验证恢复直接更新已存在的原生窗口设置。
+    fixture.settle(false, false);
+    // 先对夹具断言，避免普通渲染若已自动归位则测试不到显式还原的差异。
+    // 时间线虽然没提交，本次还原仍须覆盖其运行期的浮窗落点。
+    check(ImGui::FindWindowByName("Chart###Canvas_workbench")->DockId == 0 &&
+              ImGui::FindWindowByName("Timing###Timeline")->DockId == 0,
+          "fixture keeps detached windows before reset");
+    fixture.layout.reset(.28f, .2f, .17f);
+    // 模拟真实外壳将时间线、预览的显示开关恢复为开启。
+    fixture.settle();
+    /// @brief 同时检查真实节点、顺序和文档焦点，排除窗口仍处于浮动或后台。
+    const auto checkReset = [&] {
+        // 每次都从当前上下文查找窗口，重启前的观察指针不能复用。
+        const auto* chart = ImGui::FindWindowByName("Chart###Canvas_workbench");
+        const auto* other = ImGui::FindWindowByName("Other");
+        const auto* time  = ImGui::FindWindowByName("Timing###Timeline");
+        const auto* prev  = ImGui::FindWindowByName("Preview###PreviewWindow");
+        const auto* tools = ImGui::FindWindowByName("Tools###MobileWorkbench");
+        // 使用窗口实际停靠和位置验证，单独检查预分配节点无法发现浮窗残留。
+        // 同一列中的其他标签仍须存在，避免把关闭后台文档误判为画布恢复。
+        // Workbench 在当前画布上才提交，因此它实际出现在最右列也验证焦点回归。
+        check(
+            chart && other && time && prev && tools && chart->DockNode &&
+                other->DockNode == chart->DockNode && time->DockNode &&
+                prev->DockNode && tools->DockNode &&
+                prev->Pos.x < chart->Pos.x && chart->Pos.x < time->Pos.x &&
+                time->Pos.x < tools->Pos.x &&
+                chart->DockNode->VisibleWindow == chart,
+            "reset redocks floating and hidden panes and preserves open tabs");
+    };
+    checkReset();
+    // 读回客户端持久字段，并用它们恢复下一个上下文。
+    // 宽度从实际窗口几何计算，容许原生分割器的像素取整误差。
+    float   resetTiming{}, resetPreview{}, resetWorkbench{};
+    ImGuiID resetTab{};
+    fixture.layout.capture(
+        resetTiming, resetPreview, resetTab, &resetWorkbench);
+    // 保存值必须对应本次归位结果，避免重启后重新使用旧窄列或旧工具页焦点。
+    check(std::abs(resetTiming - .28f) < .004f &&
+              std::abs(resetPreview - .2f) < .004f &&
+              std::abs(resetWorkbench - .17f) < .004f &&
+              resetTab == ImHashStr("###Canvas_workbench"),
+          "reset captures default proportions and selected chart");
+    // 从还原后的 ini 重启，验证旧的浮动或合并归属没有留在持久设置中。
+    const std::string resetIni = ImGui::SaveIniSettingsToMemory();
+    // 原对象的窗口登记不参与重启，避免绕过真正的 ini 恢复路径。
+    restartWithIni(resetIni);
+    // 比例与选中画布模拟客户端保存值，拓扑必须由刚导出的原生设置恢复。
+    fixture.layout.restore(resetTiming, resetPreview, resetTab, resetWorkbench);
+    fixture.settle();
+    checkReset();
     ImGui::DestroyContext();
     // 所有窗口、字体和节点统一由上下文销毁，测试不保留跨用例状态。
     return failures == 0 ? 0 : 1;

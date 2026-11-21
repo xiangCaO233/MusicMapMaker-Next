@@ -4,7 +4,9 @@
 
 #include "ui/ICanvasWorkspaceService.h"
 #include "ui/IUIView.h"
+#include <cstdint>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -35,6 +37,18 @@ public:
     /// @warning UI 热路径：复用工作区快照容器；稳定状态不得引入文件系统访问、
     /// ECS 遍历、完整排序或无条件堆分配。
     void update(UIManager* sourceManager) override;
+
+    /// @brief 从谱面窗口排队新建一份对比，注册在下一轮同步进行。
+    void requestComparisonCanvas(std::string_view owner);
+
+    /// @brief 查询原始画布是否属于一组对比标签，包含隐藏的标签。
+    /// @warning 每帧仅检查 UI 本地视口标识。
+    [[nodiscard]] bool hasComparison(std::string_view owner) const;
+
+    /// @brief 检查同一谱面的其它对比是否可见，供主窗口同步会话预算。
+    /// @warning 画布热路径：只检查少量对比窗口的本地状态。
+    [[nodiscard]] bool hasVisibleComparison(UIManager&       manager,
+                                            std::string_view owner) const;
 
     /// @brief 准备新项目画布的已保存停靠节点，供首次绘制后核对恢复。
     /// @param workspace 已加载项目工作区；浮动画布不加入待核对集合。
@@ -105,6 +119,17 @@ private:
     void focusPendingSessionCanvas(
         UIManager*                               sourceManager,
         const std::vector<CanvasWorkspaceEntry>& entries);
+
+    /// @brief 先回收关闭或失去谱面的对比，再注册显式请求的新视图。
+    /// @warning UI 热路径：只有窗口创建和关闭边沿操作渲染资源。
+    void syncComparisonCanvases(UIManager& manager);
+
+    /// @brief 临时对比视口，不进入项目的谱面会话及 Dock 恢复列表。
+    std::vector<std::string> m_comparisonCanvases;
+    /// @brief 新对比只在已完成当前窗口输入的下一轮注册。
+    std::vector<std::string> m_pendingComparisons;
+    /// @brief 运行期间不复用视口 ID，隔离迟到的输入和渲染快照。
+    std::uint64_t m_nextComparisonIndex{ 0 };
 
     /// @brief 已初始化画布的 cameraId 集合
     std::unordered_set<std::string> m_initializedCanvases;

@@ -1,5 +1,7 @@
 #include "game/CanvasWorkspaceService.h"
 
+#include "common/LogicCommands.h"
+
 #include "canvas/AnnotationTableWindow.h"
 #include "canvas/Basic2DCanvas.h"
 #include "canvas/PreviewCanvas.h"
@@ -122,7 +124,17 @@ std::unique_ptr<UI::IUIView> CanvasWorkspaceService::createMainCanvas(
         width,
         height,
         Logic::EditorEngine::instance().getSyncBuffer(entry.cameraId),
-        entry.cameraId);
+        entry.cameraId,
+        entry.comparisonIndex);
+}
+
+void CanvasWorkspaceService::closeComparisonCanvas(const std::string& cameraId)
+{
+    Logic::EditorEngine::instance().pushCommand(
+        Logic::CmdUpdateViewport{ .cameraId        = cameraId,
+                                  .width           = 0.0F,
+                                  .height          = 0.0F,
+                                  .closeComparison = true });
 }
 
 /// @brief 创建共享 Preview 同步缓冲的谱面预览画布。

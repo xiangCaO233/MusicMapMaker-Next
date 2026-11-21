@@ -25,8 +25,9 @@ public:
     /// @warning 主画布快照生成热路径：每次 update
     /// 执行，禁止加入资源加载、文件系统访问或阻塞等待。
     static void render(Batcher& batcher, float viewportWidth,
-                       float viewportHeight, const Config::EditorConfig& config,
-                       const RenderSnapshot* snapshot);
+                       float                           viewportHeight,
+                       const Config::EditorConfigView& config,
+                       const RenderSnapshot*           snapshot);
 };
 
 }  // namespace MMM::Logic::System

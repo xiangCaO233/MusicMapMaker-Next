@@ -9,6 +9,22 @@
 
 namespace MMM::UI
 {
+namespace
+{
+/// @brief 用固定窗口身份区分主画布和同属主区的工具页。
+/// @warning 每帧比较标题后缀，不分配内存或查询会话。
+bool isCanvasWindow(const ImGuiWindow* window)
+{
+    if ( !window ) return false;
+    const std::string_view name(window->Name);
+    const auto             separator = name.rfind("###");
+    const auto             id =
+        separator == std::string_view::npos ? name : name.substr(separator + 3);
+    // 谱名和脏标记会变化，只有稳定内部身份代表画布。
+    return id.starts_with("Canvas_") || id == "Basic2DCanvas";
+}
+}  // namespace
+
 /// @brief 波形和频谱归入主区标签，避免移动端出现无法操作的桌面浮窗。
 /// @details 后缀与业务视图的 ### 身份一致，语言切换不改变其归属。
 /// @warning 每帧常量级文本比较，不拥有窗口或业务会话。
@@ -33,6 +49,33 @@ void MobileDockLayout::restore(float timingRatio, float previewRatio,
     m_restoreFocus   = selectedTab;
     m_startupFocus   = selectedTab;
     m_visibility     = -1;
+}
+
+/// @brief 标记显式重建，并保留可用于重新显示工作台的画布身份。
+/// @warning 只在还原按钮触发时查找已登记窗口，无文件访问或会话操作。
+void MobileDockLayout::reset(float timingRatio, float previewRatio,
+                             float workbenchRatio)
+{
+    const auto isOpenCanvas = [](const ImGuiWindow* window) {
+        return isCanvasWindow(window) && window->WasActive;
+    };
+    ImGuiID selected{};
+    // 优先保留正在编辑的谱面。若当前在设置、欢迎或音频页，改选已打开的画布。
+    if ( isOpenCanvas(ImGui::FindWindowByID(m_lastMainSelection)) )
+        selected = m_lastMainSelection;
+    else {
+        for ( const auto& binding : m_windows ) {
+            if ( binding.m_panel == MobileDockPanel::Main &&
+                 isOpenCanvas(ImGui::FindWindowByID(binding.m_window)) ) {
+                selected = binding.m_window;
+                break;
+            }
+        }
+    }
+    // 复用启动焦点机制，在画布完成 Begin 后再生效，避免仅聚焦空宿主。
+    restore(timingRatio, previewRatio, selected, workbenchRatio);
+    m_lastMainSelection = selected;
+    m_resetPending      = true;
 }
 
 /// @brief 冻结用户实际调整结果，不能用最初默认比例冒充当前停靠宽度。
@@ -115,22 +158,25 @@ void MobileDockLayout::finishFrame()
         ImGui::FocusWindow(window);
 }
 
-/// @brief 用非阻塞长按打开标签操作菜单，关闭仍由业务窗口消费原有打开指针。
+/// @brief 用非阻塞长按打开标签操作菜单，业务窗口消费返回的动作。
 /// @details 命中原生标签实际矩形，并扣除滚动裁剪，不能把标签旁空白当作标签。
-/// @param closeLabel 当前界面语言的关闭文案，不参与窗口身份计算。
+/// @param closeLabel 可用的关闭文案，空指针时隐藏关闭项。
+/// @param comparisonLabel 可用的对比视图文案，空指针时隐藏创建项。
 /// @param scale 触摸容差和命中高度的内容倍率，不覆盖主题圆角。
-/// @param canClose 业务关闭权限，无可用操作时不弹出空菜单。
 /// @param enabled 是否允许开始新手势，不影响已经打开菜单的正常取消。
 /// @warning UI 热路径：只读取当前 Dock 标签与触点标量，不保存窗口观察指针。
-bool MobileDockLayout::tabCloseRequested(const char* closeLabel, float scale,
-                                         bool canClose, bool enabled)
+MobileDockLayout::TabMenuAction MobileDockLayout::tabMenuAction(
+    const char* closeLabel, const char* comparisonLabel, float scale,
+    bool enabled)
 {
-    auto* window = ImGui::GetCurrentWindow();
-    auto* bar    = window->DockNode ? window->DockNode->TabBar : nullptr;
-    auto* tab    = bar ? ImGui::TabBarFindTabByID(bar, window->TabId) : nullptr;
+    // 有创建权限的最后一个谱面可以打开菜单，关闭权限仍单独保护。
+    const bool hasActions = closeLabel || comparisonLabel;
+    auto*      window     = ImGui::GetCurrentWindow();
+    auto*      bar = window->DockNode ? window->DockNode->TabBar : nullptr;
+    auto* tab = bar ? ImGui::TabBarFindTabByID(bar, window->TabId) : nullptr;
     // 浮动窗口使用自己的标题栏；仍支持长按关闭和继续拖回停靠区。
     // 停靠首帧尚未建立标签时不能借标题矩形启动错误的手势。
-    if ( !tab && window->DockNode ) return false;
+    if ( !tab && window->DockNode ) return TabMenuAction::None;
     // 跟随原生标签排序与滚动，不按标题文本宽度另建一份命中几何。
     // 当前预编译 ImGui 尚未导出 TabBarGetTabPos，按官方标签布局公式换算。
     ImRect rect = window->TitleBarRect();
@@ -174,7 +220,7 @@ bool MobileDockLayout::tabCloseRequested(const char* closeLabel, float scale,
             // 拖动优先于长按菜单；最后一个主画布也可以拖动，仅关闭受保护。
             m_dragWindow = window->ID;
             m_holdWindow = 0;
-        } else if ( canClose && rect.Contains(io.MousePos) &&
+        } else if ( hasActions && rect.Contains(io.MousePos) &&
                     ImGui::GetTime() - m_holdStarted >= .55 ) {
             // 时间只用于识别手势，不阻塞 UI，也不延迟原生标签的短按切换。
             // Popup ID 属于当前业务窗口，关闭菜单不会错误地改绑相邻标签。
@@ -191,8 +237,8 @@ bool MobileDockLayout::tabCloseRequested(const char* closeLabel, float scale,
         m_menuWindow   = 0;
         m_releaseGuard = true;
     }
-    // 只返回本次显式命令，不把正在显示菜单当作关闭成功。
-    bool close = false;
+    // 只返回本次显式命令，弹出菜单和释放长按均不会选择任何动作。
+    auto action = TabMenuAction::None;
     if ( m_menuWindow == window->ID ) {
         // 菜单宽度服从安全工作区；关闭项保留完整手指命中高度。
         // 位置由普通 Popup 的安全区避让处理，不用固定屏幕坐标保存菜单。
@@ -204,26 +250,29 @@ bool MobileDockLayout::tabCloseRequested(const char* closeLabel, float scale,
             if ( !ImGui::IsMouseDown(0) && !ImGui::IsMouseReleased(0) )
                 // 连释放帧都排除，必须由下一次独立触摸激活关闭。
                 m_waitMenuRelease = false;
-            // 权限在菜单打开期间变化时也必须移除关闭项，不留下空的禁用按钮。
-            if ( !canClose )
-                ImGui::CloseCurrentPopup();
-            else {
+            // 权限在菜单打开期间也由调用方实时提供；只有实际可用的动作才占一行。
+            // 两种意图共享同一释放保护；新增标签可能立即获得焦点，
+            // 也必须等触点彻底结束，防止点击穿透到创建出来的画布。
+            if ( hasActions ) {
+                const ImVec2 buttonSize{
+                    -1, std::max(48 * scale, ImGui::GetFrameHeight())
+                };
                 ImGui::BeginDisabled(m_waitMenuRelease);
-                if ( FeedbackButton(
-                         closeLabel,
-                         { -1,
-                           std::max(48 * scale, ImGui::GetFrameHeight()) }) ) {
-                    close          = true;
-                    m_releaseGuard = true;
-                    ImGui::CloseCurrentPopup();
-                }
+                if ( comparisonLabel &&
+                     FeedbackButton(comparisonLabel, buttonSize) )
+                    action = TabMenuAction::OpenComparison;
+                if ( closeLabel && FeedbackButton(closeLabel, buttonSize) )
+                    action = TabMenuAction::Close;
                 ImGui::EndDisabled();
             }
-            // 关闭权限由调用方实时提供，欢迎和设置不能充当额外主画布。
+            if ( !hasActions || action != TabMenuAction::None ) {
+                m_releaseGuard = true;
+                ImGui::CloseCurrentPopup();
+            }
             ImGui::EndPopup();
         }
     }
-    return close;
+    return action;
 }
 
 /// @brief 在原生 TabBar 排版前约束实际宽度，不截短窗口名称或更换窗口 ID。
@@ -347,6 +396,9 @@ ImGuiID MobileDockLayout::node(MobileDockPanel panel) const
 /// @warning 每帧固定节点查询，不分配字符串或访问后台会话。
 bool MobileDockLayout::isMainCanvasSelected() const
 {
+    // 还原首帧的旧焦点可能仍在抽屉或工具页；按已选定的画布决定工作台显隐。
+    if ( m_resetPending )
+        return isCanvasWindow(ImGui::FindWindowByID(m_startupFocus));
     const auto* node = ImGui::DockBuilderGetNode(m_center);
     // 重建首帧尚未结算原生可见页，先使用待恢复身份，避免显隐条件反向触发重建。
     const auto* window = m_startupFocus ? ImGui::FindWindowByID(m_startupFocus)
@@ -367,14 +419,7 @@ bool MobileDockLayout::isMainCanvasSelected() const
     if ( window &&
          std::string_view(window->Name).ends_with("###MobileWorkbench") )
         window = ImGui::FindWindowByID(m_lastMainSelection);
-    if ( !window ) return false;
-    const std::string_view name(window->Name);
-    // 标题随谱名和语言变化，不能以可见文字判断编辑上下文。
-    const auto separator = name.rfind("###");
-    const auto id =
-        separator == std::string_view::npos ? name : name.substr(separator + 3);
-    // 显示标题可包含谱名和脏标记，只有稳定内部身份能够区分真正的编辑画布。
-    return id.starts_with("Canvas_") || id == "Basic2DCanvas";
+    return isCanvasWindow(window);
 }
 
 /// @brief
@@ -420,6 +465,9 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
         (timing ? 1 : 0) | (preview ? 2 : 0) | (workbench ? 4 : 0);
     const auto flags = ImGuiDockNodeFlags_NoWindowMenuButton |
                        ImGuiDockNodeFlags_NoCloseButton;
+    const bool reset = std::exchange(m_resetPending, false);
+    // 只移除当前移动宿主的树。已被拖出来的窗口在新树建好后按原身份归位。
+    if ( reset ) ImGui::DockBuilderRemoveNode(m_root);
     if ( !ImGui::DockBuilderGetNode(m_root) ) {
         // 没有已保存的移动根时才创建默认布局，不能因显隐或旋转销毁用户树。
         ImGui::DockBuilderAddNode(m_root, ImGuiDockNodeFlags_DockSpace | flags);
@@ -453,10 +501,27 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
         // 从两侧向内切出辅助区，最终为预览、主区、时间线、工作台。
         // 恢复仍沿用各分区自身宽度比例，不把旧版保存的左右位置当作新布局依据。
         // 最右工作台先切出，随后时间线仅使用剩余空间，不会越过工作台。
-        if ( workbench )
+        // 即使此刻没有画布，也要为保存过的工作台提供新的默认落点。
+        if ( workbench || reset )
             splitSide(m_workbenchRatio, ImGuiDir_Right, m_workbench);
         if ( preview ) splitSide(m_previewRatio, ImGuiDir_Left, m_preview);
         if ( timing ) splitSide(m_timingRatio, ImGuiDir_Right, m_timing);
+        if ( reset ) {
+            // 分区可能从未在本次启动中打开，直接更新原生 ini 中固定身份的落点。
+            // 这样 Finish 绑定窗口时就能解析正确的叶节点。
+            ImGui::DockBuilderDockWindow("###Timeline", m_timing);
+            ImGui::DockBuilderDockWindow("###PreviewWindow", m_preview);
+            ImGui::DockBuilderDockWindow("###MobileWorkbench", m_workbench);
+            // 保存窗口身份而非标题；运行期名称包含最新谱名，且 ### 哈希稳定。
+            // 所有登记窗口重新停靠，包括浮在屏幕外及不在当前页签的文档。
+            for ( const auto& binding : m_windows ) {
+                if ( binding.m_panel != MobileDockPanel::Main ) continue;
+                if ( const auto* window =
+                         ImGui::FindWindowByID(binding.m_window) )
+                    ImGui::DockBuilderDockWindow(window->Name, m_center);
+            }
+            ImGui::MarkIniSettingsDirty();
+        }
         ImGui::DockBuilderFinish(m_root);
         // 完成整棵树后再记录组合，下一帧即可走不重建的稳定路径。
         // 业务窗口稍后依次 Begin，并从当前布局获取各自所属叶节点。
@@ -466,11 +531,18 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
     // 不能把窗口尚未 Begin 的启动阶段误判为用户删除了全部停靠节点。
     // 已保存树由 ImGui 启动加载；恢复窗口身份后沿用真实节点，不消费桌面根。
     // 显隐切换只改变业务窗口是否提交，原生隐藏叶会释放占用几何。
-    refreshNodes();
-    if ( workbench )
-        ensurePanel(MobileDockPanel::Workbench, m_workbenchRatio, false);
-    if ( preview ) ensurePanel(MobileDockPanel::Preview, m_previewRatio, true);
-    if ( timing ) ensurePanel(MobileDockPanel::Timing, m_timingRatio, false);
+    // 新树已经有完整落点，旧活动焦点与浮动窗口不应在此帧覆盖它们。
+    if ( !reset ) refreshNodes();
+    // 拖出标签时旧叶可能已经释放，原生停靠仍在处理被拖动的窗口。
+    // 此时补叶会再次分割同一棵树，等原生拖动结束后的常规帧再补缺失位置。
+    if ( !ImGui::GetCurrentContext()->MovingWindow ) {
+        if ( workbench )
+            ensurePanel(MobileDockPanel::Workbench, m_workbenchRatio, false);
+        if ( preview )
+            ensurePanel(MobileDockPanel::Preview, m_previewRatio, true);
+        if ( timing )
+            ensurePanel(MobileDockPanel::Timing, m_timingRatio, false);
+    }
     // 可见性只决定当前业务窗口是否提交，缓存节点仍供下次打开复用。
     // 关闭工作台后不能清除用户合并到其它标签栏的原生设置。
     m_visibility = visible;

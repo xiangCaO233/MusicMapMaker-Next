@@ -21,6 +21,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/note/HoldScrollSemantics.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <glm/common.hpp>
@@ -427,10 +428,10 @@ static void renderBoundSampleLabelAt(
 void NoteRenderSystem::renderNotes(
     entt::registry& registry, RenderSnapshot* snapshot,
     const std::string& cameraId, double currentTime, float judgmentLineY,
-    int32_t trackCount, const Config::EditorConfig& config, Batcher& batcher,
-    float leftX, float clipLeftX, float clipRightX, float rightX, float topY,
-    float bottomY, float singleTrackW, float renderScaleY,
-    const CanvasLaneProjection* laneProjection)
+    int32_t trackCount, const Config::EditorConfigView& config,
+    Batcher& batcher, float leftX, float clipLeftX, float clipRightX,
+    float rightX, float topY, float bottomY, float singleTrackW,
+    float renderScaleY, const CanvasLaneProjection* laneProjection)
 {
     // 提前返回时作用域析构也恢复状态，不能依赖函数尾部手工复位。
     // 同一批处理器还会绘制采样和时间线标记，位置设置只在音符阶段启用。
@@ -707,7 +708,7 @@ void NoteRenderSystem::renderNotes(
 /// @note 缺少专用头尾键的回退规则与草稿逐槽回退分别执行。
 NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(
     entt::registry& registry, RenderSnapshot* snapshot, double currentTime,
-    float singleTrackW, const Config::EditorConfig& config)
+    float singleTrackW, const Config::EditorConfigView& config)
 {
     NoteRenderSystem::NoteRenderContext ctx{};
 
@@ -958,10 +959,15 @@ static NoteAbsYBucketIndex& getOrBuildNoteAbsYBucketIndex(
 {
     // 索引随 Registry 生命周期保存，首次查询才创建上下文槽位。
     // 该引用不能在清空 Registry 上下文后继续复用。
-    auto* index = registry.ctx().find<NoteAbsYBucketIndex>();
-    if ( !index ) {
-        index = &registry.ctx().emplace<NoteAbsYBucketIndex>();
-    }
+    using Indices = std::array<NoteAbsYBucketIndex, 2>;
+    auto* indices = registry.ctx().find<Indices>();
+    if ( !indices ) indices = &registry.ctx().emplace<Indices>();
+    // 主映射与反向映射各保留一个位置索引，跨窗口切换不会使桶反复失效。
+    // 两套缓存均由会话维持稳定地址，版本检查负责处理换图和 timing 编辑。
+    auto& primary = (*indices)[0];
+    auto* index   = (!primary.sourceEntities || primary.cache == cache)
+                        ? &primary
+                        : &(*indices)[1];
 
     const std::uint64_t scrollRevision = cache ? cache->getRevision() : 0;
     // 同一地址和相同数量无法证明内容未变，必须同时检查音符及滚动版本。
@@ -1550,7 +1556,7 @@ void NoteRenderSystem::generateNoteHitboxes(
     const NoteRenderSystem::NoteRenderContext& ctx,
     const std::vector<entt::entity>& noteEntities, float judgmentLineY,
     float leftX, float topY, float bottomY, float singleTrackW,
-    float renderScaleY, const Config::EditorConfig& config,
+    float renderScaleY, const Config::EditorConfigView& config,
     const CanvasLaneProjection* laneProjection)
 {
     const float visualPaddingScale =
@@ -1990,7 +1996,7 @@ void NoteRenderSystem::generateNoteHitboxes(
 void NoteRenderSystem::renderNoteBaseLayer(
     entt::registry& registry, RenderSnapshot* snapshot,
     const NoteRenderSystem::NoteRenderContext& ctx,
-    const Config::EditorConfig&                config,
+    const Config::EditorConfigView&            config,
     const std::vector<entt::entity>& noteEntities, Batcher& batcher,
     float currentTime, float judgmentLineY, float leftX, float rightX,
     float topY, float bottomY, float singleTrackW, float renderScaleY,
@@ -2320,7 +2326,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
 void NoteRenderSystem::renderNoteGlowLayer(
     entt::registry& registry, RenderSnapshot* snapshot,
     const NoteRenderSystem::NoteRenderContext& ctx,
-    const Config::EditorConfig&                config,
+    const Config::EditorConfigView&            config,
     const std::vector<entt::entity>& noteEntities, float currentTime,
     float judgmentLineY, float leftX, float clipLeftX, float rightX, float topY,
     float bottomY, float singleTrackW, float renderScaleY,
@@ -2540,7 +2546,7 @@ void NoteRenderSystem::renderNoteGlowLayer(
 void NoteRenderSystem::renderOverlapMasks(
     entt::registry& registry, RenderSnapshot* snapshot,
     const NoteRenderSystem::NoteRenderContext& ctx,
-    const Config::EditorConfig&                config,
+    const Config::EditorConfigView&            config,
     const std::vector<entt::entity>& noteEntities, float judgmentLineY,
     float leftX, float clipLeftX, float clipRightX, float topY, float bottomY,
     float singleTrackW, float renderScaleY,
@@ -3496,9 +3502,10 @@ void NoteRenderSystem::renderOverlapMasks(
 void NoteRenderSystem::renderBrushPreview(
     RenderSnapshot*                            snapshot,
     const NoteRenderSystem::NoteRenderContext& baseContext,
-    const Config::EditorConfig& config, Batcher& batcher, float judgmentLineY,
-    float fallbackLeftX, float fallbackTrackWidth, float renderScaleY,
-    float topY, float bottomY, const CanvasLaneProjection* laneProjection)
+    const Config::EditorConfigView& config, Batcher& batcher,
+    float judgmentLineY, float fallbackLeftX, float fallbackTrackWidth,
+    float renderScaleY, float topY, float bottomY,
+    const CanvasLaneProjection* laneProjection)
 {
     // 放置预览复用音符固定位置，提前返回也自动恢复共享批处理器状态。
     // topY/bottomY 已包含画布长度与视锥范围，不在各类型分支重新估算。

@@ -301,6 +301,12 @@ mmm_add_test_executable(Logic CanvasCameraTest tests/CanvasCameraTest.cpp)
 target_link_libraries(CanvasCameraTest PRIVATE Logic Log)
 mmm_register_test_case(NAME CanvasCameraTest COMMAND CanvasCameraTest)
 
+# 对比画布以单个 BeatmapSession 验证三份快照、映射与撤销的一致性。 和一般相机测试分开注册，失败可直接定位到重复视口的生命周期。
+mmm_add_test_executable(Logic ComparisonCanvasTest
+                        tests/ComparisonCanvasTest.cpp)
+target_link_libraries(ComparisonCanvasTest PRIVATE Logic Log)
+mmm_register_test_case(NAME ComparisonCanvasTest COMMAND ComparisonCanvasTest)
+
 # 背景覆盖层和文字组件各有独立目标，避免只能通过整套界面检查底层几何。 背景测试检查快照生成的 CPU 几何，不代表 GPU 合成或皮肤视觉验收。
 mmm_add_test_executable(Logic BackgroundRenderSystemTest
                         tests/BackgroundRenderSystemTest.cpp)

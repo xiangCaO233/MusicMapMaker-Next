@@ -209,7 +209,7 @@ public:
     /// 只遍历当前活跃特效表并追加几何。
     // clang-format on
     void generateSnapshot(Batcher& batcher, double animateTime,
-                          const Config::EditorConfig& config,
+                          const Config::EditorConfigView& config,
                           int32_t trackCount, float judgmentLineY, float leftX,
                           float topY, float bottomY, float singleTrackW,
                           bool renderDraftEffects = false);

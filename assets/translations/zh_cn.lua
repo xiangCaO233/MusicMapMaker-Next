@@ -433,6 +433,9 @@ return {
 	["ui.pgo.upload.runtime_fmt"] = "本次运行时长：{} 秒",
 
 	["canvas.editor"] = "编辑器",
+	["canvas.comparison.title"] = "对比 {}",
+	["canvas.comparison.open"] = "新建对比视图",
+	["canvas.comparison.perspective"] = "3D 视角",
 	["canvas.collaboration.online"] = "(在线)",
 	["canvas.collaboration.offline"] = "(离线)",
 	["canvas.preview"] = "预览",
@@ -1774,6 +1777,7 @@ return {
 	["ui.mobile.erase.hint"] = "点按或拖过物件，松手擦除；折线整条删除。第二指接管会取消本笔。",
 	["ui.mobile.workbench"] = "工具工作台",
 	["ui.mobile.workbench_shown"] = "工具工作台：显示",
+	["ui.mobile.restore_layout"] = "还原布局",
 	["ui.mobile.workbench_hidden"] = "工具工作台：隐藏",
 	["ui.mobile.select_all"] = "全选",
 	["ui.mobile.annotate"] = "添加批注",
