@@ -209,6 +209,90 @@ void drawJudgmentGuideBox(Batcher& batcher, float leftX, float anchorY,
 
 }  // namespace
 
+/// @brief 将一列正规谱面复用现有的二维绘制路径。
+/// @details 私有注册表的时间映射已经线性化，禁止引入播放、悬停或判定反馈。
+/// @warning 仅用户导出时调用，输出批次可交给 CPU 光栅器，不依赖显存尺寸。
+/// @param registry 为当前导出重建的短期玩家物件注册表。
+/// @param entities 本列可能可见的根实体，折线不会拆成交互子实体。
+/// @param cache 已线性化的滚动缓存，所有列共用同一倍率。
+/// @param bpmEvents 已排序的实际 BPM 与插值段。
+/// @param snapshot 产出指令的独立快照，已准备用于导出的图集 UV。
+/// @param config 提供当前皮肤部件缩放、色彩覆盖和分拍。
+/// @param begin 本列的最早时刻，以秒计。
+/// @param width 正式轨道区的实际列宽。
+/// @param height 本列包括上下贴图边距的输出高度。
+/// @param trackCount 正式轨道数，必须大于零。
+/// @param pixelsPerSecond 所有导出列严格使用相同的时间像素比例。
+/// @note 单张谱面可能在 60 秒处同时跨两个列。
+/// 主体裁到两列各自的时间边缘，图形不会复制出额外的头尾。
+/// 此方法不构建播放、草稿、命中和高亮批次。
+/// 调用线程与皮肤更新在同一顺序上生成，快照之后可独立读。
+void NoteRenderSystem::generateLongScreenshotColumn(
+    entt::registry& registry, const std::vector<entt::entity>& entities,
+    const ScrollCache&                           cache,
+    const std::vector<const TimelineComponent*>& bpmEvents,
+    RenderSnapshot& snapshot, const Config::EditorConfigView& config,
+    double begin, float width, float height, int trackCount,
+    float pixelsPerSecond)
+{
+    const float laneWidth = width / static_cast<float>(trackCount);
+    // 按已重建的线性缓存换算速度，避免将画布缩放重复叠加。
+    const auto unit = cache.getAbsY(begin + 1.0) - cache.getAbsY(begin);
+    if ( !std::isfinite(unit) || unit <= 0.0 ) return;
+    const auto scale = static_cast<float>(pixelsPerSecond / unit);
+    // 列外边各留半轨高给贴图边缘；拍线和长条主体只到真实时间边界。
+    const float top    = laneWidth * 0.5f;
+    const float bottom = height - top;
+    Batcher     batcher(&snapshot);
+    batcher.setScissor(0.0f, 0.0f, width, height);
+    batcher.setNoteTexturePosition(config.visual.noteTexturePosition);
+    // 预先绘制该列底板，使透明纹理和后续拍线保持与编辑器相同的叠放关系。
+    // 轨道贴图使用图集中的同一语义身份，列边界不改变单轨尺寸。
+    drawTrackBackground(batcher, trackCount, 0.0f, 0.0f, height, laneWidth);
+    drawBeatLines(batcher,
+                  width,
+                  height,
+                  bottom,
+                  config,
+                  bpmEvents,
+                  begin,
+                  &cache,
+                  0.0f,
+                  top,
+                  bottom,
+                  width,
+                  scale,
+                  false,
+                  1.0f,
+                  false,
+                  false,
+                  false);
+    // 用同一套颜色覆盖、皮肤尺寸比和折线子段策略；导出不写命中框。
+    // 编辑器配色与自定义物件覆盖由原渲染上下文选择。
+    // 导出只接收已经确认的运动范围，不读取框选、磁吸或鼠标状态。
+    const auto ctx =
+        prepareNoteRenderContext(registry, &snapshot, begin, laneWidth, config);
+    renderNoteBaseLayer(registry,
+                        &snapshot,
+                        ctx,
+                        config,
+                        entities,
+                        batcher,
+                        static_cast<float>(begin),
+                        bottom,
+                        0.0f,
+                        width,
+                        top,
+                        bottom,
+                        laneWidth,
+                        scale,
+                        trackCount,
+                        false,
+                        false,
+                        nullptr);
+    batcher.flush();
+}
+
 /// @brief 生成指定画布的批量渲染快照。
 /// @warning 热路径：每帧/每 update 执行；禁止引入文件系统访问、
 /// registry 全量无缓存扫描或阻塞同步；Timeline 与活跃主画布 Move

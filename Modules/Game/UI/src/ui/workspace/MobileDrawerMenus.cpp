@@ -39,9 +39,15 @@ struct Entry {
 };
 
 /// @brief 文件页与工具抽屉共用动作身份，入口迁移不能遗漏关闭或导出。
-/// @details 导出仍是原另存为格式选择流程，不维护移动专用 writer。
+/// @details 谱面文件走原另存为流程，长截图走共用的图像导出动作。
+/// 两种导出均需有活动谱面，所以这里复用同一入口前置条件。
+/// 文件页尺寸由同一列表量出，增加导出项后仍能完整显示末行。
 constexpr std::array FILE_ACTIONS{ Entry{ "SaveBeatmapAsAction",
                                           "ui.mobile.export_chart",
+                                          ICON_MMM_SAVE,
+                                          Requirement::Beatmap },
+                                   Entry{ "ExportBeatmapScreenshotAction",
+                                          "ui.file.long_screenshot",
                                           ICON_MMM_SAVE,
                                           Requirement::Beatmap },
                                    Entry{ "PackBeatmapAction",
