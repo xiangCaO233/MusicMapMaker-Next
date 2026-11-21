@@ -191,6 +191,7 @@ StartupLogoShader::StartupLogoShader(vk::PhysicalDevice&    physicalDevice,
                                                               queue);
     if ( !m_state->m_texture->isValid() ) return;
     // 提前注册静态回退，错误路径无需在每帧绘制时进入描述符分配。
+    // ImGui 纹理句柄与后续动画描述符独立，管线初始化失败仍可沿用。
     m_state->m_staticTexture = m_state->m_texture->getImTextureID();
 
     // 自定义管线使用 binding 0 的组合采样器；它独立于 ImGui 后端的纹理布局。
