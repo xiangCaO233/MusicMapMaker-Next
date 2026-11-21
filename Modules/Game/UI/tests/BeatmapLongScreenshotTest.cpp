@@ -244,6 +244,23 @@ int run(const std::filesystem::path& directory)
          !isBright(all.pixel(255, 6913)) )
         return 12;
 
+    // 从两列之间读回成品，要求两侧蓝灰外框与中央留白各自可辨。
+    // 同时取一条内部轨道线，避免在分列时一并改色。
+    const auto frameColor = all.pixel(288, 100);
+    const auto pageColor  = all.pixel(0, 100);
+    if ( frameColor == pageColor || frameColor == all.pixel(90, 100) ||
+         all.pixel(289, 100) != frameColor ||
+         all.pixel(300, 100) != pageColor || all.pixel(310, 100) != frameColor )
+        return 23;
+    // 第二列实际高度为 1026 像素，上方有 40 像素时间栏。
+    // 色值用侧边作参照，方便调整主题颜色时沿用同一几何断言。
+    // 顶线与底线都跨越轨道，底线下应保留整图底色直到结束。
+    if ( all.pixel(411, 38) != frameColor ||
+         all.pixel(411, 1067) != frameColor ||
+         all.pixel(411, 1069) != pageColor ||
+         all.pixel(310, 1069) != pageColor )
+        return 24;
+
     // 用同一谱面改成 7 秒，确认列数、时标和高度都以新参数为准。
     // 前三列分别覆盖 7 秒，最后一列只剩 1 秒，绘制比例保持一致。
     // 先独立检查非正时长，防止除零和意外生成空批次。
