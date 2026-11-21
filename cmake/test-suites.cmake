@@ -38,6 +38,14 @@ endfunction()
 function(mmm_add_test_executable MODULE_NAME TARGET_NAME)
   # 第一个源文件必须是含 main 的测试入口；其余源文件不进行符号改名。
   set(TEST_SOURCES ${ARGN})
+  # 需要窗口的交互预览由开发者显式构建和启动，保留真正的 main。 不加入自动套件，避免无显示环境的 CTest 等待用户输入。
+  if(ARGV2 STREQUAL "STANDALONE")
+    # 去掉模式标记，其余参数保持和普通测试目标一致的源码顺序。
+    list(POP_FRONT TEST_SOURCES)
+    add_executable(${TARGET_NAME} EXCLUDE_FROM_ALL ${TEST_SOURCES})
+    mmm_set_test_target(${MODULE_NAME} ${TARGET_NAME})
+    return()
+  endif()
   # 入口源文件不再作为普通源文件重复编译，否则 main 会再次出现。
   list(POP_FRONT TEST_SOURCES PRIMARY_SOURCE)
   if(NOT IS_ABSOLUTE "${PRIMARY_SOURCE}")

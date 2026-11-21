@@ -50,6 +50,14 @@ public:
     /// @brief 刷新 macOS 普通窗口的内容圆角和原生阴影。
     void refreshFrameShape() override;
 
+    /// @brief 只配置原生裁剪与阴影，供启动窗和正式窗口共用。
+    /// @param windowHandle GLFW 的 Cocoa 窗口。
+    /// @param cornerRadius AppKit 客户区的逻辑半径。
+    /// @param rounded 是否启用圆角和阴影。
+    /// @warning 创建或改变窗口形态时调用，不在每帧刷新 CALayer。
+    static void applyFrameShape(GLFWwindow* windowHandle, float cornerRadius,
+                                bool rounded);
+
     /// @brief 在 GLFW 鼠标按键回调中记录 macOS 标题栏拖动候选。
     /// @param button GLFW 鼠标按键值。
     /// @param action GLFW 鼠标动作值。

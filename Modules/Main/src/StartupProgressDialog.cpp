@@ -1,5 +1,6 @@
 #include "main/StartupProgressDialog.h"
 #include "config/AppConfig.h"
+#include "graphic/window/StartupWindowAppearance.h"
 #include "main/StartupLogoShader.h"
 #include "ui/utils/DownloadRouteSelector.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -195,7 +196,7 @@ void StartupProgressDialog::onUpdateUI()
         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
         ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar |
-        ImGuiWindowFlags_NoScrollWithMouse;
+        ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBackground;
     // 固定 ID 与正式应用隔离，首次运行、重试及错误切换共用一个输入焦点。
     if ( !ImGui::Begin("MusicMapMaker Startup###StartupAssetSync",
                        nullptr,
@@ -204,12 +205,33 @@ void StartupProgressDialog::onUpdateUI()
         return;
     }
 
-    // Logo 始终以工作区为中心，揭示进度时不移动，也不切换为另一张图片。
-    const ImVec2 center(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
-                        viewport->WorkPos.y + viewport->WorkSize.y * 0.5f);
-    const float  logoSize =
-        std::min(232.0f * scale, viewport->WorkSize.y * 0.46f);
-    const float radius = logoSize * 0.5f;
+    // 原生窗口保持无标题栏。背景层按完整客户区绘制，四角留给桌面合成，
+    // 边线轻微内收以免 ImGui 的抗锯齿笔画被 framebuffer 边缘截断。
+    const ImVec2 origin       = viewport->WorkPos;
+    const ImVec2 area         = viewport->WorkSize;
+    const float  cornerRadius = Graphic::STARTUP_WINDOW_CORNER_RADIUS * scale;
+    auto*        frame        = ImGui::GetBackgroundDrawList(viewport);
+    // 背景填充和描边使用同一尺寸，外圈像素由桌面合成或原生裁剪保留。
+    // 在正文前提交边框，动画首帧和同步终态共享同一个窗口外形。
+    frame->AddRectFilled(origin,
+                         { origin.x + area.x, origin.y + area.y },
+                         ImGui::GetColorU32(ImGuiCol_WindowBg),
+                         cornerRadius);
+    frame->AddRect({ origin.x + 1.0f, origin.y + 1.0f },
+                   { origin.x + area.x - 1.0f, origin.y + area.y - 1.0f },
+                   ImGui::GetColorU32(ImGuiCol_Text, 0.24f),
+                   std::max(0.0f, cornerRadius - 1.0f));
+
+    // 以逻辑宽度和可用比例决定布局。横屏让 Logo 和更新面板并列，
+    // 手机竖屏在同一绘制路径回落为上下排列。
+    const bool   horizontal = area.x >= 560.0f * scale && area.x > area.y;
+    const ImVec2 center{ origin.x + area.x * (horizontal ? 0.205f : 0.5f),
+                         origin.y + area.y * (horizontal ? 0.5f : 0.23f) };
+    // 动画与进度阶段共享锚点，出现详情时 Logo 不移动；小视口按短边限幅。
+    const float logoSize = std::min({ 252.0f * scale,
+                                      area.x * (horizontal ? 0.34f : 0.74f),
+                                      area.y * (horizontal ? 0.68f : 0.38f) });
+    const float radius   = logoSize * 0.5f;
 
     // 先提交这一帧的时间再累积下一帧：首帧显示开场，掉帧也不会跳过显影。
     if ( !m_logoShader || !m_logoShader->isValid() ) {
@@ -243,9 +265,53 @@ void StartupProgressDialog::onUpdateUI()
         return;
     }
 
-    // 控件区位于 Logo 下方；只增加底部内容，不挤动最后一帧的标志。
-    ImGui::SetCursorPosY(center.y - viewport->WorkPos.y + radius * 0.63f +
-                         10.0f * scale);
+    const auto& style             = ImGui::GetStyle();
+    const auto  padding           = style.WindowPadding;
+    const float contentX          = horizontal ? area.x * 0.39f : padding.x;
+    const float progressBarHeight = 6.0f * scale;
+    const float rowGap            = style.ItemSpacing.y;
+    // 状态文字和操作按钮始终存在。资源进度、下载线路只在对应状态加入；
+    // 使用当前字体和边距，DPI 改变时仍以控件的实际行高对齐。
+    // 状态行本身不含末尾留白，操作按钮使用普通 ImGui 帧。
+    // 下方只加实际可见的两组控件，离线警告不参与线路下拉框计高。
+    float controlsHeight =
+        ImGui::GetTextLineHeight() + rowGap + ImGui::GetFrameHeight();
+    if ( !m_hasError && !m_hasWarning )
+        controlsHeight += rowGap + progressBarHeight;
+    if ( !m_hasWarning )
+        controlsHeight += ImGui::GetTextLineHeightWithSpacing() + rowGap +
+                          ImGui::GetFrameHeight();
+
+    // 展开时将日志与控件一起居中，日志高度受当前窗口限制。
+    // 在较矮的视口优先让操作按钮可见，日志继续在剩余空间内滚动。
+    // 用固定可见行数设定目标高度，后台日志条目数变化时面板不抖动。
+    // 窗口不足时以外层内边距为界，滚动区不能把面板推出客户区。
+    const float logPaddingY = 8.0f * scale;
+    const float logHeight   = std::max(
+        1.0f,
+        std::min(8.0f * ImGui::GetTextLineHeightWithSpacing() + 2 * logPaddingY,
+                 area.y - 2 * padding.y - controlsHeight - rowGap));
+    // 捕获这一帧的展开态，避免按钮回调使新日志出现在上一种布局中。
+    const bool  detailsExpanded = m_detailsExpanded;
+    const float panelHeight =
+        controlsHeight + (detailsExpanded ? rowGap + logHeight : 0.0f);
+    // 横屏的面板与 Logo 共用同一水平中线。竖屏仍从 Logo 下方布局。
+    const float contentY =
+        horizontal ? std::max(padding.y, (area.y - panelHeight) * 0.5f)
+                   : center.y - origin.y + radius * 0.62f + 14.0f * scale;
+    const float contentWidth  = std::max(1.0f, area.x - contentX - padding.x);
+    const float contentHeight = std::max(1.0f, area.y - contentY - padding.y);
+    // 用子区域限制所有控件的宽度，复用既有线路选择器及其窄屏裁剪。
+    // 子区域起点用屏幕坐标设置，后续 SameLine 仍以子区域的局部原点计算。
+    ImGui::SetCursorScreenPos({ origin.x + contentX, origin.y + contentY });
+    if ( !ImGui::BeginChild("StartupUpdateContent",
+                            { contentWidth, contentHeight },
+                            ImGuiChildFlags_None,
+                            ImGuiWindowFlags_NoBackground) ) {
+        ImGui::EndChild();
+        ImGui::End();
+        return;
+    }
 
     if ( m_hasError || m_hasWarning ) {
         // 错误与警告仍拥有原来的恢复动作，长正文放在详情区域。
@@ -259,32 +325,33 @@ void StartupProgressDialog::onUpdateUI()
         ImGui::TextUnformatted(m_progressLabel.c_str());
         ImGui::SameLine(std::max(rightEdge - ImGui::CalcTextSize("100%").x,
                                  ImGui::GetItemRectMax().x -
-                                     viewport->WorkPos.x +
+                                     ImGui::GetWindowPos().x +
                                      ImGui::GetStyle().ItemSpacing.x));
         ImGui::Text("%d%%", static_cast<int>(std::round(fraction * 100.0f)));
-        ImGui::ProgressBar(fraction, ImVec2(-1.0f, 6.0f * scale), "");
+        ImGui::ProgressBar(fraction, ImVec2(-1.0f, progressBarHeight), "");
     }
     // 重用原有会话选线，失败也是换线时机；皮肤警告没有待下载内容。
     // 不在 UI 记录或覆盖实际选中的地址，后台下载仍按共用线路策略处理。
     if ( !m_hasWarning ) UI::drawDownloadRouteSelector(false, scale);
 
-    if ( UI::FeedbackButton(m_detailsExpanded
+    if ( UI::FeedbackButton(detailsExpanded
                                 ? "收起详情###StartupDetailsToggle"
                                 : "展开详情###StartupDetailsToggle") )
-        m_detailsExpanded = !m_detailsExpanded;
+        m_detailsExpanded = !detailsExpanded;
 
-    // 后续按钮仍在当前行右侧，日志展开不移动退出及重试入口。
-    const bool  hasConfirm  = m_hasError || m_hasWarning;
-    const float buttonWidth = 96.0f * scale;
+    // 退出和状态确认共用当前行右边界，保持展开折叠时的横向位置。
+    const bool hasConfirm = m_hasError || m_hasWarning;
+    // 狭窄视口仍给两个并排操作及详情折叠按钮分配各自的命中空间。
+    const float buttonWidth = std::min(96.0f * scale, contentWidth * 0.26f);
     const float buttonGap   = ImGui::GetStyle().ItemSpacing.x;
     const float actionsWidth =
         hasConfirm ? 2.0f * buttonWidth + buttonGap : buttonWidth;
     // SameLine 的偏移相对当前窗口而非系统屏幕，窄窗口优先保留同排控件间隔。
     const float rowEnd =
         ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
-    ImGui::SameLine(
-        std::max(rowEnd - actionsWidth,
-                 ImGui::GetItemRectMax().x - viewport->WorkPos.x + buttonGap));
+    ImGui::SameLine(std::max(
+        rowEnd - actionsWidth,
+        ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x + buttonGap));
     if ( UI::FeedbackButton("退出###StartupExit", ImVec2(buttonWidth, 0.0f)) )
         m_exitRequested = true;
     if ( hasConfirm ) {
@@ -298,13 +365,18 @@ void StartupProgressDialog::onUpdateUI()
         }
     }
 
-    // 日志默认收起。滚动区在同一窗口内使用剩余空间，不改变 Logo 居中坐标。
+    // 日志默认收起，切换详情与重新计算面板位置在同一帧边界生效。
     // 详情不拥有后台下载对象，关闭后日志仍随快照继续累积。
-    if ( m_detailsExpanded ) {
+    if ( detailsExpanded ) {
         // 详情区域下边界由窗口内容区决定；长诊断仅滚动正文。
         // 错误信息使用同一滚动区域，用户换线重试时仍可保留展开状态。
+        // 日志用独立内边距，避免沿用外窗的大留白占走可阅读的行数。
+        // 容器占用剩余高度，状态文本较长时可换行滚动而无需移动整块面板。
+        // 收起只停止提交日志区域，保留已有日志以便再次展开时查看。
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                            ImVec2(14.0f * scale, logPaddingY));
         if ( ImGui::BeginChild("StartupDetails",
-                               ImVec2(0.0f, 0.0f),
+                               ImVec2(0.0f, horizontal ? logHeight : 0.0f),
                                ImGuiChildFlags_Borders) ) {
             for ( const auto& entry : m_logs )
                 ImGui::TextWrapped("%s", entry.c_str());
@@ -314,7 +386,9 @@ void StartupProgressDialog::onUpdateUI()
                     (m_hasError ? m_errorMessage : m_warningMessage).c_str());
         }
         ImGui::EndChild();
+        ImGui::PopStyleVar();
     }
+    ImGui::EndChild();
     ImGui::End();
 }
 

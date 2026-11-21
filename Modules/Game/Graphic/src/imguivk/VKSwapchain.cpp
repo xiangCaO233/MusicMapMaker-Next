@@ -22,11 +22,13 @@ vk::PresentModeKHR VKSwapchain::s_globalPresentMode{
  * @param queueFamilyIndices 队列族索引信息
  * @param w 期望的宽度
  * @param h 期望的高度
+ * @param transparent 原生启动窗口是否允许桌面逐像素合成。
  */
 VKSwapchain::VKSwapchain(vk::PhysicalDevice& vkPhysicalDevice,
                          vk::Device& vkLogicalDevice, vk::SurfaceKHR& vkSurface,
-                         QueueFamilyIndices& queueFamilyIndices, int w, int h)
-    : m_vkLogicalDevice(vkLogicalDevice)
+                         QueueFamilyIndices& queueFamilyIndices, int w, int h,
+                         bool transparent)
+    : m_vkLogicalDevice(vkLogicalDevice), m_transparent(transparent)
 {
     // 初始创建，oldSwapchain 为空
     createInternal(
@@ -61,7 +63,6 @@ bool VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
         .setImageArrayLayers(1)
         .setImageUsage(vk::ImageUsageFlagBits::eColorAttachment)
         .setSurface(vkSurface)
-        .setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque)
         .setOldSwapchain(oldSwapchain);  // 【关键】设置旧交换链以优化重建
 
     // surface 格式属于物理设备与窗口系统的组合能力，每次重建都重新取得当前
@@ -95,6 +96,20 @@ bool VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
         return false;
     }
     vk::SurfaceCapabilitiesKHR caps = capsResult.value;
+
+    // 启动页颜色附件使用预乘混合，圆角外保持 RGBA 零值。
+    // X11 的 ARGB visual 可由窗口系统接管透明度，此时使用 Inherit。
+    // 普通编辑器沿用不透明合成，不能因启动窗启用透明而改变背景。
+    auto alpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
+    if ( m_transparent ) {
+        if ( caps.supportedCompositeAlpha &
+             vk::CompositeAlphaFlagBitsKHR::ePreMultiplied )
+            alpha = vk::CompositeAlphaFlagBitsKHR::ePreMultiplied;
+        else if ( caps.supportedCompositeAlpha &
+                  vk::CompositeAlphaFlagBitsKHR::eInherit )
+            alpha = vk::CompositeAlphaFlagBitsKHR::eInherit;
+    }
+    m_swapchainCreateInfo.setCompositeAlpha(alpha);
 
     // 确定图像数量
     // 推荐做法：min + 1。

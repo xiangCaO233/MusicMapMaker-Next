@@ -110,11 +110,12 @@ if(MMM_ENABLE_BUILD_TIMING)
   endif()
 endif()
 
-# 启动辅助实现归入主目标，不额外暴露静态库或跨模块链接接口。
+# 主程序和独立预览使用相同的窗口初始化、启动界面与 Shader。 保持源码私有，正式目标沿用各平台现有的编译和链接参数。
+set(MMM_STARTUP_VIEW_SOURCES src/StartupProgressDialog.cpp
+                             src/StartupLogoShader.cpp src/StartupWindow.cpp)
 target_sources(
-  MusicMapMaker-Next
-  PRIVATE src/PGOProfiler.cpp src/PGOProfileCache.cpp
-          src/StartupProgressDialog.cpp src/StartupLogoShader.cpp)
+  MusicMapMaker-Next PRIVATE src/PGOProfiler.cpp src/PGOProfileCache.cpp
+                             ${MMM_STARTUP_VIEW_SOURCES})
 # 启动 Logo 与桌面图标使用同一份 SVG。构建期嵌入母版，以便首次同步前离线播放动画。
 
 # 跟踪 SVG 源文件，增量构建也会更新启动遮罩。
@@ -141,6 +142,27 @@ configure_file(src/StartupLogoSvg.h.in
 # 私有头和生成的 SVG 文本只服务启动层，不构成安装接口。
 target_include_directories(
   MusicMapMaker-Next PRIVATE include "${CMAKE_CURRENT_BINARY_DIR}/generated")
+
+# 人工启动的桌面界面预览使用测试目录隔离配置，不登记为自动用例或安装目标。 Android 需由 SDLActivity
+# 提供窗口，不能直接从独立桌面入口启动。
+if(NOT ANDROID)
+  # 目标始终可显式构建，包括关闭 BUILD_TESTING 的开发构建树。
+
+  # 共用生成的 SVG 头以保持两个入口的启动画面一致。
+
+  mmm_add_test_executable(
+    Main StartupPagePreview STANDALONE tests/StartupPagePreview.cpp
+    ${MMM_STARTUP_VIEW_SOURCES})
+  target_include_directories(
+    StartupPagePreview PRIVATE include "${CMAKE_CURRENT_BINARY_DIR}/generated")
+  # 直接链接真实的渲染器和按钮反馈入口；模拟进度无需进入 GameLoop。
+  target_link_libraries(StartupPagePreview PRIVATE Graphic UI Network
+                                                   3rd_lunasvg)
+  if(COMMAND prebuilt_copy_runtime_files)
+    # 与主程序相同，使用 shared 预编译库时把运行库复制到预览程序目录。
+    prebuilt_copy_runtime_files(StartupPagePreview)
+  endif()
+endif()
 
 # 缓存回归只依赖文件系统，复用 Common 基础测试套件，不新增独立程序。 独立目录和小容量夹具验证边界，禁止触及用户真实临时缓存。
 mmm_add_test_executable(Common PGOProfileCacheTest

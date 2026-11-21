@@ -19,6 +19,7 @@
 #include "log/colorful-log.h"
 #include "main/PGOProfiler.h"
 #include "main/StartupProgressDialog.h"
+#include "main/StartupWindow.h"
 #include "network/AssetSyncService.h"
 #include "network/collaboration/CollaborationBuildFingerprint.h"
 #include "network/collaboration/RtcDiagnosticLogging.h"
@@ -28,11 +29,9 @@
 #include <fmt/core.h>
 #include <imgui.h>
 
-#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -236,12 +235,6 @@ void renderPgoShutdownUploadProgress(Graphic::VKContext&    context,
 
 namespace
 {
-/// @brief 启动资源检查窗口的逻辑宽度。
-constexpr int STARTUP_WINDOW_WIDTH = 600;
-
-/// @brief 启动窗口在动画、进度及日志展开过程中共用的逻辑高度。
-constexpr int STARTUP_WINDOW_HEIGHT = 640;
-
 /// @brief 正式主窗口的默认逻辑宽度。
 constexpr int APPLICATION_WINDOW_WIDTH = 1400;
 
@@ -254,51 +247,6 @@ enum class StartupPreparationResult : std::uint8_t {
     Cancelled,  ///< 用户关闭或退出资源准备窗口。
     Failed      ///< 临时图形上下文或资源准备流程初始化失败。
 };
-
-/// @brief 确保临时图形上下文在关联窗口销毁前释放 Vulkan 与 ImGui 资源。
-class ScopedVKContextRelease final
-{
-public:
-    /// @brief 绑定需要按窗口生命周期提前释放的图形上下文。
-    /// @param context 临时图形上下文。
-    explicit ScopedVKContextRelease(Graphic::VKContext& context)
-        : m_context(context)
-    {
-        // 仅保存非拥有引用，外层局部变量的声明顺序保证其生命周期更长。
-    }
-
-    /// @brief 在原生窗口仍有效时释放图形资源。
-    ~ScopedVKContextRelease()
-    {
-        // 显式 release 早于 NativeWindow 析构，满足 surface 和设备资源顺序。
-        m_context.release();
-    }
-
-    ScopedVKContextRelease(ScopedVKContextRelease&&)                 = delete;
-    ScopedVKContextRelease(const ScopedVKContextRelease&)            = delete;
-    ScopedVKContextRelease& operator=(ScopedVKContextRelease&&)      = delete;
-    ScopedVKContextRelease& operator=(const ScopedVKContextRelease&) = delete;
-
-private:
-    /// @brief 生命周期由外层启动资源准备函数保证的临时上下文引用。
-    Graphic::VKContext& m_context;
-};
-
-/// @brief 将启动窗口基础尺寸换算为包含用户 UI 倍率的逻辑尺寸。
-/// @param value 未应用用户 UI 倍率的基础尺寸。
-/// @return 可传给 NativeWindow 的正整数逻辑尺寸。
-int scaledStartupWindowDimension(int value)
-{
-    // 用户倍率只影响逻辑窗口尺寸，平台内容缩放仍由 NativeWindow 独立处理。
-    float multiplier =
-        Config::AppConfig::instance().getEditorSettings().uiScaleMultiplier;
-    // 损坏配置回退到原始尺寸，避免 NaN 经 lround 产生未定义布局结果。
-    if ( !std::isfinite(multiplier) || multiplier <= 0.0f ) multiplier = 1.0f;
-    // 最终至少保留一个逻辑像素，使 GLFW 不接收零或负窗口尺寸。
-    return std::max(
-        static_cast<int>(std::lround(static_cast<float>(value) * multiplier)),
-        1);
-}
 
 /// @brief 后台资源同步任务的跨线程完成状态。
 struct AssetSyncTaskState final {
@@ -458,43 +406,11 @@ std::string buildTranslationOverrideWarning(
 /// 资源，禁止从主渲染循环调用。
 StartupPreparationResult prepareStartupAssets()
 {
-    // 临时上下文先于窗口构造，失败时不创建任何可见启动界面。
-    Graphic::VKContext startupContext;
-    if ( !startupContext.getInitializationError().empty() ) {
-        // 初始化原因来自 VKContext 内部诊断，保留原文便于驱动问题定位。
-        XERROR("Failed to initialize startup graphic context: {}",
-               startupContext.getInitializationError());
-        return StartupPreparationResult::Failed;
-    }
-
-    // 启动窗口使用独立模式，避免读取正式编辑器窗口的保存位置与尺寸。
-    Graphic::NativeWindow startupWindow(
-        scaledStartupWindowDimension(STARTUP_WINDOW_WIDTH),
-        scaledStartupWindowDimension(STARTUP_WINDOW_HEIGHT),
-        "MusicMapMaker - Resource Update",
-        Graphic::NativeWindowMode::Startup);
-    // 释放守卫在窗口之后构造，因此离开作用域时会先释放 Vulkan 上下文。
-    ScopedVKContextRelease contextRelease(startupContext);
-    if ( !startupWindow.getWindowHandle() ) {
-        // 守卫仍会调用幂等 release，随后窗口对象安全析构空句柄。
-        XERROR("Failed to create startup resource window");
-        return StartupPreparationResult::Failed;
-    }
-
-    // Vulkan swapchain 必须使用平台返回的 framebuffer 像素尺寸而非逻辑尺寸。
-    int framebufferWidth  = 0;
-    int framebufferHeight = 0;
-    startupWindow.getFramebufferSize(framebufferWidth, framebufferHeight);
-    // Bootstrap 模式只准备启动进度界面所需的最小渲染资源和字体。
-    if ( !startupContext.initVKWindowRess(
-             &startupWindow,
-             framebufferWidth,
-             framebufferHeight,
-             Graphic::VKWindowResourceMode::Bootstrap) ) {
-        // 部分创建的 Vulkan 资源由上下文释放守卫统一回收。
-        XERROR("Failed to initialize startup Vulkan window resources");
-        return StartupPreparationResult::Failed;
-    }
+    // 窗口先于对话框构造，确保 Logo 管线先于设备和平台窗口释放。
+    StartupWindow startup("MusicMapMaker - Resource Update");
+    if ( !startup.isReady() ) return StartupPreparationResult::Failed;
+    auto& startupContext = startup.context();
+    auto& startupWindow  = startup.window();
 
     // 对话框跨重试复用，beginSync 会在每轮开始时清理错误和按钮状态。
     StartupProgressDialog startupProgressDialog;

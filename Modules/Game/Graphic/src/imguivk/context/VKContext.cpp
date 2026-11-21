@@ -9,7 +9,6 @@
 #include "event/input/glfw/GLFWKeyEvent.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "graphic/glfw/window/NativeWindow.h"
-#include "graphic/glfw/window/adapters/IWindowFrameAdapter.h"
 #include "graphic/imguivk/VKRenderPass.h"
 #include "graphic/imguivk/VKRenderer.h"
 #include "graphic/imguivk/VKSwapchain.h"
@@ -23,6 +22,7 @@
 #    include <SDL3/SDL_vulkan.h>
 #else
 #    include "imgui_impl_glfw.h"
+#    include <GLFW/glfw3.h>
 #endif
 #include "imgui_impl_vulkan.h"
 #include "log/colorful-log.h"
@@ -608,9 +608,11 @@ bool VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h,
     m_vkSurface = surface;
     // MoltenVK 会在创建 Surface 时安装实际的 CAMetalLayer，必须在此后重新
     // 应用 macOS 圆角裁剪和原生外扩散阴影。
-    if ( auto* frameAdapter = native_window_ptr->getWindowFrameAdapter() ) {
-        frameAdapter->refreshFrameShape();
-    }
+#ifndef __ANDROID__
+    // 预览和正式启动窗同样在实际图层建立后应用原生裁剪。
+    // Wayland 没有可附加的桌面 shape，留给下面的透明交换链。
+    native_window_ptr->refreshWindowFrameShape();
+#endif
     addStartupDiagnostic("Vulkan window surface created successfully.");
     XDEBUG("Vulkan Surface created.");
     collectPhysicalDeviceDiagnostics(true);
@@ -632,13 +634,24 @@ bool VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h,
         return false;
     }
 
+    // GLFW 提示可能被后端或桌面合成器忽略，只在实际透明的启动窗请求 Alpha。
+    // 移动端使用 Activity 的表面，全屏启动不需要露出桌面。
+    const bool transparent =
+#ifdef __ANDROID__
+        false;
+#else
+        mode == VKWindowResourceMode::Bootstrap &&
+        glfwGetWindowAttrib(native_window_ptr->getWindowHandle(),
+                            GLFW_TRANSPARENT_FRAMEBUFFER) == GLFW_TRUE;
+#endif
     // 交换链拥有呈现图像视图，实际 extent 会按 surface 能力钳制传入尺寸。
     m_swapchain = std::make_unique<VKSwapchain>(m_vkPhysicalDevice,
                                                 m_vkLogicalDevice,
                                                 m_vkSurface,
                                                 m_queueFamilyIndices,
                                                 w,
-                                                h);
+                                                h,
+                                                transparent);
     // 首次创建也可能因 Activity 尚未提供稳定 Surface 而失败，不能初始化空
     // framebuffer。
     // 错误由既有启动诊断向外传播，避免把失败掩盖为一个可渲染上下文。

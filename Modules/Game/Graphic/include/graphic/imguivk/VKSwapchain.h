@@ -28,10 +28,12 @@ public:
      * @param queueFamilyIndices 队列族索引信息
      * @param w 期望的宽度
      * @param h 期望的高度
+     * @param transparent 是否为具有逐像素透明能力的启动窗口。
      */
     VKSwapchain(vk::PhysicalDevice& vkPhysicalDevice,
                 vk::Device& vkLogicalDevice, vk::SurfaceKHR& vkSurface,
-                QueueFamilyIndices& queueFamilyIndices, int w, int h);
+                QueueFamilyIndices& queueFamilyIndices, int w, int h,
+                bool transparent = false);
 
     // 禁用拷贝和移动
     VKSwapchain(VKSwapchain&&) = delete;
@@ -114,6 +116,9 @@ private:
 
     /// @brief 缓存的交换链创建信息
     vk::SwapchainCreateInfoKHR m_swapchainCreateInfo;
+
+    /// @brief 启动窗请求逐像素透明，重建时按新 surface 能力重新选取模式。
+    const bool m_transparent;
 
     /**
      * @brief 内部图像缓冲结构体

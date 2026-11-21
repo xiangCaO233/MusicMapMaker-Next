@@ -283,22 +283,35 @@ bool X11WindowAdapter::usesClientFrameOverlay() const
 void X11WindowAdapter::refreshFrameShape()
 {
 #    if defined(MMM_ENABLE_X11_FRAME_SHAPE)
+    applyFrameShape(m_window,
+                    X11_FRAME_CORNER_RADIUS *
+                        Config::AppConfig::instance().getWindowContentScale());
+#    endif
+}
+
+/// @brief 复用 XShape 几何，不安装窗口拖动事件。
+/// @warning 低频窗口外观路径：仅在创建、尺寸或显示状态变化时请求裁剪。
+void X11WindowAdapter::applyFrameShape(
+    [[maybe_unused]] GLFWwindow* windowHandle,
+    [[maybe_unused]] float       cornerRadius)
+{
+#    if defined(MMM_ENABLE_X11_FRAME_SHAPE)
     // 即使编译期具备 XShape，运行时 backend 仍可能是 Wayland，必须再次守卫。
-    if ( !m_window || glfwGetPlatform() != GLFW_PLATFORM_X11 ) {
+    if ( !windowHandle || glfwGetPlatform() != GLFW_PLATFORM_X11 ) {
         return;
     }
 
     // 原生 Display/Window 由 GLFW 拥有，本函数只在调用期间借用。
     Display* display = glfwGetX11Display();
-    Window   window  = glfwGetX11Window(m_window);
+    Window   window  = glfwGetX11Window(windowHandle);
     if ( !display || window == 0 ) {
         return;
     }
 
     // 最大化和 fullscreen 应覆盖整个矩形，移除自定义 bounding
     // mask，避免屏幕边缘 出现透明缺角。
-    if ( glfwGetWindowAttrib(m_window, GLFW_MAXIMIZED) == GLFW_TRUE ||
-         glfwGetWindowMonitor(m_window) != nullptr ) {
+    if ( glfwGetWindowAttrib(windowHandle, GLFW_MAXIMIZED) == GLFW_TRUE ||
+         glfwGetWindowMonitor(windowHandle) != nullptr ) {
         XShapeCombineMask(display, window, ShapeBounding, 0, 0, None, ShapeSet);
         XFlush(display);
         return;
@@ -307,18 +320,15 @@ void X11WindowAdapter::refreshFrameShape()
     // XRectangle 使用有限宽度字段；这里只接受 GLFW 报告的正尺寸窗口。
     int width  = 0;
     int height = 0;
-    glfwGetWindowSize(m_window, &width, &height);
+    glfwGetWindowSize(windowHandle, &width, &height);
     if ( width <= 0 || height <= 0 ) {
         return;
     }
 
     // 基础半径按内容缩放系数调整，并限制到短边一半，保证条带宽度非负。
-    const int radius =
-        std::clamp(static_cast<int>(std::round(
-                       static_cast<float>(X11_FRAME_CORNER_RADIUS) *
-                       Config::AppConfig::instance().getWindowContentScale())),
-                   0,
-                   std::min(width, height) / 2);
+    const float maxRadius = static_cast<float>(std::min(width, height) / 2);
+    const int   radius =
+        static_cast<int>(std::round(std::clamp(cornerRadius, 0.0f, maxRadius)));
     if ( radius <= 0 ) {
         // DPI 或尺寸使半径退化时显式清除旧 mask，不能保留上一次较大窗口的圆角。
         XShapeCombineMask(display, window, ShapeBounding, 0, 0, None, ShapeSet);
