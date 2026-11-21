@@ -5,7 +5,9 @@
 #include "common/LogicCommands.h"
 #include "config/Utf8Path.h"
 #include "logic/ProjectResourceService.h"
+#include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/beatmap/MyO2Bms.h"
 #include "mmm/project/PackageFileTypes.h"
 #include "mmm/project/Project.h"
 
@@ -13,6 +15,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <fmt/format.h>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -189,6 +192,19 @@ bool alignTimeline(BeatMap& map, AudioSampleEvent* mainSample,
     // 只移动长条头部，其时长保持原值，尾部因此随整条一起平移。
     for ( auto& hold : map.m_noteData.holds ) shift(hold.m_timestamp);
     for ( auto& annotation : map.m_annotations ) shift(annotation.m_timestamp);
+    if ( Bms::usesMyO2Format(map.m_metadata) && phase != 0 ) {
+        // 格式专用 FF/HE/SW/ED 与原生视频起点共用同一位移，保留亚毫秒相位。
+        const auto old = Bms::bmsProperty(map.m_metadata, Bms::MYO2_CUE_SHIFT);
+        const auto value = Internal::parseFloatingPrefix(old);
+        if ( !old.empty() &&
+             (value.error != std::errc{} || value.parsedLength != old.size() ||
+              !std::isfinite(value.value)) )
+            return false;
+        const double shiftMs = old.empty() ? -phase : value.value - phase;
+        map.m_metadata.map_properties[MapMetadataType::BMS]
+                                     [std::string(Bms::MYO2_CUE_SHIFT)] =
+            fmt::format("{}", shiftMs);
+    }
     for ( auto& sample : map.m_audioSamples ) {
         if ( !shiftEvents && &sample == mainSample ) {
             // 音频文件承担全部位移，触发锚点和 offset 不得再重复应用一次。
@@ -218,6 +234,76 @@ bool BmsPackageExportService::shiftEventsToGrid(BeatMap&     map,
                          unusedAudioPhase,
                          BmsPackageAlignmentMode::ShiftEvents,
                          error);
+}
+
+/// @brief 校验 KEY 音 ZIP 的压缩方式、解压预算及音源引用。
+/// @details 目录名使用与站点一致的 UTF-8、斜杠和小写匹配。
+/// 重名会在浏览器中覆盖，因此规范化后冲突视为格式错误。
+/// 仅扫描中央目录，音源保持原始压缩数据及文件名。
+bool BmsPackageExportService::validateMyO2KeySoundBank(
+    const BeatMap& map, const std::filesystem::path& path, std::string& error)
+{
+    constexpr std::uint64_t budget = 256U * 1024U * 1024U;
+    error = "无法使用 MyO2 KEY 音包：" + Config::pathToUtf8(path);
+    std::error_code filesystemError;
+    if ( !packageExtensionEquals(Config::pathToUtf8(path.extension()),
+                                 ".zip") ||
+         std::filesystem::file_size(path, filesystemError) > budget ||
+         filesystemError )
+        return false;
+    std::vector<unsigned char> contents;
+    if ( !readFile(path, contents) ) return false;
+
+    mz_zip_archive zip{};
+    if ( !mz_zip_reader_init_mem(&zip, contents.data(), contents.size(), 0) )
+        return false;
+    // 所有退出路径都只结束本次只读 ZIP 句柄，不触碰源文件。
+    struct ReaderEnd {
+        mz_zip_archive& m_zip;  ///< 借用本函数内已初始化的 ZIP 句柄。
+        /// @brief 释放 miniz 读取状态。
+        ~ReaderEnd() { mz_zip_reader_end(&m_zip); }
+    } reader{ zip };
+    const auto normalize = [](std::string name) {
+        for ( auto& c : name ) c = c == '\\' ? '/' : toPackageLowerAscii(c);
+        return name;
+    };
+    std::set<std::string> names;
+    std::uint64_t         expanded = 0;
+    for ( mz_uint i = 0; i < mz_zip_reader_get_num_files(&zip); ++i ) {
+        mz_zip_archive_file_stat stat{};
+        if ( !mz_zip_reader_file_stat(&zip, i, &stat) || stat.m_is_encrypted ||
+             (stat.m_method != 0 && stat.m_method != 8) ||
+             stat.m_uncomp_size > budget - expanded )
+            return false;
+        expanded += stat.m_uncomp_size;
+        if ( stat.m_is_directory ) continue;
+        if ( !names.insert(normalize(stat.m_filename)).second ) return false;
+    }
+    const auto contains = [&](const std::string& name) {
+        if ( name.empty() || names.contains(normalize(name)) ) return true;
+        error = "MyO2 KEY 音包缺少音源：" + name;
+        return false;
+    };
+    for ( const auto& note : map.m_noteData.notes )
+        if ( note.m_sampleBinding &&
+             !contains(note.m_sampleBinding->m_audioResourceId) )
+            return false;
+    for ( const auto& hold : map.m_noteData.holds )
+        if ( hold.m_sampleBinding &&
+             !contains(hold.m_sampleBinding->m_audioResourceId) )
+            return false;
+    const auto mainPath =
+        map.m_baseMapMetadata.song_file_hint.lexically_normal();
+    const bool wholeMusic =
+        Bms::bmsProperty(map.m_metadata, Bms::MYO2_AUDIO_MODE) != "STANDARD";
+    for ( const auto& sample : map.m_audioSamples )
+        if ( (!wholeMusic ||
+              Config::utf8ToPath(sample.m_audioResourceId).lexically_normal() !=
+                  mainPath) &&
+             !contains(sample.m_audioResourceId) )
+            return false;
+    error.clear();
+    return true;
 }
 
 /// @brief 将选中谱面、音频与媒体准备到独立事务，再提交完整 ZIP。
@@ -315,9 +401,18 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
         }
         // 引用解析必须使用来源路径，而不是临时文件目录或输出谱面的新后缀。
         // 文件名相同的不同目录音效也依赖完整项目身份区分。
+        const auto archivedSounds =
+            Bms::bmsProperty(map.m_metadata, Bms::MYO2_KEYSOUND);
+        const bool archiveOnly =
+            myO2Grid && !archivedSounds.empty() &&
+            Bms::bmsProperty(map.m_metadata, Bms::MYO2_AUDIO_MODE) ==
+                "STANDARD";
+        // STANDARD 的 01 也属于音包命名空间；同名松散文件不应触发音频裁剪。
         const auto* mainResource =
-            ProjectResourceService::findDefaultBeatmapAudioResource(
-                project, map, source);
+            archiveOnly
+                ? nullptr
+                : ProjectResourceService::findDefaultBeatmapAudioResource(
+                      project, map, source);
         // 指针只在此张谱面容器稳定期间借用，不保存到资源包或下一张谱面。
         // 主音乐必须以解析后的资源身份比较，文件名相同不能证明是同一音频。
         AudioSampleEvent* mainSample = nullptr;
@@ -345,6 +440,52 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
             auto& sample             = map.m_audioSamples.emplace_back();
             sample.m_audioResourceId = mainResource->m_id;
             mainSample               = &sample;
+        }
+        // 选中的输出模式覆盖来源协议，且必须在首拍对齐前设置。
+        auto& format = map.m_metadata.map_properties[MapMetadataType::BMS];
+        format["myo2_grid"]    = myO2Grid ? "1" : "0";
+        format["myo2_format"]  = myO2Grid ? "1" : "0";
+        format["compact_rows"] = "1";
+        const auto chartFolder = target.parent_path().empty()
+                                     ? std::filesystem::path(".")
+                                     : target.parent_path();
+        const auto bankValue =
+            myO2Grid ? Bms::bmsProperty(map.m_metadata, Bms::MYO2_KEYSOUND)
+                     : std::string_view{};
+        const bool hasBank = !bankValue.empty();
+        if ( hasBank ) {
+            // KEY 音包路径按来源谱面定位；ZIP 内部 WAV
+            // 名字不能作为松散音频改写。
+            auto bank = (relative.parent_path() /
+                         Config::utf8ToPath(std::string(bankValue)))
+                            .lexically_normal();
+            if ( bank.is_absolute() )
+                bank = std::filesystem::relative(
+                    bank, project.m_projectRoot, error);
+            if ( error || !safeRelative(bank) || !selected.contains(bank) ) {
+                result.errorMessage =
+                    "未选择 MyO2 KEY 音包：" + std::string(bankValue);
+                return result;
+            }
+            if ( !validateMyO2KeySoundBank(
+                     map, selected.at(bank), result.errorMessage) )
+                return result;
+            format[std::string(Bms::MYO2_KEYSOUND)] =
+                Config::pathToUtf8Generic(bank.lexically_relative(chartFolder));
+        }
+        if ( myO2Grid && map.m_baseMapMetadata.cover_type == CoverType::VIDEO &&
+             !map.m_baseMapMetadata.main_cover_path.empty() ) {
+            // 站点按歌曲编号加载
+            // MP4；打包保留原文件名，部署时由歌曲库配置编号。
+            const auto cover = map.m_baseMapMetadata.main_cover_path;
+            auto video = (relative.parent_path() / cover).lexically_normal();
+            if ( !selected.contains(video) ) video = cover.lexically_normal();
+            if ( !selected.contains(video) ||
+                 !packageExtensionEquals(Config::pathToUtf8(video.extension()),
+                                         ".mp4") ) {
+                result.errorMessage = "MyO2 视频 BGA 需要选择对应的 MP4 文件";
+                return result;
+            }
         }
         // 唯一隐式 Main 已在上方补齐，此后不再增删样本容器。
         // 时间变换先于重映射，以便使用源 ID 和独立 offset 确定真实触发点。
@@ -445,24 +586,25 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
                                              : target.parent_path()));
             return true;
         };
-        for ( auto& note : map.m_noteData.notes )
-            if ( note.m_sampleBinding &&
-                 !remap(note.m_sampleBinding->m_audioResourceId, false) )
+        if ( !hasBank ) {
+            for ( auto& note : map.m_noteData.notes )
+                if ( note.m_sampleBinding &&
+                     !remap(note.m_sampleBinding->m_audioResourceId, false) )
+                    return result;
+            for ( auto& hold : map.m_noteData.holds )
+                if ( hold.m_sampleBinding &&
+                     !remap(hold.m_sampleBinding->m_audioResourceId, false) )
+                    return result;
+        }
+        for ( auto& sample : map.m_audioSamples ) {
+            const bool isMain = &sample == mainSample;
+            if ( (!hasBank || isMain) &&
+                 !remap(sample.m_audioResourceId, isMain) )
                 return result;
-        for ( auto& hold : map.m_noteData.holds )
-            if ( hold.m_sampleBinding &&
-                 !remap(hold.m_sampleBinding->m_audioResourceId, false) )
-                return result;
-        for ( auto& sample : map.m_audioSamples )
-            if ( !remap(sample.m_audioResourceId, &sample == mainSample) )
-                return result;
-        // 包目标是标准 BMS/iBMSC，允许叠加稀疏行；这不是额外的文件协议指令。
-        // 开关只存在于本次导出副本，原项目与普通另存为策略都不受影响。
-        // 显式覆盖快照选项，防止源元数据意外开启有损网格转换。
-        map.m_metadata.map_properties[MapMetadataType::BMS]["myo2_grid"] =
-            myO2Grid ? "1" : "0";
-        map.m_metadata.map_properties[MapMetadataType::BMS]["compact_rows"] =
-            "1";
+        }
+        if ( myO2Grid && mainSample )
+            map.m_baseMapMetadata.song_file_hint =
+                Config::utf8ToPath(mainSample->m_audioResourceId);
         // 保存器直到验证全部物件和时间线后才写出，失败不会留下有效归档条目。
         // 同目录结构使外部编辑器解包后也能按相对路径找到采样。
         const auto preparedPath = work.path / target;
@@ -475,6 +617,20 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
         // 此时仅登记准备结果，真正的 ZIP 写入在全部难度成功后统一执行。
         // charts 按实际写出的谱面计数，只有媒体的选择不构成 BMS 谱包。
         entries.emplace(target, preparedPath);
+        if ( myO2Grid ) {
+            const auto silence = Bms::myO2SilencePath(preparedPath);
+            if ( std::filesystem::is_regular_file(silence, error) ) {
+                // STANDARD 松散音源的静音 WAV
+                // 和谱面同目录，同目录多个难度共用。
+                const auto relativeSilence = Bms::myO2SilencePath(target);
+                if ( selected.contains(relativeSilence) ) {
+                    result.errorMessage = "MyO2 静音音源名称与包内文件冲突";
+                    return result;
+                }
+                entries.try_emplace(relativeSilence, silence);
+            }
+            error.clear();
+        }
         ++charts;
     }
     // 谱面计数在成功保存后增加；只有失败候选或单纯媒体不能通过这一门槛。

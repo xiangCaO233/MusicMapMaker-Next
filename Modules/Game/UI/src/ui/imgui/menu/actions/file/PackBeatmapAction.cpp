@@ -12,6 +12,7 @@
 #include "logic/EditorEngine.h"
 #include "logic/ProjectResourceService.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/beatmap/MyO2Bms.h"
 #include "mmm/project/PackageFileTypes.h"
 #include "mmm/project/PackagePathFilter.h"
 #include "mmm/project/Project.h"
@@ -32,6 +33,7 @@
 #include <imgui.h>
 #include <nfd.h>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -667,6 +669,9 @@ struct PackageBeatmapInfo {
     /// @note 路径均规范化为项目相对 UTF-8 通用形式且已去重。
     std::vector<std::string> dependencyRelativePaths;
 
+    /// @brief 经谱面目录解析的 MyO2 内层 ZIP 路径，只让实际引用的音包进入候选。
+    std::string myO2KeyBankPath;
+
     /// @brief 无法解析为项目资源的谱面音频引用。
     /// @note 每项包含字段名和原始引用，直接用于缺失依赖提示。
     std::vector<std::string> unresolvedAudioReferences;
@@ -747,7 +752,8 @@ void appendPackageAudioReference(std::vector<PackageAudioReference>& references,
 /// @details 音频引用交给 ProjectResourceService 批量解析，以复用项目对资源
 /// ID、相对路径和谱面目录的兼容规则；封面路径则按源格式相对路径语义解析。
 PackageBeatmapInfo collectPackageBeatmapInfo(
-    const Project& project, const std::string& beatmapRelativePath)
+    const Project& project, const std::string& beatmapRelativePath,
+    bool allowMyO2Archive)
 {
     // 默认结果表示无依赖且未发生读取错误。
     PackageBeatmapInfo result;
@@ -776,6 +782,22 @@ PackageBeatmapInfo collectPackageBeatmapInfo(
     // MMM 按项目根保存资源路径，外部格式通常按谱面目录保存。
     const bool preferProjectRoot = packageExtensionEquals(mapExtension, ".mmm");
     const auto& meta             = beatMap.m_baseMapMetadata;
+    const auto  bank = allowMyO2Archive ? Bms::bmsProperty(beatMap.m_metadata,
+                                                           Bms::MYO2_KEYSOUND)
+                                        : std::string_view{};
+    if ( !bank.empty() ) {
+        // 音包只按谱面位置解释；包外路径无法加入本项目归档。
+        const auto path = (mapDirectory / Config::utf8ToPath(std::string(bank)))
+                              .lexically_normal();
+        result.myO2KeyBankPath =
+            makePackageProjectRelativeUtf8(project.m_projectRoot, path);
+        if ( result.myO2KeyBankPath.empty() )
+            result.unresolvedAudioReferences.push_back("KEYSOUND: " +
+                                                       std::string(bank));
+        else
+            appendUniquePackageDependency(result.dependencyRelativePaths,
+                                          result.myO2KeyBankPath);
+    }
 
     // Flick 或 Polyline 触发 Malody 模式扩展与 Key 降级转换提示。
     result.hasStoreModeExtEligibleElements =
@@ -800,7 +822,7 @@ PackageBeatmapInfo collectPackageBeatmapInfo(
     auto appendNoteBinding = [&](const Note& note) {
         // getSampleBinding 统一处理各类物件的可选绑定状态。
         const auto binding = note.getSampleBinding();
-        if ( !binding ) return;
+        if ( !binding || !bank.empty() ) return;
         appendPackageAudioReference(
             audioReferences, binding->m_audioResourceId, "Note sample");
     };
@@ -818,6 +840,11 @@ PackageBeatmapInfo collectPackageBeatmapInfo(
         appendNoteBinding(polyline);
     }
     for ( const auto& sample : beatMap.m_audioSamples ) {
+        // ZIP 内的 WAV 由外层音包满足；整曲 BGM 仍需单独跟随谱包。
+        if ( !bank.empty() &&
+             Config::utf8ToPath(sample.m_audioResourceId).lexically_normal() !=
+                 meta.song_file_hint.lexically_normal() )
+            continue;
         // 自动采样字段使用独立标签，便于错误提示区别于玩家物件。
         appendPackageAudioReference(
             audioReferences, sample.m_audioResourceId, "audio_samples");
@@ -1456,8 +1483,8 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
                     // 默认保真；只读末行的转换器需明确选择有损吸附。
                     ImGui::TextWrapped(
                         "默认保留变速和物件时间；高精度叠加行可能不兼容 MyO2。"
-                        "有损吸附会移动或合并变速事件，复杂变速谱可能明显偏移"
-                        "。");
+                        "兼容模式保留 Scroll、BGA 和轨道控制，适用 4K/7K。"
+                        "吸附会移动离拍事件，出现冲突时导出失败。");
                     ::MMM::UI::FeedbackCheckbox("MyO2 兼容吸附（有损）",
                                                 &m_package.m_bmsMyO2Grid);
                     ImGui::TextUnformatted("首拍对齐方式（必选其一）：");
@@ -2378,13 +2405,17 @@ void PackBeatmapAction::rebuildPackageCandidateFiles()
             index;
     }
 
+    // 普通 ZIP 产物不能作为打包输入；这里只追加已被谱面声明的 KEY 音包。
+    std::set<std::string> keySoundCandidates;
     // 只有谱面需要解析内部资源引用和格式兼容性。
     for ( auto& file : m_package.candidateFiles ) {
         if ( file.resourceType != PackageResourceType::Beatmap ) continue;
 
         // 每张谱面只读取一次，扫描结果移动到候选缓存。
-        auto beatmapInfo =
-            collectPackageBeatmapInfo(*project, file.relativePath);
+        auto beatmapInfo = collectPackageBeatmapInfo(
+            *project,
+            file.relativePath,
+            m_package.selectedFileType == PackageFileType::BmsZip);
         file.dependencyRelativePaths =
             std::move(beatmapInfo.dependencyRelativePaths);
         file.hasStoreModeExtEligibleElements =
@@ -2397,15 +2428,35 @@ void PackBeatmapAction::rebuildPackageCandidateFiles()
             file.missingDependencyRelativePaths.push_back(
                 "谱面文件读取失败，无法检查依赖");
         }
+        if ( !beatmapInfo.myO2KeyBankPath.empty() ) {
+            const auto relative =
+                Config::utf8ToPath(beatmapInfo.myO2KeyBankPath);
+            std::error_code error;
+            if ( !isInternalPackagePath(relative) &&
+                 packageExtensionEquals(
+                     Config::pathToUtf8(relative.extension()), ".zip") &&
+                 std::filesystem::is_regular_file(projectRoot / relative,
+                                                  error) )
+                keySoundCandidates.insert(beatmapInfo.myO2KeyBankPath);
+        }
         // 已解析路径若不在当前格式候选中，仍视为不支持或缺失。
         for ( const auto& dependencyPath : file.dependencyRelativePaths ) {
             if ( candidateIndexByPath.find(dependencyPath) ==
-                 candidateIndexByPath.end() ) {
+                     candidateIndexByPath.end() &&
+                 !keySoundCandidates.contains(dependencyPath) ) {
                 appendUniquePackageDependency(
                     file.missingDependencyRelativePaths, dependencyPath);
             }
         }
     }
+
+    // 在遍历引用结束后再追加，避免使当前谱面候选的迭代器失效。
+    for ( const auto& path : keySoundCandidates )
+        m_package.candidateFiles.push_back(PackageCandidateFile{
+            .relativePath = path,
+            .typeLabel    = "KEY 音包",
+            .resourceType = PackageResourceType::Audio,
+        });
 
     // 当前打开且可见的谱面决定默认勾选状态。
     auto&         engine             = Logic::EditorEngine::instance();

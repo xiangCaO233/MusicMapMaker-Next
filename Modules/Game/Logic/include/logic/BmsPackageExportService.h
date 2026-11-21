@@ -40,6 +40,14 @@ public:
     [[nodiscard]] static bool shiftEventsToGrid(BeatMap&     map,
                                                 std::string& error);
 
+    /// @brief 验证 MyO2 KEY 音包的 ZIP 目录与谱面实际引用。
+    /// @param map 保留 ZIP 内部文件名的导出模型，整曲引用仍按普通路径表示。
+    /// @param path 本机音包路径，验证不会展开音源或改写原包。
+    /// @return 可完整供 MyO2 解码时为真；结构或引用错误写入 error。
+    [[nodiscard]] static bool validateMyO2KeySoundBank(
+        const BeatMap& map, const std::filesystem::path& path,
+        std::string& error);
+
     /// @brief 导出所有已选谱面，按互斥策略调整主音乐内容或触发位置。
     /// @param project 提供稳定音频资源 ID 与项目根目录。
     /// @param selectedPaths 已选项目相对路径，音频依赖也必须明确选择。

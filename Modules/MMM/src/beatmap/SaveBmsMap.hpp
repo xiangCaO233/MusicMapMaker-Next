@@ -1,7 +1,7 @@
 #pragma once
 #include "BmsExportTimeline.h"
 #include "BmsFormat.hpp"
-#include "BmsMyO2Grid.h"
+#include "BmsMyO2Export.h"
 #include <array>
 #include <iomanip>
 #include <locale>
@@ -12,7 +12,8 @@ namespace MMM::Bms
 {
 /// @brief 写出标准通道文本，先在内存验证，再打开目标文件。
 /// @details BMS 的 STOP 单位为四分音符的 1/48，MMM 的参数为秒。
-/// 四至八轨按 MyO2 顺序从 16 开始排列；忽略的滚速和增益由界面提示。
+/// 兼容模式保留 MyO2 基础协议，并在实际量化后的拍位验证可击打物件。
+/// 普通 BMS 输出维持原有通道、叠加和精度语义，不附带专用控制码。
 /// @param map 已同步完成的导出快照，音频引用必须为实际路径。
 /// @param path 目标 BMS/BME/BML/PMS 文件名。
 /// @return 所有类型可表达且文件写入成功时返回 true。
@@ -29,6 +30,33 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     const bool  pms    = upper(Config::pathToUtf8(path.extension())) == ".PMS";
     const int   tracks = meta.track_count;
     const bool  keyboardOnly = !pms && tracks >= 1 && tracks <= 3;
+    const bool  myO2         = usesMyO2Format(map.m_metadata);
+    const bool  myO2Grid     = bmsProperty(map.m_metadata, "myo2_grid") == "1";
+    if ( myO2 &&
+         (pms || (tracks != 4 && tracks != 7) ||
+          map.m_noteData.notes.size() + map.m_noteData.holds.size() == 0 ||
+          map.m_noteData.notes.size() + map.m_noteData.holds.size() >
+              100000) ) {
+        XERROR("MyO2 兼容导出需要 4K 或 7K，且可击打物件数量须为 1～100000");
+        return false;
+    }
+    if ( myO2 && !validateMyO2Notes(map) ) {
+        XERROR("MyO2 兼容导出需要有效且同轨不重叠的普通音符和长条");
+        return false;
+    }
+    // MyO2 的视频入口只读取 MP4，不能用 FF 声明其他容器的文件。
+    if ( myO2 && meta.cover_type == CoverType::VIDEO &&
+         !meta.main_cover_path.empty() &&
+         upper(Config::pathToUtf8(meta.main_cover_path.extension())) !=
+             ".MP4" ) {
+        XERROR("MyO2 视频 BGA 需要 MP4 文件");
+        return false;
+    }
+    const auto myO2Data = myO2 ? myO2ExportData(map) : std::nullopt;
+    if ( myO2 && !myO2Data ) {
+        XERROR("MyO2 小节比例或控制标记无效");
+        return false;
+    }
     // Flick 和折线没有这里实现的 BMS 通道表示。
     // 提前拒绝可避免只保存可转换子集、丢失其余物件。
     if ( (pms && tracks != 9) ||
@@ -44,6 +72,7 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     // 第二玩家的通道十位与第一玩家不同，键序保持一致。
     // PMS 使用独立九键映射，不包含转盘。
     const auto channel = [&](int track) {
+        if ( myO2 ) return MYO2_LANES[track];
         if ( pms ) return track < 5 ? 0x11 + track : 0x22 + track - 5;
         // 一至三轨保留既有普通键补位行为，不扩大本次四至八轨调整范围。
         if ( keyboardOnly ) ++track;
@@ -58,9 +87,11 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     for ( const auto& t : map.m_timings ) {
         // 外部协议没有负小节；非法或无限时间不能参与拍位积分。
         // 视觉效果不进入音乐拍位积分，可表达事件仍需验证数值。
-        if ( !std::isfinite(t.m_timestamp) || t.m_timestamp < 0 ) return false;
+        if ( !std::isfinite(t.m_timestamp) || (!myO2 && t.m_timestamp < 0) )
+            return false;
         if ( t.m_timingEffect != TimingEffect::BPM &&
-             t.m_timingEffect != TimingEffect::STOP ) {
+             t.m_timingEffect != TimingEffect::STOP &&
+             !(myO2 && t.m_timingEffect == TimingEffect::SCROLL) ) {
             // 标准通道不携带视觉滚速；保留 BPM/STOP 的实际音乐时间。
             // 界面预先列出降级差异，独立保存调用也留下明确日志。
             XWARN("BMS 导出：忽略不支持的 timing 类型 {}，位置 {} ms",
@@ -68,8 +99,12 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
                   t.m_timestamp);
             continue;
         }
-        if ( !std::isfinite(t.m_timingEffectParameter) ||
-             t.m_timingEffectParameter <= 0 || t.m_interpolation )
+        // SCROLL 可正、零、负；兼容协议也允许保留时长为零的 STOP。
+        if ( !std::isfinite(t.m_timingEffectParameter) || t.m_interpolation ||
+             (t.m_timingEffect != TimingEffect::SCROLL &&
+              (myO2 && t.m_timingEffect == TimingEffect::STOP
+                   ? t.m_timingEffectParameter < 0
+                   : t.m_timingEffectParameter <= 0)) )
             return false;
         // 插值段必须先由用户转换，不在此暗中改变其采样定义。
         // 保留同刻事件的稳定顺序，BPM 查询会单独处理优先级。
@@ -90,19 +125,50 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
             initialTiming = t;
             break;
         }
-    // 映射只积分 BPM；STOP 是同一音乐位置的等待，不改变拍位。
-    const auto idealBeatAt = [&](double ms) {
-        // 所有协议位置来自统一 BPM 积分，不能把毫秒直接当拍号。
-        // 三位小节号只允许 000–999，越界时拒绝而非截断。
-        double beat = 0, last = 0, bpm = initial;
+    // 导出专用前导段只平移谱面起点，MYO2 的 WW 仍跟随音乐事件。
+    // 采用统一原点可在没有负小节号的前提下保留起播前的物件与事件。
+    double chartOrigin = 0;
+    if ( myO2 ) {
+        for ( const auto* t : timings )
+            chartOrigin = std::min(chartOrigin, t->m_timestamp);
+        for ( const auto& note : map.m_noteData.notes )
+            chartOrigin = std::min(chartOrigin, note.m_timestamp);
+        for ( const auto& hold : map.m_noteData.holds )
+            chartOrigin = std::min(chartOrigin, hold.m_timestamp);
+        for ( const auto& sample : map.m_audioSamples )
+            chartOrigin = std::min(chartOrigin, sample.effectiveTimestamp());
+        for ( const auto& cue : myO2Data->m_cues )
+            chartOrigin = std::min(chartOrigin, cue.m_time);
+    }
+    // 拍位映射只积分 BPM；STOP 是同一拍位的等待。预建红线锚点使密集谱面按
+    // 对数时间定位每个事件，不必为十万颗音符重复遍历全谱红线。
+    struct TempoAnchor {
+        double m_time{};  ///< 红线毫秒时间。
+        double m_beat{};  ///< 红线不含 STOP 的绝对拍位。
+        double m_bpm{};   ///< 从该位置开始生效的 BPM。
+    };
+    std::vector<TempoAnchor> idealTempos{ { chartOrigin, 0, initial } };
+    if ( myO2 ) {
         for ( const auto* t : timings ) {
-            if ( t->m_timestamp > ms ) break;
             if ( t->m_timingEffect != TimingEffect::BPM ) continue;
-            beat += (t->m_timestamp - last) * bpm / 60000;
-            last = t->m_timestamp;
-            bpm  = t->m_timingEffectParameter;
+            const auto&  previous = idealTempos.back();
+            const double beat =
+                previous.m_beat +
+                (t->m_timestamp - previous.m_time) * previous.m_bpm / 60000;
+            idealTempos.push_back(
+                { t->m_timestamp, beat, t->m_timingEffectParameter });
         }
-        return beat + (ms - last) * bpm / 60000;
+    }
+    const auto idealTempoAt = [&](double ms) -> const TempoAnchor& {
+        return *std::prev(std::upper_bound(
+            idealTempos.begin(),
+            idealTempos.end(),
+            ms,
+            [](double time, const auto& t) { return time < t.m_time; }));
+    };
+    const auto idealBeatAt = [&](double ms) {
+        const auto& t = idealTempoAt(ms);
+        return t.m_beat + (ms - t.m_time) * t.m_bpm / 60000;
     };
     // 使用全谱最低 BPM 将拍位误差约束在 0.01 毫秒内。
     // 毫秒量化的外部谱面通常不落在简单分数上，机器精度会制造巨型零串。
@@ -111,31 +177,10 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         if ( t->m_timingEffect == TimingEffect::BPM )
             minimumBpm = std::min(minimumBpm, t->m_timingEffectParameter);
     const double fractionTolerance = minimumBpm * 0.01 / 240000.0;
-    // 默认保留时轴；只有用户明确启用兼容选项才允许有损吸附。
-    const auto exportProperties =
-        map.m_metadata.map_properties.find(MapMetadataType::BMS);
-    // 兼容模式会移动红线并可能合并同槽事件，不能作为保真导出的默认值。
-    // 明确拒绝吸附冲突，不能靠删除物件令检查器归零。
-    const bool myO2Grid =
-        exportProperties != map.m_metadata.map_properties.end() &&
-        exportProperties->second.contains("myo2_grid") &&
-        exportProperties->second.at("myo2_grid") == "1";
-    // 标准 BMS 叠加同通道行，可用独立分母表达密集毫秒事件而不放大零串。
-    // MyO2 兼容模式必须合为一行，防止只读取最后一行的转换器丢物件。
-    // 显式关闭叠加行仍可用于只读末行的消费方，但不能为此放宽时间精度。
-    // 这条路径受相同文本预算约束；无法同时满足容量与精度时明确失败。
+    // MyO2 的普通/长条和 BPM 通道只能写入单行；标准 BMS 仍可用稀疏行。
     const bool compactRows =
-        !myO2Grid && (exportProperties == map.m_metadata.map_properties.end() ||
-                      !exportProperties->second.contains("compact_rows") ||
-                      exportProperties->second.at("compact_rows") != "0");
+        !myO2 && bmsProperty(map.m_metadata, "compact_rows") != "0";
     ExportTimeline timeline(initial, fractionTolerance);
-    // 固定两位资源编号容量为 36²，零编号不代表有效事件。
-    // 所有调用先限制为 1–1295，避免字符串表越界。
-    const auto encode = [](int value) {
-        constexpr std::string_view digits =
-            "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-        return std::string{ digits[value / 36], digits[value % 36] };
-    };
     // 目标文件直到全部对象通过验证才打开，失败不截断已有文件。
     // 声明与通道分开收集，最终先输出完整资源表。
     std::ostringstream header, body;
@@ -150,24 +195,109 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         std::replace(text.begin(), text.end(), '\r', ' ');
         return text;
     };
-    header << "#PLAYER " << (!pms && tracks > 8 ? 3 : 1) << "\n#TITLE "
-           << field(meta.title) << "\n#ARTIST " << field(meta.artist)
-           << "\n#MAKER " << field(meta.author) << "\n#PLAYLEVEL "
-           << field(meta.version) << "\n#BPM " << initial << "\n#LNTYPE 1\n";
-    // 相同音频文件只占用一个资源编号，Key 与 BGM 可以共享定义。
-    // 调用层须先把项目资源 ID 转成目标文件旁的相对路径。
+    // 站点转 XML 的扩展 BPM 定义只接受非指数十进制文本。
+    const auto bpmText = [myO2](double value) {
+        if ( !myO2 ) return fmt::format("{:.12g}", value);
+        auto text = fmt::format("{:.12f}", value);
+        text.erase(text.find_last_not_of('0') + 1);
+        if ( text.back() == '.' ) text.pop_back();
+        return text;
+    };
+    if ( !std::isfinite(initial) || (myO2 && initial < 1e-12) ) return false;
+    const auto player = bmsProperty(map.m_metadata, "myo2_player");
+    header << "#PLAYER ";
+    if ( myO2 && integer(player, 10) > 0 )
+        header << player;
+    else
+        header << (!pms && tracks > 8 ? 3 : 1);
+    header << "\n#TITLE " << field(meta.title) << "\n#ARTIST "
+           << field(meta.artist) << "\n#MAKER " << field(meta.author)
+           << "\n#PLAYLEVEL " << field(meta.version) << "\n#BPM "
+           << bpmText(initial) << "\n#LNTYPE 1\n";
+    const auto bank     = bmsProperty(map.m_metadata, MYO2_KEYSOUND);
+    const auto mode     = upper(bmsProperty(map.m_metadata, MYO2_AUDIO_MODE));
+    const auto mainPath = meta.song_file_hint.lexically_normal();
+    const AudioSampleEvent* main            = nullptr;
+    std::size_t             nonemptySamples = 0;
+    for ( const auto& sample : map.m_audioSamples ) {
+        if ( sample.m_audioResourceId.empty() ) continue;
+        ++nonemptySamples;
+        if ( !main && !mainPath.empty() &&
+             Config::utf8ToPath(sample.m_audioResourceId).lexically_normal() ==
+                 mainPath )
+            main = &sample;
+    }
+    const auto hasBinding = [](const auto& notes) {
+        return std::any_of(notes.begin(), notes.end(), [](const auto& note) {
+            return note.m_sampleBinding &&
+                   !note.m_sampleBinding->m_audioResourceId.empty();
+        });
+    };
+    const bool hasKeys =
+        hasBinding(map.m_noteData.notes) || hasBinding(map.m_noteData.holds);
+    // 整曲与附加音源共存时，MYO2 模式要求已有 ZIP；其余使用松散 STANDARD。
+    const bool wholeMusic =
+        myO2 && (mode == "MYO2" ||
+                 (mode.empty() && !mainPath.empty() &&
+                  (!bank.empty() || (!hasKeys && nonemptySamples <= 1))));
+    if ( myO2 ) {
+        if ( (!mode.empty() && mode != "MYO2" && mode != "STANDARD") ||
+             (wholeMusic &&
+              (mainPath.empty() ||
+               (bank.empty() &&
+                (hasKeys || nonemptySamples > (main ? 1U : 0U))))) ) {
+            XERROR("MyO2 整曲模式需要主音乐，额外 Key 音或自动音需 KEY 音包");
+            return false;
+        }
+        header << "#AUDIO_MODE " << (wholeMusic ? "MYO2" : "STANDARD") << '\n';
+        if ( wholeMusic )
+            header << "#BGM " << field(Config::pathToUtf8Generic(mainPath))
+                   << '\n';
+        if ( !bank.empty() )
+            header << "#KEYSOUND " << field(std::string(bank)) << '\n';
+        // RANK/TOTAL 保留来源字段，缺失时采用站点示例的保守默认值。
+        const auto rank =
+            decimal(bmsProperty(map.m_metadata, "myo2_rank")).value_or(3);
+        const auto total =
+            decimal(bmsProperty(map.m_metadata, "myo2_total")).value_or(4);
+        header << "#RANK " << rank << "\n#TOTAL " << total << '\n';
+        bool bga     = bmsProperty(map.m_metadata, "myo2_bga") == "1";
+        bool display = bmsProperty(map.m_metadata, "myo2_sp_note") == "1";
+        for ( const auto& cue : myO2Data->m_cues ) {
+            bga |= cue.m_code == integer("FF", 36);
+            display |= cue.m_code != integer("FF", 36);
+        }
+        if ( bga ) header << "#BGA_MODE 1\n";
+        if ( display ) header << "#SP_NOTE 1\n";
+        // 变长小节用单独的比例行；它们不参与事件网格压缩。
+        for ( std::size_t i = 0; i < myO2Data->m_ratios.size(); ++i )
+            if ( myO2Data->m_ratios[i] != 1 )
+                body << fmt::format(
+                    "#{:03}02:{:.17g}\n", i, myO2Data->m_ratios[i]);
+    }
+    // 资源号与实际路径去重。保留码即使未启用对应效果也不会发给普通音符。
     std::map<std::string, int> resources;
-    const auto                 resource = [&](const std::string& name) {
+    int                        nextResource = 0;
+    bool                       needsSilence = false;
+    const auto                 resource     = [&](const std::string& name) {
         if ( const auto it = resources.find(name); it != resources.end() )
             return it->second;
-        // 编号耗尽时返回无效零值，由 emit 统一使事务失败。
-        // 不回绕编号，否则后续定义会覆盖此前音效。
-        if ( resources.size() >= 1295 ) return 0;
-        const int id    = static_cast<int>(resources.size()) + 1;
-        resources[name] = id;
-        // 未绑定的 Note 仍需要非零通道编号，空 WAV 定义表示静音。
-        header << "#WAV" << encode(id) << ' ' << field(name) << '\n';
-        return id;
+        // 空绑定仍需非零判定码；STANDARD 松散音源路径必须指向真实采样。
+        do {
+            if ( ++nextResource > 1295 ) return 0;
+        } while ( myO2 && (myO2ControlCode(base36Code(nextResource)) ||
+                           base36Code(nextResource) == "BB") );
+        resources[name] = nextResource;
+        if ( !myO2 || !name.empty() )
+            header << "#WAV" << base36Code(nextResource) << ' ' << field(name)
+                   << '\n';
+        else if ( !wholeMusic && bank.empty() ) {
+            needsSilence = true;
+            header << "#WAV" << base36Code(nextResource) << ' '
+                   << Config::pathToUtf8(myO2SilencePath(path).filename())
+                   << '\n';
+        }
+        return nextResource;
     };
     // 限制总输出规模，防止高分辨率事件组合产生巨型文本。
     // 此计数在写磁盘之前执行，失败不会留下半份谱面。
@@ -179,14 +309,23 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         if ( value <= 0 ) return false;
         // 所有协议位置来自统一 BPM 积分，不能把毫秒直接当拍号。
         // 三位小节号只允许 000–999，越界时拒绝而非截断。
-        if ( !std::isfinite(beat) || beat < 0 || beat >= 4000 ) return false;
-        int measure = static_cast<int>(beat / 4);
-        // 每小节默认四拍；原变长小节已经展平到相同绝对拍位。
-        // 分数用于生成本行自己的格点，不强制全谱使用同一分辨率。
-        double fraction = beat / 4 - measure;
+        if ( !std::isfinite(beat) || beat < 0 ||
+             beat >= (myO2 ? myO2Data->m_starts.back() : 4000) )
+            return false;
+        int measure =
+            myO2 ? static_cast<int>(std::upper_bound(myO2Data->m_starts.begin(),
+                                                     myO2Data->m_starts.end(),
+                                                     beat) -
+                                    myO2Data->m_starts.begin()) -
+                       1
+                 : static_cast<int>(beat / 4);
+        // 变长小节改变分母对应的真实拍数，不能再按四拍分割同一绝对拍位。
+        double fraction = myO2 ? (beat - myO2Data->m_starts[measure]) /
+                                     (4 * myO2Data->m_ratios[measure])
+                               : beat / 4 - measure;
         // 允许精度范围内的整小节尾差进入下一小节，不生成越界槽位。
         // 两种行写出路径共用规范化，避免聚合与独立事件行边界不同。
-        if ( (myO2Grid || (ch != 8 && ch != 9)) &&
+        if ( (myO2 || (ch != 8 && ch != 9)) &&
              1.0 - fraction <= fractionTolerance ) {
             ++measure;
             fraction = 0;
@@ -200,11 +339,9 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     // 判定和 BGM 共用校正后的音乐时轴，不能分别使用两套拍位积分。
     // 兼容模式保留既有理想拍位，再按明确选择的有损网格处理。
     const auto emit = [&](double ms, int ch, int value) {
-        if ( !std::isfinite(ms) || ms < 0 ) return false;
+        if ( !std::isfinite(ms) || ms < chartOrigin ) return false;
         return emitBeat(
-            myO2Grid ? idealBeatAt(ms) : timeline.beatAt(ms, initial),
-            ch,
-            value);
+            myO2 ? idealBeatAt(ms) : timeline.beatAt(ms, initial), ch, value);
     };
     // 扩展 BPM 与 STOP 分属独立编号空间，不与 WAV 资源编号混用。
     // 数值精度与头部一致，避免倒数运算产生的伪小数进入协议声明。
@@ -212,37 +349,61 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     // 精确比较已验证有限的正值，不通过近似舍入合并不同速度。
     // 保留变速的原时序与编号，只让文件头承担已存在于零点的首条 BPM。
     std::map<double, int> bpmDefinitions;
+    std::map<double, int> scrollDefinitions;
+    std::map<double, int> stopDefinitions;
     int                   stopId = 0;
     double                bpm    = initial;
     for ( const auto* t : timings ) {
         // 先确定实际编码位置，再据此校正后续区间，禁止误差逐段累积。
         // STOP 只登记音乐位置，不把等待时长加进判定物件的拍位。
         const auto beat =
-            myO2Grid
-                ? std::optional<double>{ idealBeatAt(t->m_timestamp) }
-                : timeline.append(
-                      t->m_timestamp,
-                      t->m_timingEffect == TimingEffect::BPM
-                          ? std::optional<double>{ t->m_timingEffectParameter }
-                          : std::nullopt);
+            myO2 ? std::optional<double>{ idealBeatAt(t->m_timestamp) }
+                 : timeline.append(
+                       t->m_timestamp,
+                       t->m_timingEffect == TimingEffect::BPM
+                           ? std::optional<double>{ t->m_timingEffectParameter }
+                           : std::nullopt);
         if ( !beat ) return false;
-        if ( t->m_timingEffect == TimingEffect::BPM ) {
-            bpm             = t->m_timingEffectParameter;
+        if ( t->m_timingEffect == TimingEffect::SCROLL ) {
+            const auto rate       = t->m_timingEffectParameter;
+            const auto definition = scrollDefinitions.try_emplace(
+                rate, static_cast<int>(scrollDefinitions.size()) + 1);
+            const int id = definition.first->second;
+            if ( id > 1295 ) return false;
+            if ( definition.second )
+                header << "#SCROLL" << base36Code(id) << ' ' << rate << '\n';
+            if ( !emitBeat(*beat, SCROLL_CHANNEL, id) ) return false;
+        } else if ( t->m_timingEffect == TimingEffect::BPM ) {
+            bpm = t->m_timingEffectParameter;
+            if ( myO2 ) {
+                // 初始红线已由头部承担；整数变速可用原生十六进制 03。
+                if ( t == initialTiming && t->m_timestamp == chartOrigin )
+                    continue;
+                if ( bpm < 1e-12 ) return false;
+                if ( bpm <= 255 && bpm == std::floor(bpm) ) {
+                    if ( !emitBeat(*beat, 3, static_cast<int>(bpm)) )
+                        return false;
+                    continue;
+                }
+            }
+
             auto definition = bpmDefinitions.find(bpm);
             if ( definition == bpmDefinitions.end() ) {
                 // 只有首次遇到的速度消耗编号；满表后仍允许引用已有定义。
                 // 容量确实不足时在打开目标前拒绝，并留下可定位的原因。
-                if ( bpmDefinitions.size() >= 1295 ) {
+                if ( bpmDefinitions.size() >= 1295U ) {
                     XERROR(
-                        "BMS 导出：不同 BPM 定义超过 1295 种，位置 {} ms，BPM "
-                        "{}",
+                        "BMS 导出：不同 BPM 定义超过 {} 种，位置 {} ms，BPM {}",
+                        1295,
                         t->m_timestamp,
                         bpm);
                     return false;
                 }
-                const int id = static_cast<int>(bpmDefinitions.size()) + 1;
-                definition   = bpmDefinitions.emplace(bpm, id).first;
-                header << "#BPM" << encode(id) << ' ' << bpm << '\n';
+                const int  number = static_cast<int>(bpmDefinitions.size()) + 1;
+                const auto code   = base36Code(number);
+                definition =
+                    bpmDefinitions.emplace(bpm, integer(code, 36)).first;
+                header << "#BPM" << code << ' ' << bpmText(bpm) << '\n';
             }
             // 零点首红线已写入 #BPM，重复写 08 会在编辑器里叠出第二条红线。
             // 仍建立积分锚点与原定义编号，后续 BPM、STOP 和音符编码不变。
@@ -252,15 +413,24 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
             // 同刻红线决定 STOP 长度，与导入器及常见 BMS 播放器保持一致。
             // 即使输入 Timing 的同刻顺序不同，先寻找该拍最后的 BPM。
             // 输出标准 1/48 拍单位，而不是写入 MMM 内部等待秒数。
-            double stopBpm = bpm;
-            for ( const auto* other : timings )
-                if ( other->m_timestamp == t->m_timestamp &&
-                     other->m_timingEffect == TimingEffect::BPM )
-                    stopBpm = other->m_timingEffectParameter;
-            if ( ++stopId > 1295 ) return false;
-            header << "#STOP" << encode(stopId) << ' '
-                   << t->m_timingEffectParameter * stopBpm * 48 / 60 << '\n';
-            if ( !emitBeat(*beat, 9, stopId) ) return false;
+            double stopBpm = myO2 ? idealTempoAt(t->m_timestamp).m_bpm : bpm;
+            if ( !myO2 ) {
+                for ( const auto* other : timings )
+                    if ( other->m_timestamp == t->m_timestamp &&
+                         other->m_timingEffect == TimingEffect::BPM )
+                        stopBpm = other->m_timingEffectParameter;
+            }
+            const double units =
+                t->m_timingEffectParameter * (stopBpm / 60) * 48;
+            if ( !std::isfinite(units) ) return false;
+            // STOP 值以刻度去重，重复 09 行仍累计等待时长。
+            const auto definition =
+                stopDefinitions.try_emplace(units, stopId + 1);
+            if ( definition.second ) {
+                if ( ++stopId > 1295 ) return false;
+                header << "#STOP" << base36Code(stopId) << ' ' << units << '\n';
+            }
+            if ( !emitBeat(*beat, 9, definition.first->second) ) return false;
         }
     }
     // 普通音符使用 1x/2x，长条使用 5x/6x 的一对端点。
@@ -292,7 +462,23 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
             return false;
     // 自动采样统一写入 01，不把 BGM 错当玩家键位。
     // effectiveTimestamp 包含事件自身偏移，导出位置应与实际触发一致。
+    // WW 是整曲唯一的起播标记，绝不能同时再写一条同文件的 01。
+    if ( wholeMusic && !emit(main ? main->effectiveTimestamp() : 0,
+                             MYO2_CUE_CHANNEL,
+                             integer("WW", 36)) )
+        return false;
+    if ( myO2 ) {
+        for ( const auto& cue : myO2Data->m_cues )
+            if ( !emit(cue.m_time, MYO2_CUE_CHANNEL, cue.m_code) ) return false;
+        // 歌曲提示可以来自仅登记主音乐、尚未显式放置自动采样的旧谱面。
+        if ( !wholeMusic && !mainPath.empty() && !main && bank.empty() &&
+             !emit(0, 1, resource(Config::pathToUtf8Generic(mainPath))) )
+            return false;
+    }
     for ( const auto& sample : map.m_audioSamples ) {
+        if ( myO2 && (sample.m_audioResourceId.empty() ||
+                      (wholeMusic && &sample == main)) )
+            continue;
         if ( sample.m_volume != 1.0F )
             XWARN("BMS 导出：自动采样音量恢复为 100，位置 {} ms",
                   sample.m_timestamp);
@@ -304,13 +490,40 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     // 标准 BMS 允许同小节同通道多行叠加。资源包可以选择更短的稀疏行，
     // 避免保留离拍物件时强迫整小节共享巨大的分母。普通另存为仍保留单行
     // 有损兼容必须明确选择，不能靠删除物件消除吸附冲突。
-    if ( myO2Grid && !quantizeMyO2Rows(rows) ) {
+    if ( myO2Grid &&
+         !quantizeMyO2Rows(rows, SCROLL_CHANNEL, MYO2_CUE_CHANNEL) ) {
         XERROR(
             "MyO2 "
             "兼容导出失败：吸附后物件或长条端点重叠，或超出小节范围；请调整冲突"
             "物件后重试");
         return false;
     }
+    if ( myO2 ) {
+        if ( !validateMyO2Rows(rows,
+                               *myO2Data,
+                               bpmDefinitions,
+                               stopDefinitions,
+                               initial,
+                               wholeMusic) ) {
+            XERROR(
+                "MyO2 兼容导出失败：音符重叠、变速位置冲突或演奏时间超出规范");
+            return false;
+        }
+        placeMyO2Cues(rows, tracks);
+        // 第七轨空着时声明一行空格，MMM 可识别键数，站点仍按选定模式解析。
+        if ( tracks == 7 &&
+             std::none_of(rows.begin(), rows.end(), [](const auto& row) {
+                 return row.first.second == 0x18 || row.first.second == 0x58;
+             }) )
+            body << "#00018:00\n";
+    }
+    const auto rowChannel = [](int ch) {
+        return ch == SCROLL_CHANNEL ? std::string("SC")
+                                    : fmt::format("{:02X}", ch);
+    };
+    const auto encodeCell = [myO2](int ch, int value) {
+        return myO2 ? encodeMyO2Cell(ch, value) : base36Code(value);
+    };
     // 兼容位置已严格量化；序列化不能再用毫秒预算近似为别的分母。
     // 否则网格上的点也可能被编码成带亚 tick 残差的离拍位置。
     // 同小节同通道寻找能够同时表达所有事件的最短格点。
@@ -328,9 +541,11 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         // 音乐时轴已确定实际拍位，序列化不能再次近似这些 BPM/STOP。
         // 判定与 BGM 仍使用局部预算，整体误差由前面的逐段校正约束。
         const double rowTolerance =
-            myO2Grid || position.second == 8 || position.second == 9
+            myO2Grid ||
+                    (!myO2 && (position.second == 8 || position.second == 9))
                 ? 1e-12
-                : fractionTolerance;
+                : fractionTolerance /
+                      (myO2 ? myO2Data->m_ratios[position.first] : 1);
         int denominator = 1;
         for ( ; denominator <= 65536; ++denominator ) {
             const bool fits = std::all_of(
@@ -344,7 +559,8 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         // 独立事件选择最短的有效分母，不把它吸附到用户未选择的拍线。
         // 比较真实输出字节数，只有严格更短或公共格点不存在时才拆行。
         // 数值误差预算仍是原有 0.01ms，不通过放宽精度换取更小文件。
-        if ( compactRows || position.second == 1 || position.second == 9 ) {
+        if ( compactRows || position.second == 1 || position.second == 9 ||
+             position.second == SCROLL_CHANNEL ) {
             // 比较成本前仅存整数位置，不提前为每个候选分配大段零串。
             // 选择公共行或独立行只改变文本表示，不改变通道和采样身份。
             // 同一行内真实离拍事件仍按既有误差预算表达，不强制取整拍。
@@ -369,17 +585,18 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
                                        return a.first == b.first;
                                    }) != events.end();
             if ( position.second == 1 || position.second == 9 ||
-                 repeatedTiming || denominator > 65536 ||
-                 sparseBytes < denominator * 2U + 9U ) {
+                 position.second == SCROLL_CHANNEL || repeatedTiming ||
+                 denominator > 65536 || sparseBytes < denominator * 2U + 9U ) {
                 outputBytes += sparseBytes;
                 if ( outputBytes > 64U * 1024U * 1024U ) return false;
                 for ( const auto& event : sparse ) {
                     std::string data(event[1] * 2U, '0');
-                    data.replace(event[0] * 2U, 2, encode(event[2]));
+                    data.replace(event[0] * 2U,
+                                 2,
+                                 encodeCell(position.second, event[2]));
                     body << '#' << std::setfill('0') << std::setw(3) << std::dec
-                         << position.first << std::setw(2) << std::hex
-                         << std::uppercase << position.second << ':' << data
-                         << '\n';
+                         << position.first << rowChannel(position.second) << ':'
+                         << data << '\n';
                 }
                 continue;
             }
@@ -410,7 +627,7 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
             // 边界量化不能生成越过本行的写入；冲突音符也不能被静默覆盖。
             // 同拍 BPM 沿用声明顺序，最后一条定义决定后续积分速度。
             if ( slot < 0 || slot >= denominator ) return false;
-            const auto code = encode(value);
+            const auto code = encodeCell(position.second, value);
             const auto old  = data.substr(slot * 2U, 2);
             // 相同资源的重复声明可以合并；不同资源争用同一键位无法无损表示。
             // BGM 复音已由独立 01 行表达，不适用玩家键位的冲突处理。
@@ -419,14 +636,18 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
             data.replace(slot * 2U, 2, code);
         }
         body << '#' << std::setfill('0') << std::setw(3) << std::dec
-             << position.first << std::setw(2) << std::hex << std::uppercase
-             << position.second << ':' << data << '\n';
+             << position.first << rowChannel(position.second) << ':' << data
+             << '\n';
     }
     // 最后一次提交只进行文本写入；good 同时检查打开和写入状态。
     // 不声称资源已打包，此入口只写 BMS 及其相对音频引用。
     // 输出流失败通过返回值传播，禁止在无异常构建中引入异常处理。
     // 二进制打开避免平台自动插入换行，结果在各平台一致。
     // 数值流使用经典 locale，系统小数逗号不会污染协议。
+    if ( needsSilence && !ensureMyO2Silence(myO2SilencePath(path)) ) {
+        XERROR("MyO2 静音音源无法写入或目标文件与已有资源冲突");
+        return false;
+    }
     std::ofstream output(path, std::ios::binary);
     // 分隔行也是部分旧播放器定位主数据区的入口，不能只输出空行。
     output << header.str() << "\n*---------------------- MAIN DATA FIELD\n"
