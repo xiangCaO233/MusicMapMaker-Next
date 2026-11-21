@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <deque>
 #include <future>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -80,6 +81,13 @@ struct AudioManager::SoundEffectLoadingState {
     /// @brief 已登记音效描述表；登记本身不创建解码数据或混音节点。
     std::unordered_map<std::string, RegisteredSoundEffect>
         m_registeredSoundEffects;
+
+    /// @brief 待轮询的按需混音池；弱引用不会让卸载后的 PCM 继续驻留。
+    std::list<std::weak_ptr<SoundEffectPool>> m_boundMixers;
+
+    /// @brief 串行化资源加载的插入与轮询的链表轮转，锁内不操作混音图。
+    /// @warning 轮询用 try_lock；锁内只移动弱引用或取生命周期快照。
+    std::mutex m_boundMixersMutex;
 
     /// @brief 等待提交到后台线程池的物件绑定音效请求。
     std::deque<QueuedSoundEffectLoad> m_queuedSoundEffectLoads;

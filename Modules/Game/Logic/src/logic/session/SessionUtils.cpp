@@ -1359,6 +1359,8 @@ void syncHitIndex(SessionContext& ctx)
                                    ctx.animateTime, ::MMM::NoteType::NOTE });
     ctx.nextHitIndex        = std::distance(ctx.hitEvents.begin(), it);
     ctx.nextPredictHitIndex = ctx.nextHitIndex;
+    // 跳转或事件表重建后，上一轮为其它时间窗记录的预约不再有效。
+    ctx.m_waitingKeySoundCount = 0;
     // 预测和预读各自随后向前推进，重新定位时必须先归到同一事件边界，
     // 否则向后 seek 后可能沿用旧的远端下标而漏掉需要重新排定的内容。
     ctx.nextBoundSoundPrefetchIndex = ctx.nextHitIndex;

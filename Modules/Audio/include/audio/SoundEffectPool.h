@@ -77,6 +77,14 @@ public:
     /// @brief 获取该音效池的局部混音器输出节点，供外部路由
     std::shared_ptr<ice::MixBus> getMixer() const;
 
+    /// @brief 将绑定采样改为仅在预约或播放期间接入打击音效总线。
+    /// @param mixer 生命周期覆盖本池的上层混音总线。
+    void useOnDemandMixer(ice::MixBus& mixer);
+
+    /// @brief 在所有实例完成释放后断开混音边，保留预解码采样与可复用实例。
+    /// @warning 低频控制轮询；尝试获取池锁，争用时由下一轮重试。
+    void retireIdleMixer();
+
     /// @brief 预分配节点 (必须在构造后调用一次)
     /// @param count 初始数量
     void init(int count = 8);
@@ -161,6 +169,13 @@ private:
     /// @brief 从池中取出一个可播放实例，必要时扩容。
     std::shared_ptr<SFXPlayInstance> acquireInstance();
 
+    /// @brief 发布最近实例并保证它在上层图中可被拉取。
+    /// @warning 仅在播放提交时执行；首次预约才更新混音快照。
+    void publishPlayback(const std::shared_ptr<SFXPlayInstance>& instance);
+
+    /// @brief 检查所有并发实例是否已经结束，调用方持有池控制锁。
+    [[nodiscard]] bool allInstancesIdle() const noexcept;
+
     /// @brief 与自动采样时间线共享的已预处理 PCM。
     std::shared_ptr<const PreparedTimelineAudio> m_audio;
 
@@ -170,6 +185,11 @@ private:
     const KeySoundControlBank* m_keySoundControls{ nullptr };
 
     std::shared_ptr<ice::MixBus> m_localMixer;
+
+    /// @brief 绑定采样的非拥有上层总线，由 AudioManager 先清池后销毁总线。
+    ice::MixBus* m_onDemandMixer{ nullptr };
+    /// @brief 当前池是否接入上层总线，与连接修改一起受 m_mtx 保护。
+    bool m_onDemandMixerConnected{ false };
 
     std::vector<std::shared_ptr<SFXPlayInstance>> m_allInstances;
     std::shared_ptr<SFXPlayInstance>              m_latestInstance;

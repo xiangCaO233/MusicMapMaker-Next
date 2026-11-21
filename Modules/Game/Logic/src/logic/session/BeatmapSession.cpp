@@ -177,9 +177,60 @@ void prefetchBoundNoteSounds(SessionContext& ctx)
         // 没有绑定音效的事件也计入检查预算，避免稀疏绑定导致无界扫描。
         ++examinedCount;
     }
+}
 
-    // 即使本轮没有新增请求，也继续处理先前排队的加载工作。
-    audioManager.updateQueuedSoundEffectLoads();
+/// @brief 提交已就绪的键音，尚未解码的绑定音等待资源泵接纳。
+/// @return 已提交或按听感设置忽略时返回 true；需要稍后重试时返回 false。
+/// @warning 逻辑预约路径；只读准备状态，禁止同步探测或解码资源。
+/// @details 此处只判断池是否可供预约，起播仍使用原始物件时间和现有路由规则。
+/// 只为绑定音效保留重试机会；缺失的皮肤常驻音效由皮肤加载流程处理。
+bool tryScheduleHitSound(SessionContext& ctx, std::size_t index,
+                         const Config::EditorConfig& config)
+{
+    const auto& event = ctx.hitEvents[index];
+    if ( !System::HitFXSystem::shouldScheduleHitAudio(
+             event, config.settings.sfxConfig) )
+        return true;
+    if ( event.sampleBinding &&
+         !event.sampleBinding->m_audioResourceId.empty() &&
+         !Audio::AudioManager::instance().isSoundEffectLoaded(
+             event.sampleBinding->m_audioResourceId) )
+        return false;
+    // 重试也走同一触发入口，继续应用当前的轨道静音和音效增益。
+    ctx.hitFXSystem.triggerAudio(
+        event, ctx.trackCount, ctx.draftTrackCount, config);
+    return true;
+}
+
+/// @brief 首次预约失败时记录前瞻窗口索引，不阻塞后续已就绪的键音。
+/// @warning 逻辑预约路径；等待空间固定，不让高密度谱面扩大重试开销。
+/// @details 主游标照常向前，已成功提交的音符不会因别的资源缺失而再次进入前瞻。
+void scheduleHitSound(SessionContext& ctx, std::size_t index,
+                      const Config::EditorConfig& config)
+{
+    if ( !tryScheduleHitSound(ctx, index, config) &&
+         ctx.m_waitingKeySoundCount < ctx.m_waitingKeySounds.size() )
+        ctx.m_waitingKeySounds[ctx.m_waitingKeySoundCount++] = index;
+}
+
+/// @brief 解码轮询后重试尚未到拍的键音，不补播已过去的音符。
+/// @warning 随低频解码轮询执行；只检查固定容量的前瞻索引。
+/// @details 失败项保留原顺序，输出写入的前缀始终落在已检查的输入区间内。
+/// 切换事件表或提交定位会重置计数，避免把旧时间线的解码结果误当成新预约。
+void retryWaitingHitSounds(SessionContext&             ctx,
+                           const Config::EditorConfig& config)
+{
+    std::size_t remaining = 0;
+    for ( std::size_t i = 0; i < ctx.m_waitingKeySoundCount; ++i ) {
+        const auto index = ctx.m_waitingKeySounds[i];
+        // 事件索引随跳转重置；仍须排除本轮已越过起播点的声音。
+        // 已过拍的键音直接过期，避免批量解码完成时将先前的漏音叠到当前拍。
+        if ( ctx.hitEvents[index].timestamp >= ctx.animateTime &&
+             !tryScheduleHitSound(ctx, index, config) ) {
+            ctx.m_waitingKeySounds[remaining++] = index;
+        }
+    }
+    ctx.m_waitingKeySoundCount = remaining;
 }
 
 /// @brief 规范化时间线缩放倍率，避免无效配置进入视觉动画。
@@ -1169,19 +1220,6 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
             std::chrono::steady_clock::now().time_since_epoch())
             .count();
 
-    const bool shouldPrefetchBoundSounds = isActiveSession ||
-                                           m_ctx->isPlaying ||
-                                           m_ctx->isAudioTimelineSyncFollower;
-    // 同音轨跟随者也需要准备绑定音效资源，但后续声音调度仍只由播放源执行。
-    // 活动画布暂停时也预读附近音效，后台静止会话不重复推进加载队列。
-    if ( shouldPrefetchBoundSounds &&
-         currentSysTime >= m_ctx->nextBoundSoundPrefetchSystemTime ) {
-        prefetchBoundNoteSounds(*m_ctx);
-        m_ctx->nextBoundSoundPrefetchSystemTime =
-            // 跳过错过的周期，不因一次长帧连续补跑多轮预读。
-            currentSysTime + BOUND_SOUND_PREFETCH_INTERVAL_SECONDS;
-    }
-
     bool isInteracting = m_ctx->isDragging || m_ctx->isSelecting ||
                          // 未提交的笔刷和擦除同样是交互，不只看通用拖拽标志。
                          m_ctx->brushState.isActive ||
@@ -1266,7 +1304,9 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     // 播放源和同音轨跟随者都读取传输时钟，但只有播放源负责调度声音。
     bool isPlaybackClockActive =
         m_ctx->isPlaying || m_ctx->isAudioTimelineSyncFollower;
-    bool playbackJumped = false;
+    const bool scrubReleased   = m_ctx->m_seekScrubReleased;
+    m_ctx->m_seekScrubReleased = false;
+    bool playbackJumped        = false;
     // 是否发生跳转要保留到发布阶段，保证新位置不受普通快照限频拖延。
     if ( isPlaybackClockActive ) {
         // 命中表可被本轮命令修改，在推进两个事件游标前确保缓存有效。
@@ -1300,9 +1340,11 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
         std::vector<System::HitFXSystem::HitEvent> triggeredEvents;
         // 本轮视觉事件与提前预约音频不是同一列表，预播放不能提前点亮命中特效。
 
-        bool isJump =
+        const bool scheduleHitSounds =
+            m_ctx->isPlaying && !m_ctx->isSeekScrubbing;
+        const bool isJump =
             // 回退、较大跨越、首轮播放或时钟失效都不视作正常连续命中区间。
-            !isPlaybackClockActive ||
+            !isPlaybackClockActive || scrubReleased ||
             (std::abs(m_ctx->animateTime - previousAnimateTime) > 0.2) ||
             (m_ctx->animateTime < previousAnimateTime) || !m_wasPlaying;
         playbackJumped = isJump;
@@ -1311,8 +1353,9 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
             // 清除旧状态后重建当前位置，不能把 Seek
             // 跨越的全部音符当作连续击中。
             // 跳转不补播跨过区间的事件，清除旧特效后从新位置重新建立状态。
-            if ( m_ctx->isPlaying ) {
+            if ( scheduleHitSounds && !scrubReleased ) {
                 // 全局预约音效只由播放源清理，跟随画布不能取消源画布的声音。
+                // 拖动首帧和松手已由传输提交撤销旧预约，各中间位置不再重置。
                 Audio::AudioManager::instance().clearAllScheduledSoundEffects();
             }
             m_ctx->hitFXSystem.clearActiveEffects();
@@ -1323,7 +1366,7 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                 m_ctx->hitEvents,
                 effectiveConfig);
 
-            if ( m_ctx->isPlaying ) {
+            if ( scheduleHitSounds ) {
                 // 跳转后重建前方音效窗口，不能只等待下一轮新增事件进入窗口。
                 // 预测窗口只用于预约，不通过阻塞等待窗口结束来同步音画。
                 double predictWindow = 0.2;
@@ -1335,17 +1378,16 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                         m_ctx->hitEvents[m_ctx->nextPredictHitIndex];
                     // 过滤当前播放点之前的事件，不补播已经跨过的音符。
                     if ( ev.timestamp >= m_ctx->animateTime ) {
-                        m_ctx->hitFXSystem.triggerAudio(ev,
-                                                        m_ctx->trackCount,
-                                                        m_ctx->draftTrackCount,
-                                                        effectiveConfig);
+                        scheduleHitSound(*m_ctx,
+                                         m_ctx->nextPredictHitIndex,
+                                         effectiveConfig);
                     }
                     m_ctx->nextPredictHitIndex++;
                 }
             }
         } else {
             // 连续播放只处理窗口新增长的尾部，避免重复预约已经覆盖的音效。
-            if ( m_ctx->isPlaying ) {
+            if ( scheduleHitSounds ) {
                 double predictWindow = 0.2;
                 while (
                     m_ctx->nextPredictHitIndex < m_ctx->hitEvents.size() &&
@@ -1356,10 +1398,9 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                     if ( ev.timestamp >
                          (previousAnimateTime + predictWindow) ) {
                         // 左边界取上一轮预测窗口末端，不是上一轮实际播放位置。
-                        m_ctx->hitFXSystem.triggerAudio(ev,
-                                                        m_ctx->trackCount,
-                                                        m_ctx->draftTrackCount,
-                                                        effectiveConfig);
+                        scheduleHitSound(*m_ctx,
+                                         m_ctx->nextPredictHitIndex,
+                                         effectiveConfig);
                     }
                     m_ctx->nextPredictHitIndex++;
                 }
@@ -1394,6 +1435,25 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
         if ( std::abs(m_ctx->animateTime - previousAnimateTime) > 0.0001 ) {
             SessionUtils::syncHitIndex(*m_ctx);
         }
+    }
+
+    // 只在播放位置确定后预读。拖动时只接纳已提交的任务并回收闲置混音边，
+    // 避免扫过全曲时不断为中间落点创建解码工作。
+    // 按实际播放位置而非插值前的旧位置开始预读，向后跳转也从正确的命中窗口恢复。
+    // 释放当轮绕过预读节流；解码仍走后台队列，不等待结果来推进视觉或主音轨。
+    // 同音轨跟随会话也能准备所需资源，但只有活动来源提交可播放的预约。
+    const bool shouldPumpBoundSounds = isActiveSession || m_ctx->isPlaying ||
+                                       m_ctx->isAudioTimelineSyncFollower;
+    if ( shouldPumpBoundSounds &&
+         (scrubReleased ||
+          currentSysTime >= m_ctx->nextBoundSoundPrefetchSystemTime) ) {
+        if ( !m_ctx->isSeekScrubbing ) prefetchBoundNoteSounds(*m_ctx);
+        Audio::AudioManager::instance().updateQueuedSoundEffectLoads();
+        // 本轮接纳的冷采样可赶上未来时间点；仍未到位的预约留到下次轮询。
+        if ( m_ctx->isPlaying && !m_ctx->isSeekScrubbing )
+            retryWaitingHitSounds(*m_ctx, effectiveConfig);
+        m_ctx->nextBoundSoundPrefetchSystemTime =
+            currentSysTime + BOUND_SOUND_PREFETCH_INTERVAL_SECONDS;
     }
 
     m_wasPlaying = isPlaybackClockActive;

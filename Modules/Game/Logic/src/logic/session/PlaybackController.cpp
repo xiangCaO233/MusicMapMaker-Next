@@ -305,8 +305,8 @@ void PlaybackController::updateMetronome(bool playbackJumped)
     const auto& config = m_ctx.lastConfig.settings.sfxConfig;
     // 后台同步跟随画布不是音频播放源，不能重复发出同一节拍。
     // 配置关闭和播放暂停都要撤销本池预约，并使时间游标失效。
-    if ( !m_ctx.isActiveSession || !m_ctx.isPlaying || !m_ctx.currentBeatmap ||
-         !config.enableEditorMetronome ) {
+    if ( !m_ctx.isActiveSession || !m_ctx.isPlaying || m_ctx.isSeekScrubbing ||
+         !m_ctx.currentBeatmap || !config.enableEditorMetronome ) {
         if ( m_metronomeWasActive && m_ctx.isActiveSession ) {
             // 后台旧会话不能停止新活动会话共用的全局节拍器音效池。
             // 活动源关闭时只停止编辑器专属池，不触及键声或 BPM 工具。
@@ -644,6 +644,10 @@ void PlaybackController::handleCommand(const CmdSeek& cmd)
         }
     }
     // 记录本次手势阶段供下一条命令判定，结束帧会解除连续更新模式。
+    if ( m_ctx.isSeekScrubbing && !cmd.isScrubbing ) {
+        // 松手和最后一次拖动可以落在同一时间，仍须重新预约最终位置的键音。
+        m_ctx.m_seekScrubReleased = true;
+    }
     m_ctx.isSeekScrubbing = cmd.isScrubbing;
     // 跳转不沿用旧的瞬时特效；正在播放的跨点长条需要单独恢复。
     SessionUtils::syncHitIndex(m_ctx);

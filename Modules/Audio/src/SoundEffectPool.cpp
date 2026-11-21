@@ -543,6 +543,14 @@ public:
             std::memory_order_relaxed);
     }
 
+    /// @brief 查询音频线程是否已归还实例，包含预约、尾音和停止确认。
+    /// @warning 控制侧 acquire 与回调归还实例的 release 配对，不等待回调。
+    [[nodiscard]] bool isIdle() const noexcept
+    {
+        return m_playbackState.load(std::memory_order_acquire) ==
+               PlaybackState::Idle;
+    }
+
     /// @brief 为下一次播放配置双声道包络和预计预定等待帧数。
     /// @param envelope 本次播放的左右声道增益包络。
     /// @param scheduledDelayFrames 当前参考位置到目标播放位置的预计帧数。
@@ -872,6 +880,10 @@ SoundEffectPool::SoundEffectPool(
 SoundEffectPool::~SoundEffectPool()
 {
     std::lock_guard<std::mutex> lock(m_mtx);
+    if ( m_onDemandMixerConnected ) {
+        // 父总线可以比池存活更久，析构也要移除自己接入的边。
+        m_onDemandMixer->remove_source(m_localMixer);
+    }
     for ( auto& instance : m_allInstances ) {
         // 先从池总线移除实例总线，再断开实例内部包络节点。
         if ( m_localMixer ) {
@@ -888,6 +900,52 @@ SoundEffectPool::~SoundEffectPool()
 std::shared_ptr<ice::MixBus> SoundEffectPool::getMixer() const
 {
     return m_localMixer;
+}
+
+/// @brief 设置按需接入的父总线，资源从普通池升级时继续已有播放。
+void SoundEffectPool::useOnDemandMixer(ice::MixBus& mixer)
+{
+    std::lock_guard lock(m_mtx);
+    m_onDemandMixer = &mixer;
+    if ( !allInstancesIdle() ) {
+        // 升级可能发生在资源试听中，保留原有 voice 及其播放进度。
+        m_onDemandMixer->add_source(m_localMixer);
+        m_onDemandMixerConnected = true;
+    }
+}
+
+/// @brief 查询所有实例是否可复用，尾音排空或停止确认前仍留在混音图。
+bool SoundEffectPool::allInstancesIdle() const noexcept
+{
+    return std::ranges::all_of(m_allInstances, [](const auto& instance) {
+        return instance->stereoGainNode->isIdle();
+    });
+}
+
+/// @brief 从实时图回收无声池；保留本地实例，使下次预约能直接复用。
+/// @warning 控制轮询路径；回调通过已有 MixBus 快照跨越在途音频块。
+void SoundEffectPool::retireIdleMixer()
+{
+    std::unique_lock lock(m_mtx, std::try_to_lock);
+    if ( !lock || !m_onDemandMixerConnected || !allInstancesIdle() ) return;
+
+    // 预约预留和重新接入也持有同一把锁，断开不会丢掉已提交的预约。
+    m_onDemandMixer->remove_source(m_localMixer);
+    m_onDemandMixerConnected = false;
+}
+
+/// @brief 发布播放控制视图，并将离线的池接入打击音效总线。
+/// @warning 播放提交路径；常驻音效与已连接的池不更新混音快照。
+void SoundEffectPool::publishPlayback(
+    const std::shared_ptr<SFXPlayInstance>& instance)
+{
+    std::lock_guard lock(m_mtx);
+    m_latestInstance = instance;
+    if ( m_onDemandMixer && !m_onDemandMixerConnected ) {
+        // 源帧位置和包络已发布，首次接入后的回调可以直接消费完整预约。
+        m_onDemandMixer->add_source(m_localMixer);
+        m_onDemandMixerConnected = true;
+    }
 }
 
 /// @brief 创建并连接一个尚未预留的播放实例。
@@ -1007,11 +1065,7 @@ void SoundEffectPool::play(float volumeFactor, double pitchSemitones)
         }
         node->play();
         // play 是 release 发布点，必须位于所有实例参数配置之后。
-        {
-            std::lock_guard<std::mutex> lock(m_mtx);
-            // latest 只服务控制查询，不参与实例所有权或调度选择。
-            m_latestInstance = instance;
-        }
+        publishPlayback(instance);
     }
 }
 
@@ -1062,10 +1116,7 @@ void SoundEffectPool::playScheduled(
         }
         node->play();
         // 最后发布 source 播放许可，回调才能看到已配置 provider 与包络。
-        {
-            std::lock_guard<std::mutex> lock(m_mtx);
-            m_latestInstance = instance;
-        }
+        publishPlayback(instance);
     }
 }
 
@@ -1112,10 +1163,7 @@ void SoundEffectPool::playScheduledRelative(
         }
         node->play();
         // 所有配置完成后再发布 Playing，避免回调观察半配置实例。
-        {
-            std::lock_guard<std::mutex> lock(m_mtx);
-            m_latestInstance = instance;
-        }
+        publishPlayback(instance);
     }
 }
 
@@ -1130,6 +1178,8 @@ void SoundEffectPool::stopAll()
 
     for ( auto& instance : m_allInstances ) {
         if ( instance->stereoGainNode ) {
+            // 已断开的空闲池没有回调确认，不能把 Idle 写成 Stopping。
+            if ( instance->stereoGainNode->isIdle() ) continue;
             // 先阻止下游继续拉取，随后再重置上游源状态。
             instance->stereoGainNode->deactivate();
         }
