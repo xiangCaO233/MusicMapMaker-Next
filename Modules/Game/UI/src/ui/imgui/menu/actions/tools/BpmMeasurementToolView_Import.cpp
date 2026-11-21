@@ -324,19 +324,8 @@ bool BpmMeasurementToolView::importSelectedBeatmapTimings()
     if ( !option->m_error.empty() ) {
         return fail(option->m_error);
     }
-    // 完成上一笔编辑，再捕获导入前状态；失败到这里之前都不产生历史。
-    finishMeasurementHistoryGesture();
     m_importError.clear();
-    beginMeasurementHistoryGesture();
-    m_timingSegments = std::move(option->m_segments);
-    // 导入保留原始时间精度与范围，不经过手动拖动专用的限幅／合并规则。
-    // 首段兼容字段与完整段落一起进入历史快照，避免显示 BPM 与数据不一致。
-    // 音频时长只是当前视图范围，不是来源红线是否有效的判据。
-    syncPrimaryTimingFieldsFromSegments();
-    // 旧节拍器调度引用原有段落，替换后从当前视野重新计算下一个拍点。
-    // 此处不启动音频，也不改变播放位置。
-    resetMetronomeScheduler(m_viewCenter);
-    finishMeasurementHistoryGesture();
+    replaceImportedTimingSegments(std::move(option->m_segments));
     m_statusText =
         TR_FMT("ui.tools.bpm_measure.import_done", m_timingSegments.size());
     return true;
@@ -443,5 +432,21 @@ void BpmMeasurementToolView::renderImportTimingPopup(UIManager* sourceManager)
         ImGui::EndPopup();
     }
     ImGui::PopStyleVar();
+}
+/// @brief 为谱面和独立文件导入共用可撤销的段落替换操作。
+/// @param segments 已验证且按时间升序的独立段落列表。
+/// @details 调用方应先验证全部数据；此处不应用拖动时的限幅或归并规则。
+/// 历史记录捕获修改前后的兼容首段字段和完整变速列表，支持一次撤销。
+void BpmMeasurementToolView::replaceImportedTimingSegments(
+    std::vector<BpmTimingSegment> segments)
+{
+    // 结束前一次连续编辑，使撤销导入可以精确回到已有草稿。
+    finishMeasurementHistoryGesture();
+    beginMeasurementHistoryGesture();
+    m_timingSegments = std::move(segments);
+    syncPrimaryTimingFieldsFromSegments();
+    // 旧调度引用原有段落，从当前视野重新计算，不改动播放位置。
+    resetMetronomeScheduler(m_viewCenter);
+    finishMeasurementHistoryGesture();
 }
 }  // namespace MMM::UI

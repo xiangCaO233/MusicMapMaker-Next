@@ -1,7 +1,15 @@
 /// @file BpmBeatmapImportTest.cpp
-/// @brief 以真实项目文件、打开会话和确认弹窗验证关联谱面红线导入。
+/// @brief 验证测量工具与谱面、独立段落文件和新建向导的交换。
+/// @details 以真实项目资源提供持久音轨身份，导入、历史和文件处理使用生产实现。
+/// 关联谱面导入分别覆盖磁盘与活动会话；新建向导检查尚未提交的 BPM 草稿。
+/// 独立文件场景模拟投放事件，先验证窗口命中，再读回输出核对时域转换。
+#include "audio/AudioMarkerService.h"
+#include "config/AppConfig.h"
 #include "config/Utf8Path.h"
+#include "config/VisualConfig.h"
 #include "config/skin/translation/Translation.h"
+#include "event/core/EventBus.h"
+#include "event/input/glfw/GLFWDropEvent.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
@@ -14,7 +22,12 @@
 #include "mmm/sample/AudioSample.h"
 #include "mmm/timing/TimingEffect.h"
 #include "mmm/timing/TimingInterpolation.h"
+#include "runtime/AppThreadPool.h"
+#include "ui/UIManager.h"
+#include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
+#include "ui/layout/CLayWrapperCore.h"
+#include "ui/project/ProjectDropRouter.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <entt/entity/registry.hpp>
 #include <imgui.h>
@@ -103,6 +116,216 @@ struct BpmBeatmapImportTestAccess {
     {
         if ( !value ) XERROR("BPM import: {}", label);
         passed &= value;
+    }
+
+    /// @brief 验证独立工具导出使用相同主音轨，并保留全部测量点。
+    /// @param tool 已通过谱面导入建立三段高精度红线的测量工具。
+    /// @param passed 收集错误，不因为向导断言失败跳过文件导入测试。
+    /// @details 尚无向导回调，是从工具菜单独立打开的路径。
+    /// 测试同时检查音频 ID 与相对路径，二者在向导创建命令中各有用途。
+    /// 读取草稿字段而非检测弹窗是否可见，保证测量值确实被采用。
+    static void checkWizard(BpmMeasurementToolView& tool, bool& passed)
+    {
+        // 不触发保存和项目创建，验证用户点创建之前只改变向导草稿。
+        NewBeatmapWizard wizard;
+        const auto       timings = tool.makeMeasuredTimings();
+        check(!wizard.openWithMeasuredTimings("missing", timings) &&
+                  !wizard.m_isOpen,
+              "wizard rejects missing resource",
+              passed);
+        // 从真实工具生成的毫秒数据回填向导，防止重复乘除 1000。
+        check(
+            wizard.openWithMeasuredTimings("song-a", timings) &&
+                wizard.m_isOpen && wizard.m_selectedAudioTrackId == "song-a" &&
+                wizard.m_selectedAudioPath == "song-a.wav" &&
+                wizard.m_measuredTimings.size() == 3 &&
+                std::abs(wizard.m_measuredTimings[1].m_timestamp - 123.456789) <
+                    1e-9 &&
+                wizard.m_measuredTimings[1].m_bpm == 180.25,
+            "standalone tool opens wizard with audio and all BPM points",
+            passed);
+        // 同一向导再次被调用时不能重置先前选择，防止销毁已填写表单。
+        check(!wizard.openWithMeasuredTimings("song-b", timings) &&
+                  wizard.m_selectedAudioTrackId == "song-a",
+              "already-open wizard retains its draft",
+              passed);
+        wizard.close();
+    }
+
+    /// @brief 以系统文件事件、真实窗口命中和后台读取验证 .mmmt 导入。
+    /// @param root 独立的测试项目，段落文件与其他生产数据隔离。
+    /// @param passed 汇总来自路由、文件处理和历史的检查结果。
+    /// @details 不启动桌面窗口；手工布置 ImGui 根窗口和画布子窗口。
+    /// 用实际 GLFW 文件事件驱动路由，避免直接调用导入绕过鼠标命中。
+    /// 保留另一个本地路由以便显式推进该事件，不进入整个 UIManager 帧。
+    /// 使用应用的文件工作池，波形分析是否就绪由测试明确控制。
+    /// 不连接音频引擎；用可精确表示的波形偏移检测时间轴转换。
+    /// 导出后直接读回文件，验证工作线程输出也是纯 BPM 列表。
+    /// 输入和重导出文件路径不同，以免用覆盖旧文件掩盖写入失败。
+    /// 负首拍仍有效，波形偏移不能被原样保存在文件里。
+    /// 导入和导出不应联动章节，章节测试值留在测量工具的本地草稿。
+    /// 异步任务只在测试中显式等待，实际界面使用每帧轮询。
+    /// 导入成功后必须保持章节和初始测量的历史快照。
+    /// @post 工作线程、窗口所有权、ImGui 及 Clay 都按逆序清理。
+    static void checkStandaloneFile(const std::filesystem::path& root,
+                                    bool&                        passed)
+    {
+        // 核对当前波形偏移与文件相对时间的双向转换，再还原测试配置。
+        // 四分之一秒以内的偏移不触达播放范围限制，能独立验证换算。
+        auto&       visual = Config::AppConfig::instance().getVisualConfig();
+        const float previousOffset  = visual.waveformVisualOffset;
+        visual.waveformVisualOffset = .0625f;
+        Runtime::AppThreadPool::instance().init();
+        ImGui::CreateContext();
+        auto& io       = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.DisplaySize = { 1000, 800 };
+        unsigned char* pixels{};
+        int            width{}, height{};
+        // 两帧布局需要文本度量，CPU 字体图集足以供位置命中使用。
+        // ini 关闭，避免命中坐标受此前窗口位置影响。
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        // 管理器安装 Clay
+        // 测字回调时必须有独立上下文，不能复用已析构窗口的布局。
+        auto& clay        = CLayWrapperCore::instance();
+        auto  clayContext = clay.createWindowContext();
+        clay.makeCurrent(clayContext.context);
+        {
+            UIManager         manager;
+            ProjectDropRouter router;
+            auto              view =
+                std::make_unique<BpmMeasurementToolView>("BpmMeasurementTool");
+            auto& tool = *view;
+            view->setOpen(true);
+            // 视图按实际菜单注册名查询，路由可以验证工具是否存在且打开。
+            // 观察引用在 manager 析构之前有效，测试不持有共享所有权。
+            manager.registerView("BpmMeasurementTool", std::move(view));
+            // 章节用于验证 BPM 单独导入不会清除原有音频元数据。
+            // 初始 BPM 在文件中不存在，便于验证失败、等待与撤销分支。
+            tool.m_selectedAudioTrackId = "song-a";
+            tool.m_timingSegments       = { { 0, 99 } };
+            tool.m_audioChapters        = { { .25, "chapter" } };
+            tool.syncPrimaryTimingFieldsFromSegments();
+            // 大写后缀和高精度负首拍一并经过真实读取入口。
+            // 不用文件名暗示导入目标，目标由当前所选音轨决定。
+            const auto                   path = root / "drag.MMMT";
+            const Audio::AudioMarkerData data{
+                {}, { { -.123456789, 130.23456 }, { 4.123456789, 180.25 } }
+            };
+            check(Audio::AudioMarkerService::writeBpmSegmentFile(path, data)
+                      .empty(),
+                  "write standalone file fixture",
+                  passed);
+            // 建立活动窗口后再投放。实际鼠标位置保持在外面，路由应使用事件坐标。
+            // 两帧让子窗口进入上帧命中列表，避免命中还未提交过布局的窗口。
+            // 波形区只取真实子窗口的坐标归属，无须 FFT 结果或 GPU 纹理。
+            for ( int frame = 0; frame < 2; ++frame ) {
+                ImGui::NewFrame();
+                ImGui::SetNextWindowPos({ 80, 100 });
+                ImGui::SetNextWindowSize({ 460, 360 });
+                ImGui::Begin("Measure###BpmMeasurementTool");
+                ImGui::BeginChild("Waveform");
+                ImGui::EndChild();
+                ImGui::End();
+                ImGui::Render();
+            }
+            // 第一项投放不在这个窗口内，不能因为工具处于打开状态而被接收。
+            // 第二项指向波形子窗口，必须由根窗口身份匹配接收。
+            Event::GLFWDropEvent drop;
+            drop.paths = { Config::pathToUtf8(path) };
+            drop.pos   = { 750, 250 };
+            Event::EventBus::instance().publish(drop);
+            router.update(true, &manager);
+            // 命中失败时不会创建任务，尚未发生任何文件读取或段落替换。
+            check(!tool.m_bpmFileImport.valid(),
+                  "drop outside tool ignored",
+                  passed);
+            drop.pos = { 210, 240 };
+            Event::EventBus::instance().publish(drop);
+            router.update(true, &manager);
+            // 生产入口接收大写后缀后必定有等待交付的结果，命中本身不改段落。
+            check(tool.m_bpmFileImport.valid(),
+                  "drop on waveform opens .mmmt",
+                  passed);
+            if ( tool.m_bpmFileImport.valid() ) {
+                // 测试等待文件线程完成；生产入口仍使用零超时轮询。
+                tool.m_bpmFileImport.wait();
+                const auto offset = tool.waveformCanvasOffset();
+                // 先留一个尚未提交的音频分析，确保导入会等嵌入标记之后应用。
+                tool.m_selectedAudioIdentityNeedsAnalysis = true;
+                tool.consumeBpmSegmentFileOperations(true);
+                check(tool.m_bpmFileImport.valid() && tool.m_bpm == 99,
+                      "import waits for audio analysis without changing timing",
+                      passed);
+                tool.m_selectedAudioIdentityNeedsAnalysis = false;
+                // 明确结束分析后消费已读文件，测试不用等待固定时长猜测顺序。
+                // 核对首段时间和 BPM，保证两种数据一起按新的起点恢复。
+                tool.consumeBpmSegmentFileOperations(true);
+                check(tool.m_timingSegments.size() == 2 &&
+                          tool.m_bpm == 130.23456 &&
+                          std::abs(tool.m_firstBeatTime - offset + .123456789) <
+                              1e-12 &&
+                          tool.m_audioChapters.size() == 1,
+                      "file drop restores precise BPM and retains chapters",
+                      passed);
+                // 验证导出的是音频时间，而非画布经偏移后的绝对位置。
+                // 再导出必须建立新文件，避免旧夹具掩盖误报写入成功。
+                // 文件中没有音频波形或章节，章节仍可在原工具独立编辑。
+                // 单独检查文件包含末段 BPM，防止只序列化首拍与起始 BPM。
+                // 文件只需经过服务读回即可测试数值，平台选择器不参与时域转换。
+                const auto output = root / "exported.mmmt";
+                tool.exportBpmSegmentFile(output);
+                check(tool.m_bpmFileExport.valid(), "queue BPM export", passed);
+                if ( tool.m_bpmFileExport.valid() ) {
+                    // 等生产写任务、而非测试用文件对象，计算最终可读结果。
+                    // consume 与实际窗口共用，完成后的 future
+                    // 槽应允许下一次导出。
+                    tool.m_bpmFileExport.wait();
+                    tool.consumeBpmSegmentFileOperations(true);
+                    // 服务读回验证文件可再次拖入，避免只检查任务返回或文件存在。
+                    const auto exported =
+                        Audio::AudioMarkerService::readBpmSegmentFile(output);
+                    check(exported.success && exported.data.chapters.empty() &&
+                              exported.data.bpmSegments.size() == 2 &&
+                              std::abs(
+                                  exported.data.bpmSegments.front().seconds -
+                                  data.bpmSegments.front().seconds) < 1e-12 &&
+                              exported.data.bpmSegments.back().bpm ==
+                                  data.bpmSegments.back().bpm,
+                          "export writes audio-relative BPM only",
+                          passed);
+                }
+                // 同一条历史应还原首段和整份列表，不能只复原列表显示。
+                tool.undoMeasurementFromShortcut();
+                check(tool.m_timingSegments.size() == 1 && tool.m_bpm == 99,
+                      "one undo restores previous BPM after file drop",
+                      passed);
+                // 再次读取同一文件，并在结果交付前改变当前音轨身份。
+                // 选择切换会刷新实际路径；交付方只应读到新的缓存身份。
+                tool.importBpmSegmentFile(path);
+                check(tool.m_bpmFileImport.valid(),
+                      "submit second file import",
+                      passed);
+                if ( tool.m_bpmFileImport.valid() ) {
+                    tool.m_bpmFileImport.wait();
+                    // 同项目存在两条合法主音轨，不用清空选择来模拟切换。
+                    tool.m_selectedAudioTrackId = "song-b";
+                    tool.refreshSelectedAudioIdentity();
+                    tool.consumeBpmSegmentFileOperations(true);
+                    check(!tool.m_bpmFileImport.valid() && tool.m_bpm == 99,
+                          "switching audio discards pending file import",
+                          passed);
+                }
+            }
+        }
+        // 先解除当前上下文，再销毁 Arena，避免全局 Clay 留下悬空指针。
+        // 测试工具未启用偏好写出，不会记录测试布局或测量历史。
+        clay.makeCurrent(nullptr);
+        clay.destroyWindowContext(clayContext);
+        ImGui::DestroyContext();
+        Runtime::AppThreadPool::instance().shutdown();
+        // 恢复全局内存配置，避免影响同进程后续的波形检查。
+        visual.waveformVisualOffset = previousOffset;
     }
 
     /// @brief 验证按钮确认走同一个导入入口，而非只调用私有函数得到假成功。
@@ -264,6 +487,7 @@ struct BpmBeatmapImportTestAccess {
         check(tool.m_timingSegments.size() == 3 && tool.m_bpm == 120,
               "redo restores imported list",
               passed);
+        checkWizard(tool, passed);
         // 无红线来源在失败前不能清空数据或写入空撤销记录。
         tool.m_importSelectedIndex = 1;
         const auto historySize     = tool.m_measurementUndoHistory.size();
@@ -419,6 +643,7 @@ struct BpmBeatmapImportTestAccess {
               passed);
         project->m_audioResources[0].m_type = AudioTrackType::Main;
         project->m_audioResources[1].m_type = AudioTrackType::Main;
+        checkStandaloneFile(root, passed);
         // 测试只验证工具本地数据，不把测量参数写入用户全局偏好。
         // 临时交付标志均已复原，析构不需要等待任何真实后台任务。
         tool.m_userPreferencesDirty            = false;

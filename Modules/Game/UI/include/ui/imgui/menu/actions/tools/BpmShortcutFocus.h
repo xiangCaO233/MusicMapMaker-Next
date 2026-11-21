@@ -8,17 +8,14 @@
 namespace MMM::UI
 {
 
-/// @brief 判断 BPM 测量工具根窗口或其子窗口是否拥有键盘焦点。
-/// @param context 当前 ImGui 上下文，可为空。
-/// @return 当前导航焦点属于 BPM 工具时返回 true。
-/// @warning UI 热路径：仅沿焦点窗口父链检查稳定 ID，不访问文件或复制所有权。
-/// @note 主菜单动作共用此判定，使空格与历史快捷键遵循相同焦点边界。
-/// @note 没有导航窗口时保留编辑器现有快捷键行为。
-/// @note 不缓存窗口指针，窗口关闭后的下一帧不会沿用旧焦点。
-inline bool isBpmMeasurementToolFocused(const ImGuiContext* context)
+/// @brief 检查窗口是否属于 BPM 测量工具或其子布局。
+/// @param window 当前事件命中的窗口，允许没有窗口。
+/// @return 窗口本身或任意父级是 BPM 工具时为真。
+/// @warning UI 热路径：只沿父窗口链匹配稳定 ID，不缓存窗口指针。
+/// @details 控制面板、波形和频谱可能分别处在嵌套的子窗口内。
+/// 拖放入口使用鼠标命中结果，快捷键入口使用当前导航窗口。
+inline bool isBpmMeasurementToolWindow(const ImGuiWindow* window)
 {
-    // 子窗口拥有焦点时，父链仍保留工具根窗口身份。
-    const ImGuiWindow* window = context ? context->NavWindow : nullptr;
     while ( window ) {
         // 动态标题只取稳定 ID，避免本地化文本影响快捷键所有权。
         if ( window->Name &&
@@ -29,6 +26,15 @@ inline bool isBpmMeasurementToolFocused(const ImGuiContext* context)
         window = window->ParentWindow;
     }
     return false;
+}
+
+/// @brief 检查键盘焦点是否位于 BPM 测量工具中。
+/// @param context 来自输入处理帧的 ImGui 上下文。
+/// @return 无导航目标时返回 false，由调用方保留主编辑器快捷键行为。
+/// @warning UI 热路径：只检查当前帧导航窗口的父链。
+inline bool isBpmMeasurementToolFocused(const ImGuiContext* context)
+{
+    return isBpmMeasurementToolWindow(context ? context->NavWindow : nullptr);
 }
 
 }  // namespace MMM::UI

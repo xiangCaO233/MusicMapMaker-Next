@@ -269,6 +269,42 @@ int main(int argc, char** argv)
         source, root / "marked.wav", data, true
     };
     bool ok = true;
+    // 独立文件可以多次交换，保持精确首拍和变速点并且不依附一份音频。
+    // 使用大写扩展名模拟系统选择器保留用户命名的结果。
+    // BPM 值也含小数，确保既没有按节拍长度量化也没有转为整数。
+    const MMM::Audio::AudioMarkerData segments{
+        {}, { { -0.125000123, 100.123456 }, { 0.700000789, 180.987654 } }
+    };
+    const auto bpmFile = root / "timing.MMMT";
+    ok &= check(
+        MMM::Audio::AudioMarkerService::writeBpmSegmentFile(bpmFile, segments)
+                .empty() &&
+            matches(MMM::Audio::AudioMarkerService::readBpmSegmentFile(bpmFile),
+                    segments),
+        "standalone BPM segments preserve negative and fractional time");
+    // 无效写入不能截断此前已经有效的导出文件。
+    // 对比原始字节而不是重新解析后的结果，以发现任意意外重写。
+    const auto savedBpmFile = bytes(bpmFile);
+    auto       badSegments  = segments;
+    badSegments.bpmSegments.back().seconds =
+        badSegments.bpmSegments.front().seconds;
+    ok &= check(!MMM::Audio::AudioMarkerService::writeBpmSegmentFile(
+                     bpmFile, badSegments)
+                        .empty() &&
+                    bytes(bpmFile) == savedBpmFile,
+                "standalone BPM rejects duplicate anchors without overwriting");
+    // 故意手写语法正确但没有 BPM 的文件，模拟来自外部的不完整数据。
+    // 文件有效性由导入服务判断，不能假定都由本应用导出。
+    // 独立文件至少含一条红线才能用于替换工具草稿。
+    // 空列表在嵌入音频标记中仍合法，本场景锁定独立文件更严格的契约。
+    // 用不同输出名构造这份输入，保留前面的有效文件供写入断言读取。
+    const auto malformed = root / "malformed.mmmt";
+    // 文件流在读取前关闭，使失败只能来自数据验证，而非待刷写缓冲。
+    std::ofstream(malformed)
+        << R"({"version":1,"chapters":[],"bpm_segments":[]})";
+    ok &= check(
+        !MMM::Audio::AudioMarkerService::readBpmSegmentFile(malformed).success,
+        "standalone BPM data cannot import an empty segment list");
     // 此文件来自用户实际使用的 Audition 13，保留原始字节，不由被测实现生成。
     // 采样刻度与名称固定检查，缺失 LFS 内容不能被当作普通无标记文件跳过。
     const auto auSample = bytes(MMM::Config::utf8ToPath(argv[2]));

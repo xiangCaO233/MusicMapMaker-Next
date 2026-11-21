@@ -109,6 +109,10 @@ public:
     /// @warning UI 输入路径：只在 BPM 工具聚焦且按下无修饰空格时调用。
     void togglePlaybackFromShortcut();
 
+    /// @brief 导入拖入或从选择器选中的 .mmmt 文件，替换当前音轨的测量段落。
+    /// @warning 文件任务在后台读取，UI 只在当前音轨仍有效时应用。
+    void importBpmSegmentFile(const std::filesystem::path& path);
+
     /// @brief 沿用主画布 Ctrl+Alt+滚轮的倍速档位切换。
     /// @param delta 滚轮方向；正值升档，负值降档。
     void adjustPlaybackSpeedFromShortcut(double delta);
@@ -235,6 +239,15 @@ private:
     /// @warning UI 热路径：仅绘制缓存；文件操作只在显式点击后提交后台任务。
     void renderMarkerPanel();
 
+    /// @brief 打开独立 BPM 段落的导入或导出选择器。
+    /// @warning 仅由用户点击触发，原生选择器可能短时阻塞。
+    void openBpmSegmentFilePicker(bool exporting);
+    /// @brief 快照当前音轨的测量结果并提交独立文件写入。
+    void exportBpmSegmentFile(const std::filesystem::path& path);
+    /// @brief 处理内置选择器确认及后台文件结果。
+    /// @warning UI 热路径，仅零超时轮询，禁止等待分析或文件任务。
+    void consumeBpmSegmentFileOperations(bool projectReady);
+
     /// @brief 消费已完成导出结果，不等待正在运行的文件任务。
     /// @warning 每帧零超时查询 future，禁止改为阻塞等待。
     void consumeMarkerExport();
@@ -259,6 +272,9 @@ private:
         /// @brief 段落 BPM。
         double bpm{ 120.0 };
     };
+
+    /// @brief 在一条撤销记录中替换段落，保留导入的精度和播放位置。
+    void replaceImportedTimingSegments(std::vector<BpmTimingSegment> segments);
 
     /// @brief 关联谱面导入候选，只持有值语义身份及红线快照。
     struct BeatmapImportOption {
@@ -375,7 +391,7 @@ private:
     void renderControlPanel(UIManager* sourceManager);
 
     /// @brief 绘制 BPM 段落列表和应用入口。
-    void renderTimingSegmentsPanel();
+    void renderTimingSegmentsPanel(UIManager* sourceManager);
 
     /// @brief 绘制自动测偏移后的应用确认弹窗。
     /// @param sourceManager 提供弹窗实时亮区上报。
@@ -870,6 +886,14 @@ private:
     bool m_exportBeatMarkers{ false };
     /// @brief 独立于分析状态的标记读取、写入反馈。
     std::string m_markerStatus;
+    /// @brief 独立段落文件结果，后台任务只持有路径和数值快照。
+    std::future<Audio::AudioMarkerReadResult> m_bpmFileImport;
+    /// @brief 导出的写入或发布错误，空字符串表示成功。
+    std::future<std::string> m_bpmFileExport;
+    /// @brief 导入发起时的音频身份，用来丢弃切歌后返回的结果。
+    std::string m_bpmFileImportAudioKey;
+    /// @brief 原生选择器存活令牌，视图析构后回调不能读取视图状态。
+    std::shared_ptr<bool> m_bpmFilePickerLifetime;
 
     /// @brief 外部流程接收 BPM Timing 测量结果的回调。
     MeasurementExportCallback m_measurementExportCallback;

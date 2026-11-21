@@ -1757,7 +1757,7 @@ void UIManager::onUpdateUI()
     // 引导服务先推进页面与动作状态。
     m_walkthrough->update();
     // 拖放命令只入队到逻辑线程，不因后台保存进度阻塞当前 ImGui 帧。
-    m_projectDropRouter->update(true);
+    m_projectDropRouter->update(true, this);
     if ( auto* dock = getView<MainDockSpaceUI>("MainDockSpaceUI") ) {
         // 进度与结果共用非交互气泡；绘制不会切换 ImGui 导航或 Dock 标签。
         dock->updateSaveFeedback();

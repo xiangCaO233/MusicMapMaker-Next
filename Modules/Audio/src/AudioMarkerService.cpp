@@ -12,6 +12,7 @@
 #include <iterator>
 #include <nlohmann/json.hpp>
 #include <system_error>
+#include <utility>
 
 namespace MMM::Audio
 {
@@ -266,6 +267,68 @@ static std::string extension(const std::filesystem::path& path)
 }
 }  // namespace
 
+/// @brief 从有大小上限的文件中恢复独立 BPM 段落。
+/// @param path 用户选择的单个 .mmmt，路径无需和音频文件并列。
+/// @details 独立文件沿用音频标记的版本化双精度载荷，只接受非空 BPM 列表。
+/// 文件头版本、起点严格升序和 BPM 范围由共享载荷解析器校验。
+/// 章节属于单独的音频导出流程，此处拒绝含章节的音频配套数据。
+/// @return 仅在整个文件校验通过后返回段落，错误结果不携带部分数据。
+AudioMarkerReadResult AudioMarkerService::readBpmSegmentFile(
+    const std::filesystem::path& path)
+{
+    if ( extension(path) != ".mmmt" )
+        return { false, "文件扩展名必须为 .mmmt", {} };
+
+    // 在同一个流上度量并读取，确保文件增大时也不会突破分配预算。
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    const auto    size = input.tellg();
+    if ( size <= 0 || size > static_cast<std::streamoff>(
+                                 MarkerInternal::MAX_METADATA_BYTES) )
+        return { false, "BPM 段落文件为空、过大或不可读取", {} };
+
+    std::string payload(static_cast<std::size_t>(size), '\0');
+    input.seekg(0);
+    // 文件缩短、权限失败或 JSON 只读到一半都不能当作成功导入。
+    AudioMarkerData data;
+    if ( !input.read(payload.data(), static_cast<std::streamsize>(size)) ||
+         !MarkerInternal::decodeData(payload, data) ||
+         data.bpmSegments.empty() || !data.chapters.empty() )
+        return { false, "BPM 段落文件格式无效", {} };
+    return { true, {}, std::move(data) };
+}
+
+/// @brief 在目标同目录完成编码并发布，保留旧文件直到新文件写入完毕。
+/// @param path 已经由保存选择器确认的目标，可能指向系统文档的私有工作副本。
+/// @param data 仅包含需要分享的 BPM 段落，时间单位为音频相对秒。
+/// @details 文件只包含音频相对秒数和 BPM，不绑定音频名称或项目位置。
+/// 先写同目录临时文件再重命名，避免失败时留下半写入的 JSON。
+/// @return 成功时为空，错误返回可展示给用户的原因。
+std::string AudioMarkerService::writeBpmSegmentFile(
+    const std::filesystem::path& path, const AudioMarkerData& data)
+{
+    if ( extension(path) != ".mmmt" ) return "文件扩展名必须为 .mmmt";
+    if ( data.bpmSegments.empty() || !data.chapters.empty() ||
+         !MarkerInternal::validData(data) )
+        return "没有可导出的有效 BPM 段落";
+
+    const auto payload = MarkerInternal::encodeData(data);
+    // 与读取端采用同一预算，避免成功生成无法导入的文件。
+    if ( payload.size() > MarkerInternal::MAX_METADATA_BYTES )
+        return "BPM 段落文件过大";
+    const auto        stagedPath = stagingPath(path);
+    const StagedFiles staged{ { stagedPath } };
+    std::ofstream     output(stagedPath, std::ios::binary);
+    output.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+    // 关闭流会刷新缓冲并反映磁盘空间错误，写入调用成功并不足以提交。
+    output.close();
+    if ( !output ) return "无法写入 BPM 段落文件";
+
+    std::error_code error;
+    std::filesystem::rename(stagedPath, path, error);
+    if ( error ) return error.message();
+    return {};
+}
+
 /// @brief 从一份音频恢复章节和精确 BPM 数据。
 /// @param path 音频路径，读取时不修改音频或项目设置。
 /// @return 成功无标记与损坏标记通过 success 区分。
@@ -455,7 +518,7 @@ AudioMarkerExportResult AudioMarkerService::exportFile(
     /// 成功创建音频文件本身不代表标记导出成功。
     if ( embedded ) {
         const auto restored = read(tagged);
-        embedded            = restored.success &&
+        embedded = restored.success &&
                    encodeData(restored.data) == encodeData(options.data);
     }
     if ( !embedded ) {
