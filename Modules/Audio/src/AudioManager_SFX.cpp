@@ -10,6 +10,7 @@
 #include "log/colorful-log.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -36,7 +37,7 @@ namespace
 //
 // - m_registeredSoundEffects 保存资源描述和 revision；
 // - m_pendingSoundEffectLoads 与队列保存等待准备的请求；
-// - m_sfxPools 保存已经接入音频图的可播放池。
+// - m_sfxPools 保存可立即预约的池。预读绑定音效不占用实时混音图，预约才接入。
 //
 // revision 把同 key 的旧后台结果与新登记隔离。文件路径或 DSP 身份变化时递增
 // revision；完成队列只接纳仍与当前登记匹配的结果，过期任务可自然结束但不能
@@ -248,6 +249,13 @@ void AudioManager::updateSFXSyncSpeedRouting(bool syncSpeed)
     }
 
     for ( auto& [key, pool] : m_sfxPools ) {
+        const auto registration =
+            m_sfxLoading->m_registeredSoundEffects.find(key);
+        if ( registration != m_sfxLoading->m_registeredSoundEffects.end() &&
+             registration->second.m_isBoundNoteSound ) {
+            // 按需池始终以打击音效总线为父；切换倍率同步只搬移父总线。
+            continue;
+        }
         auto mixer = pool->getMixer();
         if ( !mixer ) continue;
 
@@ -509,7 +517,7 @@ void AudioManager::registerSoundEffectImpl(
     }
 }
 
-/// @brief 使用已完成资源 DSP 的 PCM 创建音效池并接入混音图。
+/// @brief 创建可播放池；绑定采样由播放提交按需接入混音图。
 /// @param key 已登记的音效标识。
 /// @param preparedAudio 完成资源级 DSP 的不可变 PCM。
 /// @return 已存在或成功创建并接入池时返回 true。
@@ -557,6 +565,10 @@ bool AudioManager::attachSoundEffectPool(
     } else if ( key.starts_with(EDITOR_METRONOME_KEY_PREFIX) ) {
         // 主画布节拍器使用效果音量分组，并固定进入主时间线拉伸前级。
         m_timingEffectMixer->add_source(pool->getMixer());
+    } else if ( registration->second.m_isBoundNoteSound ) {
+        pool->useOnDemandMixer(*m_hitEffectMixer);
+        std::lock_guard lock(m_sfxLoading->m_boundMixersMutex);
+        m_sfxLoading->m_boundMixers.push_back(pool);
     } else if ( usesHitEffectRouting(key) ) {
         // HitEffect 专用总线的位置由 updateSFXSyncSpeedRouting 整体决定。
         m_hitEffectMixer->add_source(pool->getMixer());
@@ -564,7 +576,7 @@ bool AudioManager::attachSoundEffectPool(
         m_mainMixer->add_source(pool->getMixer());
     }
 
-    m_sfxPools[key] = std::move(pool);
+    m_sfxPools.emplace(key, std::move(pool));
     // 最后发布映射，表示池的图连接和初始有效音量均已完成。
     m_sfxLeadInSeconds[key] = registration->second.m_leadInSeconds;
     return true;
@@ -663,7 +675,9 @@ bool AudioManager::queueBoundNoteSoundEffectLoad(const std::string& key)
                 m_mainMixer->remove_source(mixer);
                 m_preStretcherMixer->remove_source(mixer);
                 m_hitEffectMixer->remove_source(mixer);
-                m_hitEffectMixer->add_source(mixer);
+                loaded->second->useOnDemandMixer(*m_hitEffectMixer);
+                std::lock_guard lock(m_sfxLoading->m_boundMixersMutex);
+                m_sfxLoading->m_boundMixers.push_back(loaded->second);
             }
         }
         return true;
@@ -688,12 +702,47 @@ bool AudioManager::queueBoundNoteSoundEffectLoad(const std::string& key)
 
 /// @brief 推进后台音效加载任务并回收已退役的时间线调度资源。
 /// @param maxPreparedPerUpdate 单次调用最多接入的音效数量。
-/// @warning
-/// 逻辑轮询路径：无退役状态时只执行一次无锁指针读取；时间线发生替换时，
-/// 本调用可能在控制线程析构 PCM 缓存。
+/// @details 空闲池与解码任务使用同一个轮询时机，但各自有独立预算。
+/// 轮转按需池时校验弱引用是否存活，资源下载或解码未完成的池尚未注册到轮转表。
+/// 空闲回收只修改父总线的来源快照，预解码 PCM 仍归音效池所有。
+/// @warning 逻辑轮询路径；为避免资源试听同时卸载，选中的池持有短期共享所有权。
+/// 如果不用快照，则必须在整个图修改期间持有注册锁，或在解引用时承担悬空风险。
+/// 音频回调自身不参与轮转，仍通过 MixBus 的来源快照消费当前块。
 void AudioManager::updateQueuedSoundEffectLoads(
     std::size_t maxPreparedPerUpdate)
 {
+    // 音效泵有固定轮询频率；最多检查一小段历史缓存，空闲混音节点退出后
+    // 仍可在后续预约中直接复用，不重新解码。
+    // 链表轮转不分配，也不借用可能随试听加载变化的资源哈希表迭代器。
+    // 预算同时计入存活及失效条目，集中卸载大量音效时也不会扫完整个历史链表。
+    constexpr std::size_t IDLE_POOL_CHECK_BUDGET = 64;
+    std::array<std::shared_ptr<SoundEffectPool>, IDLE_POOL_CHECK_BUDGET> pools;
+    std::size_t count = 0;
+    {
+        std::unique_lock lock(m_sfxLoading->m_boundMixersMutex,
+                              std::try_to_lock);
+        if ( lock ) {
+            auto&      queue  = m_sfxLoading->m_boundMixers;
+            const auto budget = std::min(queue.size(), pools.size());
+            for ( std::size_t checked = 0; checked < budget; ++checked ) {
+                if ( auto pool = queue.front().lock() ) {
+                    // 低频持有强引用，允许并发卸载；离开队列锁后才操作混音图。
+                    pools[count++] = std::move(pool);
+                    queue.splice(queue.end(), queue, queue.begin());
+                } else {
+                    // 注册表已释放这个池；清理弱引用不会访问已销毁的混音节点。
+                    queue.pop_front();
+                }
+            }
+        }
+    }
+    // 队列锁争用只延迟空闲边回收，后面的解码接纳仍独立进行。
+    // 修改父总线时不再持有队列锁，避免与从试听窗口提交播放的池控制路径互锁。
+    // 回收遇到还在等待起播或排尾的实例会留到下轮，不能用输出电平判定到期。
+    for ( std::size_t index = 0; index < count; ++index ) {
+        pools[index]->retireIdleMixer();
+    }
+
     if ( m_audioTimelineNode ) {
         // 与音效泵共享低频时机回收时间线旧快照，避免另设每帧扫描。
         static_cast<void>(m_audioTimelineNode->reclaimRetiredSchedules());
@@ -762,7 +811,7 @@ void AudioManager::updateQueuedSoundEffectLoads(
             result.track,
             registration->second.m_resourceConfig,
             std::move(result.preparedAudio));
-        // worker 候选纳入共享弱缓存后，再在逻辑线程修改 MixBus 图。
+        // 接纳候选后保留已准备的 PCM，实际预约才会把绑定音效接入混音图。
         attachSoundEffectPool(result.key, std::move(preparedAudio));
     }
 
@@ -820,7 +869,7 @@ void AudioManager::updateQueuedSoundEffectLoads(
 /// @param key 音效标识符。
 /// @return 音效池已存在时返回 true。
 ///
-/// pending 或 worker 已完成但尚未接入都仍返回 false。
+/// pending 或 worker 已完成但尚未被控制线程接纳都仍返回 false。
 bool AudioManager::isSoundEffectLoaded(const std::string& key) const
 {
     return m_sfxPools.contains(key);
@@ -883,6 +932,11 @@ void AudioManager::clearSoundEffects()
     // 清除尚未开始的队列和接纳令牌，运行中 future 会按旧 revision 被丢弃。
     m_sfxLoading->m_queuedSoundEffectLoads.clear();
     m_sfxLoading->m_pendingSoundEffectLoads.clear();
+    {
+        std::lock_guard lock(m_sfxLoading->m_boundMixersMutex);
+        // 已从父总线移除的历史池不需要进入下一批资源的轮询。
+        m_sfxLoading->m_boundMixers.clear();
+    }
     m_sfxLeadInSeconds.clear();
     m_sfxMutes.clear();
 
@@ -1008,6 +1062,7 @@ void AudioManager::playSoundEffectScheduled(
     const KeySoundPlaybackControl& playbackControl)
 {
     // 排定入口同样不触发加载，静音或缺池时保持无副作用。
+    // 命中窗口只负责提交可执行的预约，解码队列滞后不能阻塞播放时钟。
     if ( getSFXPoolMute(key) ) return;
 
     auto it = m_sfxPools.find(key);
@@ -1038,6 +1093,8 @@ void AudioManager::playSoundEffectScheduled(
                                .sfxConfig.hitSfxSyncSpeed;
     const SoundEffectSchedulePlan schedule = planSoundEffectSchedule(
         targetFrame, currentReferenceFrame, m_speed, syncSpeed);
+    // 播放提交会按需挂接绑定池。这里保留绝对和相对两个起播时钟，
+    // 避免把按需接入时间误当作节拍所在的源帧时间。
     // OpenAL 负责空间化输出，不叠加 SDL 使用的手工左右包络。
     const StereoGainEnvelope effectiveEnvelope =
         m_playbackBackend == Config::AudioPlaybackBackend::SDL

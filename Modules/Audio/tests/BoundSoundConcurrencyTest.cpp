@@ -582,6 +582,65 @@ bool testFinalDrainReturnsVoiceToPool(
     return valid;
 }
 
+/// @brief 验证预读只缓存 PCM，预约和尾音保持连接，空闲后同一个池可以重新接入。
+/// @param track 已预解码的键音资源，测试通过音频块推进结束确认。
+/// @return 父总线的连接数跟随播放生命周期且池可重复使用时返回 true。
+/// @details
+/// 用真实父总线拉取音效，可区分“总线连接被移除”和“仍连接但输出全零”。
+/// 源节点本身的播放标志无法覆盖预约等待和变调器排尾这两个生命周期阶段。
+/// 父总线的来源数反映每个输出块是否会遍历此池，本地来源数用于确认复用。
+/// 测试不依赖声卡或墙钟时间，停止确认和尾音排空均由显式块推进。
+/// @par 各失败分支覆盖的问题
+/// 预读完成即连接会让全曲资源随浏览进度永久占用混音回调。
+/// 对脱离父总线的空闲实例发送 Stopping 将使其无法收到回调确认，
+/// 再预约时只好扩容，因此首次预约也检查本地来源数。
+/// 过早回收预约会丢失第一次击键，回收过晚则让旧池持续消耗回调预算。
+/// 再播放后检查源进度，避免只因父总线重新出现一条空闲连接而误判成功。
+/// 测试所用父总线先于池创建，覆盖析构前按需连接的生命周期约束。
+bool testBoundPoolOnlyMixesWhileInUse(
+    const std::shared_ptr<ice::AudioTrack>& track)
+{
+    constexpr std::size_t BLOCK_FRAMES = 128U;
+    ice::MixBus           parent;
+    parent.prepare(ice::ICEConfig::internal_format, BLOCK_FRAMES);
+    MMM::Audio::SoundEffectPool pool(track);
+    pool.init(1);
+    pool.useOnDemandMixer(parent);
+    pool.stopAll();
+    if ( parent.sourceCount() != 0U ) {
+        XERROR("Prepared bound sound attached before its first reservation");
+        return false;
+    }
+
+    // 未开始的预约仍需要在图中等待输出时钟，不能按当下是否发声来回收。
+    pool.playScheduledRelative(1.0F, 2U * BLOCK_FRAMES);
+    pool.retireIdleMixer();
+    if ( parent.sourceCount() != 1U || pool.getMixer()->sourceCount() != 1U ) {
+        XERROR("Bound sound reservation was detached or needed a spare voice");
+        return false;
+    }
+
+    ice::AudioBuffer buffer(ice::ICEConfig::internal_format, BLOCK_FRAMES);
+    const auto       blocks = track->num_frames() / BLOCK_FRAMES + 256U;
+    // 多出的块为 final 排空留空间；与立即结束的旁路后端使用同一判定。
+    for ( std::size_t block = 0; block < blocks; ++block ) {
+        parent.process(buffer);
+    }
+    // 实例已结束后从父总线移除，资源和本地混音实例仍可立即复用。
+    pool.retireIdleMixer();
+    if ( parent.sourceCount() != 0U ) {
+        XERROR("Completed bound sound remained attached to the live mixer");
+        return false;
+    }
+    pool.play(1.0F);
+    parent.process(buffer);
+    const bool resumed = parent.sourceCount() == 1U &&
+                         pool.getMixer()->sourceCount() == 1U &&
+                         pool.getLatestPlaybackTime() > 0.0;
+    if ( !resumed ) XERROR("Retired bound sound did not reconnect and play");
+    return resumed;
+}
+
 /// @brief 验证已排程实例每个输出 block 重新读取轨道和类别控制。
 /// @return 排程后修改增益或静音可在下一 block 生效时返回 true。
 ///
@@ -732,6 +791,7 @@ int main(int argc, char** argv)
                         testZeroFrameTrackDoesNotOccupyVoice(samplePath) &&
                         testStopThenImmediatePlayKeepsNewVoice(track) &&
                         testFinalDrainReturnsVoiceToPool(track) &&
+                        testBoundPoolOnlyMixesWhileInUse(track) &&
                         testScheduledVoiceReadsLiveKeySoundControls();
     // 各测试对象均为局部值，返回前会先销毁池再销毁共享 AudioPool。
     return passed ? 0 : 1;

@@ -211,6 +211,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
         ctx.nextHitIndex                = 0;
         ctx.nextPredictHitIndex         = 0;
         ctx.nextBoundSoundPrefetchIndex = 0;
+        ctx.m_waitingKeySoundCount      = 0;
         ctx.isHitEventsDirty            = false;
         return;
     }

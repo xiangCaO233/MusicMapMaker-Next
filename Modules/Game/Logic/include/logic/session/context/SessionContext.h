@@ -145,6 +145,8 @@ struct SessionContext {
     bool isPlaying{ false };  ///< 是否正在播放
     /// @brief 是否正在本地预览连续 Seek；联机视口需等提交后再同步。
     bool isSeekScrubbing{ false };
+    /// @brief 松手后本轮需在最终位置重建键音窗口，即使视觉时间没有跨越。
+    bool m_seekScrubReleased{ false };
     /// @brief 当前会话是否拥有全局音频时间线的控制权。
     bool isActiveSession{ false };
     /// @brief 是否作为同 Main 音轨时间线后台跟随者读取全局 transport。
@@ -208,7 +210,11 @@ struct SessionContext {
            hitEvents;                 ///< 当前谱面所有的打击事件序列
     size_t nextHitIndex{ 0 };         ///< 下一个待触发的视觉打击事件索引
     size_t nextPredictHitIndex{ 0 };  ///< 下一个待触发的预读打击事件(音频)索引
-    size_t nextBoundSoundPrefetchIndex{
+    /// @brief 前瞻窗口内尚未解码的键音索引；跳转和事件重建时一起清空。
+    std::array<std::size_t, 128> m_waitingKeySounds{};
+    /// @brief 等待数组中已登记的索引数，逻辑线程在解码轮询中原地压缩。
+    std::size_t m_waitingKeySoundCount{ 0 };
+    size_t      nextBoundSoundPrefetchIndex{
         0
     };  ///< 下一个待排队的物件绑定音效事件索引
     double nextBoundSoundPrefetchSystemTime{
