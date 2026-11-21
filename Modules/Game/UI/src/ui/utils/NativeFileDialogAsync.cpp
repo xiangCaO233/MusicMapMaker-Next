@@ -106,6 +106,20 @@ void openFileAsync(const nfdu8filteritem_t* filters, nfdfiltersize_t count,
 #endif
 }
 
+/// @brief 只读导入资源归档，避免把临时 ZIP 纳入 Android 可写工作副本。
+/// @param completion 完成时接收桌面源路径或 Android 缓存文件路径。
+/// @warning 必须在 UI 线程发起，并由调用方负责缓存文件的生命周期。
+void openAssetPackageAsync(DialogCompletion completion)
+{
+#ifdef __ANDROID__
+    beginAsync(3, nullptr, std::move(completion));
+#else
+    // 过滤器只负责发现 ZIP；文件内容是否符合资源包布局由后台服务判断。
+    const nfdu8filteritem_t zip{ "ZIP", "zip" };
+    openFileAsync(&zip, 1, nullptr, std::move(completion));
+#endif
+}
+
 /// @brief 创建授权保存目标，真正字节发布由 writer 成功后执行。
 /// @details 系统创建占位文档不是谱面保存成功，不能提前清理编辑脏位。
 /// @warning 请求参数只在启动阶段借用，平台方法会同步复制默认名称。

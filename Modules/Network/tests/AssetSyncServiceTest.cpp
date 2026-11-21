@@ -821,6 +821,182 @@ int testSyncReportsPreciseCheckProgress()
     return fail;
 }
 
+/// @brief 验证冷启动本地 ZIP 先发布文件，再按清单增量补齐。
+/// @details 归档故意写入与清单匹配的版本号；验收必须忽略该标记且只取缺失文件。
+/// @par 测试输入
+/// 本地源包包含一份已匹配资源和一份伪造的已验证版本标记。
+/// 完整包下载地址和命中项下载地址均无可用文件。
+/// 只有缺失项提供可读取的增量源；无需外部服务或 DNS。
+/// @par 发布约束
+/// 校验启动前应已看见已安装的本地文件。
+/// 线上版本号只能来自实际完成校验的清单。
+/// 非 assets 顶层条目不进入应用配置目录，源 ZIP 保持可用。
+/// @return 阶段、最终文件及下载计数不符合预期的断言数。
+int testImportLocalPackageThenVerify()
+{
+    int        fail = 0;
+    const auto root = createTempRoot();
+    // 源归档与安装目录分开，首次导入不能靠它已经在目标目录来满足断言。
+    const auto zip           = root / "local.zip";
+    const auto assets        = root / "target/assets";
+    const auto missingSource = root / "download.txt";
+    const auto identical     = root / "identical.txt";
+    const auto manifest      = root / "manifest.json";
+    // ZIP 内文件使用门户与正式发布一致的 assets 前缀。
+    // 放置与清单同版本的标记以模拟手工打包过已安装资源树。
+    fail +=
+        expectTrue(writeZipFile(zip,
+                                { { "assets/.mmm-assets-version", "current\n" },
+                                  { "assets/keep.txt", "offline" },
+                                  { "outside.txt", "must not be installed" } }),
+                   "write local asset package");
+    // 测试摘要用独立文件计算，不依赖目标尚未建立时的路径。
+    fail += expectTrue(writeTextFile(identical, "offline") &&
+                           writeTextFile(missingSource, "new"),
+                       "write alternate download fixtures");
+    // 匹配条目的 URL 不存在。若错误下载整包或重取匹配文件，都无法得到 Updated。
+    // 条目使用不同的 URL 策略。第一项可从包里复用，第二项只能由增量文件提供。
+    // 版本号既与归档里一致，也会成为最终标记，可以同时验证旧版快路径被绕开。
+    // 期望摘要从与 ZIP 读取独立的普通文件计算，防止修改归档直接影响测试基线。
+    std::string manifestText = "{\"version\":\"current\",\"files\":[";
+    manifestText += "{\"path\":\"keep.txt\",\"url\":\"" +
+                    fileUrlFor(root / "unavailable.txt") + "\",\"sha256\":\"" +
+                    AssetSyncService::sha256File(identical) + "\",\"size\":7},";
+    manifestText += "{\"path\":\"missing.txt\",\"url\":\"" +
+                    fileUrlFor(missingSource) + "\",\"sha256\":\"" +
+                    AssetSyncService::sha256File(missingSource) +
+                    "\",\"size\":3}]}";
+    fail += expectTrue(writeTextFile(manifest, manifestText),
+                       "write verification manifest");
+
+    AssetSyncOptions options;
+    options.assetsRootPath   = assets;
+    options.localPackagePath = zip;
+    options.manifestUrl      = fileUrlFor(manifest);
+    // 整包和已匹配条目都使用不存在的 URL；测试成功依赖真实的增量路径选择。
+    options.packageUrl = fileUrlFor(root / "unavailable-full.zip");
+    std::vector<AssetSyncProgressStage> stages;
+    // 观察开始请求清单时的落盘字节，防止把进度阶段名称误当作已经完成解压。
+    bool hadImportedFileWhenCheckingManifest = false;
+    options.progressCallback = [&](const AssetSyncProgress& progress) {
+        // 回调由当前测试线程执行，文件读取与服务的阶段切换有确定先后。
+        stages.push_back(progress.stage);
+        if ( progress.stage == AssetSyncProgressStage::kCheckingManifest )
+            hadImportedFileWhenCheckingManifest =
+                readTextFile(assets / "keep.txt") == "offline";
+    };
+    // 直接调用和启动页共用的服务入口，检测完整优先级和版本快路径。
+    const auto result = AssetSyncService::sync(options);
+    // 阶段检查同时要求目标中已经写入内容；只发了阶段通知仍算失败。
+    // 前一轮测试的目录随机隔离，目标不可能靠旧的资源碰巧通过。
+    fail += expectTrue(
+        !stages.empty() &&
+            stages.front() == AssetSyncProgressStage::kImportingPackage &&
+            hadImportedFileWhenCheckingManifest,
+        "local package is published before manifest request");
+    // 用检查数量区分读取 ZIP 与完整清单校验。
+    // 用更新数量区分增量更新与重新下载相同内容。
+    fail += expectTrue(
+        result.status == AssetSyncStatus::kUpdated &&
+            result.checkedFileCount == 2 && result.updatedFileCount == 1,
+        "local import bypasses version shortcut and downloads one file");
+    // 文件落盘与版本标记必须同时生效，否则后续启动会漏检更新。
+    fail += expectTrue(
+        readTextFile(assets / "missing.txt") == "new" &&
+            readTextFile(assets / ".mmm-assets-version") == "current\n",
+        "incremental file and verified version installed");
+    // 普通顶层文件可留在压缩包中，但只允许 assets 内容进入配置目录。
+    fail += expectTrue(
+        !std::filesystem::exists(assets.parent_path() / "outside.txt") &&
+            std::filesystem::exists(zip),
+        "only assets tree installed and source ZIP retained");
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    return fail;
+}
+
+/// @brief 验证已有资源的离线导入、取消和无效包不会覆盖无关文件。
+/// @details 在同一安装目录执行三次同步，区分以下三种状态。
+/// 取消不会发布任何已解压的条目。
+/// 无网络但 ZIP 有效时保留用户自定义文件，版本需等到联网后再确认。
+/// 无效 ZIP 在后半段报告错误时，不覆盖前一轮可用资源。
+/// @return 内容、版本或同步结果不符合预期的断言数。
+int testImportLocalPackageOffline()
+{
+    int        fail   = 0;
+    const auto root   = createTempRoot();
+    const auto assets = root / "target/assets";
+    // 使用已经存在的目标目录，覆盖只验证首装不能触及的合并分支。
+    // 旧版文件、用户定制文件和旧标记具有不同的生命周期。
+    const auto zip = root / "local.zip";
+    fail += expectTrue(
+        writeTextFile(assets / "file.txt", "previous") &&
+            writeTextFile(assets / "custom.txt", "user asset") &&
+            writeTextFile(assets / ".mmm-assets-version", "previous\n") &&
+            writeZipFile(zip, { { "assets/file.txt", "new offline" } }),
+        "write existing and offline fixtures");
+    AssetSyncOptions options;
+    options.assetsRootPath   = assets;
+    options.localPackagePath = zip;
+    // file URL 缺失模拟不可达清单，没有回环服务或外部网络时也能测试离线分支。
+    options.manifestUrl = fileUrlFor(root / "no-manifest.json");
+    options.packageUrl  = fileUrlFor(root / "no-full.zip");
+
+    // 第一次进入解压进度就触发取消，目标目录还没有发生发布。
+    bool cancelled           = false;
+    options.progressCallback = [&](const AssetSyncProgress& progress) {
+        if ( progress.stage == AssetSyncProgressStage::kImportingPackage )
+            cancelled = true;
+    };
+    // 取消状态只用于这一轮，避免并发测试线程影响后续检查。
+    options.cancellationCallback = [&] { return cancelled; };
+    auto result                  = AssetSyncService::sync(options);
+    // 不能把取消以错误代替，否则启动页会错误提示用户重试网络。
+    // 原文件内容确认仍在，证明解压阶段与发布阶段确实隔离。
+    fail += expectTrue(result.status == AssetSyncStatus::kCancelled &&
+                           readTextFile(assets / "file.txt") == "previous",
+                       "cancelled import preserves existing resources");
+
+    // 同一归档再导入一次，验证取消不会遗留失效暂存或妨碍重试。
+    options.progressCallback     = {};
+    options.cancellationCallback = {};
+    result                       = AssetSyncService::sync(options);
+    // Ready
+    // 表示本地资源可继续使用；仍需保存网络诊断以区分已完成在线校验的结果。
+    fail += expectTrue(result.status == AssetSyncStatus::kReady &&
+                           !result.errorMessage.empty(),
+                       "unreachable manifest allows offline startup");
+    // 自定义文件是源包之外的保留资源；离线情况下必须移除上一次的可信标记。
+    fail += expectTrue(
+        readTextFile(assets / "file.txt") == "new offline" &&
+            readTextFile(assets / "custom.txt") == "user asset" &&
+            !std::filesystem::exists(assets / ".mmm-assets-version"),
+        "offline import overlays resource files and invalidates version");
+
+    // ZIP 先含有效条目，再遇到 Windows 会归一化的尾空格路径。
+    // POSIX 上也拒绝该组件，使同一个包在各平台采取相同的发布策略。
+    // 真正资源根不能留下前一个文件。
+    const auto invalid = root / "invalid.zip";
+    fail +=
+        expectTrue(writeZipFile(invalid,
+                                { { "assets/file.txt", "must not replace" },
+                                  { "assets/.. /outside.txt", "invalid" } }),
+                   "write invalid package fixture");
+    // 此时安装已经由有效离线包建立；失败路径的比较基准是最新可用内容。
+    options.localPackagePath = invalid;
+    result                   = AssetSyncService::sync(options);
+    // ZIP 解析失败的部分输出只会留在暂存目录内，检查多个目标反证覆盖。
+    // 失败后仍可用上一次安装的文件；父目录也不能出现非法项目。
+    fail += expectTrue(
+        result.status == AssetSyncStatus::kError &&
+            readTextFile(assets / "file.txt") == "new offline" &&
+            !std::filesystem::exists(assets.parent_path() / "outside.txt"),
+        "invalid package is rejected before publishing any file");
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    return fail;
+}
+
 /// @brief 测试同步开始前的取消请求会立即终止启动期资源流程。
 /// @return 服务在任何 I/O 前返回 Cancelled 时为零，否则为一。
 /// @note options 只设置取消回调，确保默认路径也不会被访问。
@@ -859,6 +1035,8 @@ int main()
     fail += testSyncSkipsPreciseCheckWhenVersionMatches();
     fail += testSyncForcePreciseCheckRepairsMissingFile();
     fail += testSyncReportsPreciseCheckProgress();
+    fail += testImportLocalPackageThenVerify();
+    fail += testImportLocalPackageOffline();
     // 取消用例最后执行，证明默认 options 无需 fixture 即可安全退出。
     fail += testSyncHonorsCancellationRequest();
 

@@ -65,6 +65,10 @@ constexpr bool requiresSystemPicker()
 /// @warning 用户触发低频路径；回调捕获的观察对象必须存活至选择完成。
 void openFileAsync(const nfdu8filteritem_t* filters, nfdfiltersize_t count,
                    const char* directory, DialogCompletion completion);
+/// @brief 选择离线资源 ZIP；Android 返回此次请求独占的私有缓存副本。
+/// @details 桌面返回用户文件原路径。Android 副本由调用方使用后移除。
+/// @warning 用户触发的低频路径；Android 结果由 pollAsyncDialogs 消费。
+void openAssetPackageAsync(DialogCompletion completion);
 /// @brief 异步选择保存目标，writer 必须确认文档发布成功后才报告保存成功。
 void saveFileAsync(const nfdu8filteritem_t* filters, nfdfiltersize_t count,
                    const char* directory, const char* name,

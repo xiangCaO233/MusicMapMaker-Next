@@ -152,7 +152,7 @@ final class DocumentStorage {
 
     /**
      * @brief 由 Activity 的 UI 线程发起选择，不在此等待系统返回或读取工程文件。
-     * @param requestKind 分别表示单文件打开、创建目标和目录树授权。
+     * @param requestKind 单文件打开、创建目标、目录树授权或启动资源导入。
      * @param name 保存时的建议文件名，不携带目录或未经授权的磁盘位置。
      * @details 最终写权限仍以返回 flags 为准，不能用请求 flags 假定可写。
      */
@@ -162,12 +162,17 @@ final class DocumentStorage {
         kind = requestKind;
         Intent intent = new Intent(requestKind == 2 ? Intent.ACTION_OPEN_DOCUMENT_TREE
                 : requestKind == 1 ? Intent.ACTION_CREATE_DOCUMENT : Intent.ACTION_OPEN_DOCUMENT);
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        // 资源包只读一次，授权和内容都不写入工程工作副本索引。
+        if (requestKind != 3)
+            intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         if (requestKind != 2) {
             // MMM 等自有扩展名未必有系统 MIME 类型，不能被错误过滤为不可选。
             intent.addCategory(Intent.CATEGORY_OPENABLE);
             intent.setType("*/*");
+            if (requestKind == 3)
+                intent.putExtra(Intent.EXTRA_MIME_TYPES,
+                        new String[] {"application/zip", "application/x-zip-compressed", "application/octet-stream"});
             if (requestKind == 1) intent.putExtra(Intent.EXTRA_TITLE, name);
         }
         try { activity.startActivityForResult(intent, REQUEST); }
@@ -189,6 +194,14 @@ final class DocumentStorage {
         Uri uri = data.getData();
         int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
         int selectedKind = kind;
+        if (selectedKind == 3) {
+            // 只使用这次选择授予的读权限。保留源 ZIP，由原生端负责清理缓存副本。
+            worker.execute(() -> {
+                try { complete("OK\n" + copyStartupPackage(uri)); }
+                catch (Exception error) { complete("ERROR\n" + error.getMessage()); }
+            });
+            return true;
+        }
         // 系统授权先持久化，随后才复制资源，避免长工程导入占住 Java UI 线程。
         try { activity.getContentResolver().takePersistableUriPermission(uri, flags); }
         catch (RuntimeException error) { complete("ERROR\n无法持久化文档授权：" + error.getMessage()); return true; }
@@ -197,6 +210,28 @@ final class DocumentStorage {
             catch (Exception error) { complete("ERROR\n" + error.getMessage()); }
         });
         return true;
+    }
+
+    /**
+     * @brief 将授权 ZIP 流式复制到本次请求独占的缓存文件。
+     * @param uri 系统提供的临时只读文档授权。
+     * @return 已经完整关闭的文件路径；不持久化该授权或路径。
+     * @warning 由文件线程调用；云端提供器可能需要等待内容下载。
+     */
+    private String copyStartupPackage(Uri uri) throws IOException {
+        File temporary = File.createTempFile("startup-assets-", ".zip", activity.getCacheDir());
+        boolean copied = false;
+        try {
+            try (InputStream input = activity.getContentResolver().openInputStream(uri)) {
+                if (input == null) throw new IOException("无法读取所选资源包");
+                Files.copy(input, temporary.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            }
+            // 只有流完整关闭后才把路径交给解压任务。
+            copied = true;
+            return temporary.getAbsolutePath();
+        } finally {
+            if (!copied) Files.deleteIfExists(temporary.toPath());
+        }
     }
 
     /**

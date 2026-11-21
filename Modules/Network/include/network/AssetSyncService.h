@@ -31,6 +31,7 @@ struct AssetManifest {
 
 /// @brief 资源同步进度阶段。
 enum class AssetSyncProgressStage : std::uint8_t {
+    kImportingPackage,    ///< 正在从本地 ZIP 导入资源。
     kCheckingManifest,    ///< 正在检查远程资源清单。
     kDownloadingPackage,  ///< 正在下载完整资源包。
     kExtractingPackage,   ///< 正在解压完整资源包。
@@ -54,10 +55,12 @@ struct AssetSyncProgress {
 /// @brief 资源同步运行选项。
 struct AssetSyncOptions {
     std::filesystem::path assetsRootPath;  ///< 用户配置目录中的 assets 根路径。
-    std::string           baseUrl;         ///< 网站根 URL，用于补全相对 URL。
-    std::string           manifestUrl;     ///< 资源清单 URL。
-    std::string           packageUrl;      ///< 清单不可用时的完整资源包 URL。
-    bool                  forcePreciseVerification{
+    std::filesystem::path
+                localPackagePath;  ///< 本轮优先导入的本地 ZIP；空时按常规同步。
+    std::string baseUrl;           ///< 网站根 URL，用于补全相对 URL。
+    std::string manifestUrl;       ///< 资源清单 URL。
+    std::string packageUrl;        ///< 清单不可用时的完整资源包 URL。
+    bool        forcePreciseVerification{
         false
     };  ///< 忽略匹配的本地版本号并逐文件校验资源。
     std::function<void(const AssetSyncProgress&)>
@@ -94,6 +97,8 @@ public:
     static AssetSyncOptions defaultOptions();
 
     /// @brief 同步用户配置目录中的资源包。
+    /// @details 本地包先隔离解压，再逐文件核对下载的清单；本轮只允许增量下载。
+    /// 清单无法访问时沿用已有资源离线启动策略，版本标记留待联网验证。
     /// @param options 同步选项。
     /// @return 同步结果；失败时包含面向日志和弹窗的错误信息。
     static AssetSyncResult sync(const AssetSyncOptions& options);

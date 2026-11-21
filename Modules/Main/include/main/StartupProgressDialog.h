@@ -55,6 +55,14 @@ public:
     /// @return 用户点击重试时返回 true，并清除请求。
     bool consumeRetryRequest();
 
+    /// @brief 取走一次手动选择本地资源包的请求。
+    bool consumeImportRequest();
+
+    /// @brief 发布当前文件选择器的状态，由启动主线程写入。
+    /// @param pending 系统授权或缓存复制尚未完成。
+    /// @param failed 系统选择失败，界面仍可继续当前同步。
+    void setImportSelectionState(bool pending, bool failed = false);
+
     /// @brief 消耗用户本帧发出的继续请求。
     /// @return 用户确认提示并点击继续时返回 true，并清除请求。
     bool consumeContinueRequest();
@@ -142,6 +150,15 @@ private:
 
     /// @brief 用户是否请求重新同步资源。
     bool m_retryRequested{ false };
+
+    /// @brief 用户点击手动导入，本帧后在 ImGui 之外打开选取器。
+    bool m_importRequested{ false };
+
+    /// @brief 有一个系统选取器或平台缓存复制正在进行。
+    bool m_importPending{ false };
+
+    /// @brief 选择阶段发生平台错误，允许重新打开选择器。
+    bool m_importFailed{ false };
 
     /// @brief 用户是否确认提示并继续启动。
     bool m_continueRequested{ false };
