@@ -3,7 +3,8 @@
 /// @details 测试从生产皮肤载入贴图与两套字体，使用同一音符几何。
 /// 用独立 PNG 解码入口读取编码后的文件，并验证实际绘制的像素。
 /// 裁剪测试含一个横跨两端的 Hold 和带水平节点的折线。
-/// 整谱测试跨过指定的一分钟列界，检查长条在相邻列的位置。
+/// 整谱测试跨过默认十五秒列界，检查长条在相邻列的位置。
+/// 自定义列宽通过时间标签及末列高度验证，网格开关直接比对 PNG 像素。
 /// 字体测试分别开启两个水印以及组合状态，不只验证输出尺寸。
 /// 这些用例同时保护中文输出名、取消语义和覆盖前保留已有文件。
 #include "ui/export/BeatmapLongScreenshot.h"
@@ -109,7 +110,7 @@ MMM::Logic::NoteComponent makeNote(NoteType type, double time, int lane,
     return note;
 }
 
-/// @brief 从真实皮肤生成几何，验证裁切、纹理、独立水印与 60 秒分列。
+/// @brief 从真实皮肤生成几何，验证裁切、纹理、水印、分拍线开关和分列。
 /// @param directory 已独占本测试用途的输出目录。
 /// @return 零表示通过；非零值区分失败的验证阶段。
 /// @details 多个模式共享同一个合成谱面，以便比较开关前后的像素。
@@ -168,6 +169,28 @@ int run(const std::filesystem::path& directory)
     if ( !isBright(png.pixel(123, 313)) || isBright(png.pixel(113, 303)) )
         return 6;
 
+    // 两次导出使用同一时段，独立开关只应影响拍线所在的像素。
+    // 第四轨的空白位置跨过整拍线，下一行提供没有网格的参考底色。
+    // 再检查节点、长条及纵向轨道边界没有随拍线消失。
+    chart.m_drawBeatLines   = false;
+    const auto gridless     = prepareBeatmapScreenshot(chart, config);
+    const auto gridlessPath = directory / "gridless.png";
+    if ( !gridless || writeBeatmapScreenshot(*gridless, gridlessPath) !=
+                          ScreenshotResult::Saved )
+        return 17;
+    const auto plain = readPng(gridlessPath);
+    // 避开有物件的像素比较网格，避免把浅色音符误识别为分拍线。
+    // 轨道边界单独取样，因为皮肤底板不归横向网格开关管理。
+    if ( !plain.m_pixels || plain.m_width != png.m_width ||
+         plain.m_height != png.m_height ||
+         png.pixel(255, 313) == png.pixel(255, 315) ||
+         plain.pixel(255, 313) != png.pixel(255, 315) ||
+         !isBright(plain.pixel(123, 313)) || !isBright(plain.pixel(189, 550)) ||
+         !isBright(plain.pixel(90, 220)) )
+        return 18;
+    // 后续整谱用例继续覆盖默认有分拍线的输出。
+    chart.m_drawBeatLines = true;
+
     // 按位组合为仅 MMM、仅作者以及两种同时开启；关闭双方已在裁剪图中覆盖。
     // 不只检查高度，还用单项的真实像素与组合图逐行比对。
     // 若其中一个开关错误地同时控制两种水印，这两个样本就会相同。
@@ -196,30 +219,60 @@ int run(const std::filesystem::path& directory)
             return 10;
     }
 
-    // 从零开始导整谱，60 秒边界上的 Hold 身体应出现在左右两列。
+    // 从零开始导整谱，默认 15 秒边界上的 Hold 身体应出现在左右两列。
     // 使用较短的末列验证它保持像素比例，而不是被拉到和整列同高。
     // 长图使用已导过区间的同一份谱面，之前排除的 Tap 理应恢复。
     // 新增的 Hold 头尾跨过两列，跨界两侧都需要保留主体。
     chart.m_begin = 0.0;
-    chart.m_end   = 62.0;
-    chart.m_notes.push_back(makeNote(NoteType::HOLD, 59.5, 1, 1.0));
+    chart.m_end   = 17.0;
+    chart.m_notes.push_back(makeNote(NoteType::HOLD, 14.5, 1, 1.0));
     const auto whole = prepareBeatmapScreenshot(chart, config);
-    // 从绝对时间推导标签和区域，结束列不能被补成另一整分钟。
+    // 从绝对时间推导标签和区域，结束列不能被补成另一个满时长列。
     // 文件实际写出后再读取，避免测试只验证内部布局元信息。
     const auto wholePath = directory / "whole.png";
     if ( !whole || whole->m_columns.size() != 2 ||
-         whole->m_columns[0].m_label != "00:00.0000 - 01:00.0000" ||
-         whole->m_columns[1].m_label != "01:00.0000 - 01:02.0000" ||
+         whole->m_columns[0].m_label != "00:00.0000 - 00:15.0000" ||
+         whole->m_columns[1].m_label != "00:15.0000 - 00:17.0000" ||
          whole->m_columns[1].m_height != 1026 ||
          writeBeatmapScreenshot(*whole, wholePath) != ScreenshotResult::Saved )
         return 11;
     // 实际文件应宽到能容纳两列，每列中物件不受前后水印状态影响。
     // 第一列顶端和第二列底端各检测长条，相反的裁切方向都能覆盖。
     const auto all = readPng(wholePath);
-    if ( !all.m_pixels || all.m_width != 600 || all.m_height != 28930 ||
+    if ( !all.m_pixels || all.m_width != 600 || all.m_height != 7330 ||
          !isBright(all.pixel(123, 100)) || !isBright(all.pixel(411, 1000)) ||
-         !isBright(all.pixel(255, 28513)) )
+         !isBright(all.pixel(255, 6913)) )
         return 12;
+
+    // 用同一谱面改成 7 秒，确认列数、时标和高度都以新参数为准。
+    // 前三列分别覆盖 7 秒，最后一列只剩 1 秒，绘制比例保持一致。
+    // 先独立检查非正时长，防止除零和意外生成空批次。
+    if ( validScreenshotRange(chart.m_lanes, chart.m_begin, chart.m_end, 0) ||
+         validScreenshotRange(chart.m_lanes, chart.m_begin, chart.m_end, -1) )
+        return 19;
+    // 取与默认值不同且不能整除总时长的参数，覆盖短末列的布局。
+    chart.m_end           = 22.0;
+    chart.m_columnSeconds = 7;
+    const auto custom     = prepareBeatmapScreenshot(chart, config);
+    if ( !custom || custom->m_columns.size() != 4 ||
+         custom->m_columns[0].m_label != "00:00.0000 - 00:07.0000" ||
+         custom->m_columns[0].m_height != 3426 ||
+         custom->m_columns[3].m_label != "00:21.0000 - 00:22.0000" ||
+         custom->m_columns[3].m_height != 546 )
+        return 20;
+    // 回读自定义时长生成的 PNG，验证编码器使用新列数和新首列高度。
+    // 短末列的空余区域只保留图像背景，不补出额外拍线或轨道。
+    const auto customPath = directory / "custom-columns.png";
+    if ( writeBeatmapScreenshot(*custom, customPath) !=
+         ScreenshotResult::Saved )
+        return 21;
+    // 选择第四列一秒内容结束后的坐标，对比同一行的页边距。
+    // 前三列沿用七秒的像素高度，整个图的宽高仍能独立读回。
+    const auto customPng = readPng(customPath);
+    if ( !customPng.m_pixels || customPng.m_width != 1176 ||
+         customPng.m_height != 3490 ||
+         customPng.pixel(900, 900) != customPng.pixel(0, 900) )
+        return 22;
 
     // 失败应在暂存阶段退出；已存在的 PNG 仍能读且原像素与尺寸一致。
     chart.m_end = chart.m_begin;

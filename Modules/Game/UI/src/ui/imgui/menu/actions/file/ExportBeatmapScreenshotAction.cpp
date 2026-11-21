@@ -291,6 +291,13 @@ private:
             keepMobileInputItemVisible();
         }
         ImGui::Separator();
+        // 分列和网格设置同时用于整谱与指定时段，仅影响导出图。
+        ImGui::TextUnformatted(TR("ui.long_screenshot.column_seconds").data());
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::InputInt("##ScreenshotColumnSeconds", &m_columnSeconds, 0, 0);
+        keepMobileInputItemVisible();
+        FeedbackCheckbox(TR("ui.long_screenshot.beat_lines").data(),
+                         &m_drawBeatLines);
         FeedbackCheckbox(TR("ui.long_screenshot.mmm").data(), &m_showMmm);
         // 没有谱师名的项目关闭该控件，
         // 切到有谱师名的谱面时继续采用用户的开关值。
@@ -300,12 +307,17 @@ private:
 
         const auto begin = m_custom ? m_begin : m_chart.m_begin;
         const auto end   = m_custom ? m_end : m_chart.m_end;
-        // 验证直接用两个当前数值，防止快捷导航提交无效时段。
+        // 按当前选择的时段与每列时长重新验证 PNG 尺寸。
         // 两个水印都不会改变当前选择范围的合法性。
-        const bool valid = validScreenshotRange(m_chart.m_lanes, begin, end);
-        if ( !valid )
-            ImGui::TextWrapped("%s",
-                               TR("ui.long_screenshot.invalid_range").data());
+        const bool valid =
+            validScreenshotRange(m_chart.m_lanes, begin, end, m_columnSeconds);
+        if ( !valid ) {
+            const auto* message =
+                m_columnSeconds < 1
+                    ? "ui.long_screenshot.invalid_column_seconds"
+                    : "ui.long_screenshot.invalid_range";
+            ImGui::TextWrapped("%s", TR(message).data());
+        }
         if ( body ) body->end();
 
         const auto size = touch.actionSize();
@@ -325,9 +337,12 @@ private:
         ImGui::EndPopup();
         if ( pick ) {
             // 只把最终选项写入后台快照；取消不改变谱面或字体设置。
-            m_chart.m_begin   = begin;
-            m_chart.m_end     = end;
-            m_chart.m_showMmm = m_showMmm;
+            m_chart.m_begin = begin;
+            m_chart.m_end   = end;
+            // 将两个导出参数一起固定到快照，保存路径选择期间不读取界面草稿。
+            m_chart.m_columnSeconds = m_columnSeconds;
+            m_chart.m_drawBeatLines = m_drawBeatLines;
+            m_chart.m_showMmm       = m_showMmm;
             // 水印开关只在接受参数时生效。
             // 关闭状态的姓名不写进栅格任务，切换 MMM 不影响谱师名。
             if ( m_showAuthor ) m_chart.m_author = m_author;
@@ -490,6 +505,10 @@ private:
     const char* m_status{};
     /// @brief 指定时段输入，单位秒。
     double m_begin{}, m_end{};
+    /// @brief 每列最多覆盖的整数秒数，初次打开使用统一默认值。
+    int m_columnSeconds{ DEFAULT_SCREENSHOT_COLUMN_SECONDS };
+    /// @brief 仅控制图像中的横向网格，不更改会话显示配置。
+    bool m_drawBeatLines{ true };
     /// @brief 两个独立的水印会话选项。
     bool m_showMmm{ true }, m_showAuthor{ true };
     /// @brief 是否使用指定时段。

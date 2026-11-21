@@ -60,8 +60,6 @@ constexpr int MARGIN = 24;
 constexpr int WATERMARK_LINE = 30;
 /// @brief 宽窄谱面统一用小号署名，避免水印遮住谱面。
 constexpr int FONT_HEIGHT = 20;
-/// @brief 各列不超过 60 秒，列内时间从下向上。
-constexpr double COLUMN_SECONDS = 60.0;
 /// @brief 对齐 Batcher 的图集 UV 与半像素采样约定。
 constexpr int ATLAS_SIZE = 2048;
 /// @brief 一列时间标签预留的宽度，窄键数在列中居中。
@@ -675,7 +673,7 @@ void labelGlyphs(const Graphic::RasterizedAsciiFont& font,
     }
 }
 
-/// @brief 逐行编码，末列不足 60 秒时底部留空，不伸缩该列的物件或时间刻度。
+/// @brief 逐行编码，末列不足设定时长时底部留空，不伸缩该列的物件或时间刻度。
 /// @param image 准备好的画布列表、皮肤和字体路径。
 /// @param temp 暂存目录中的 PNG。
 /// @param stop 由工作线程拥有者传递的取消状态。
@@ -688,7 +686,7 @@ ScreenshotResult encode(const BeatmapScreenshotImage& image,
                         const std::filesystem::path& temp, std::stop_token stop)
 {
     // 宽度包含所有列及相邻列间的空白；短列不补轨道底板。
-    // 高度使用首列，因为只有最右末列可能不足 60 秒。
+    // 高度使用首列，因为只有最右末列可能不足设定时长。
     const int spacing = cardWidth(image.m_columnWidth);
     // 以总列数计算宽度；只消耗本行的这段空间。
     // 不需要按最终成品的尺寸创建一个 GPU 纹理。
@@ -803,20 +801,25 @@ struct StagingDirectory {
 /// @param lanes 可见正式轨道数量。
 /// @param begin 起始时间，以秒计。
 /// @param end 结束时间，必须晚于起点。
+/// @param columnSeconds 单列时长上限，参与宽度和高度的预算。
 /// @return 像素总数在上限内且输入为可用时间时返回 true。
 /// @note 为两个水印预留预算，单独开关不改变有效时段。
-bool validScreenshotRange(int lanes, double begin, double end)
+bool validScreenshotRange(int lanes, double begin, double end,
+                          int columnSeconds)
 {
     if ( lanes <= 0 || lanes > 64 || !std::isfinite(begin) ||
          !std::isfinite(end) || std::abs(begin) > 1e8 || std::abs(end) > 1e8 ||
-         end <= begin )
+         end <= begin || columnSeconds <= 0 )
         return false;
-    const auto width = std::ceil((end - begin) / COLUMN_SECONDS) *
+    // 预算和生成使用同一列时长，较短的列会增加总宽度。
+    const auto width = std::ceil((end - begin) / columnSeconds) *
                            cardWidth(lanes * LANE_WIDTH) +
                        MARGIN;
     const auto height =
-        std::ceil(std::min(end - begin, COLUMN_SECONDS) * PIXELS_PER_SECOND) +
+        std::ceil(std::min(end - begin, static_cast<double>(columnSeconds)) *
+                  PIXELS_PER_SECOND) +
         LABEL_HEIGHT + 2 * WATERMARK_LINE + MARGIN + LANE_WIDTH;
+    // 水印和时间栏逐图绘制，不能按每列分别计算其垂直开销。
     return width * height <= MAX_PIXELS;
 }
 
@@ -833,7 +836,8 @@ std::optional<BeatmapScreenshotImage> prepareBeatmapScreenshot(
 {
     // 先限制尺寸再加载皮肤，非法范围不会读取任意图像数据。
     // 选择太长的区间可以缩短，自定义样式和源谱面无需调整。
-    if ( !validScreenshotRange(chart.m_lanes, chart.m_begin, chart.m_end) )
+    if ( !validScreenshotRange(
+             chart.m_lanes, chart.m_begin, chart.m_end, chart.m_columnSeconds) )
         return std::nullopt;
     BeatmapScreenshotImage image;
     image.m_columnWidth = chart.m_lanes * LANE_WIDTH;
@@ -904,13 +908,14 @@ std::optional<BeatmapScreenshotImage> prepareBeatmapScreenshot(
         objects.emplace_back(entity, std::pair{ first, last });
     }
     std::vector<entt::entity> visible;
-    const auto                count = static_cast<int>(
-        std::ceil((chart.m_end - chart.m_begin) / COLUMN_SECONDS));
+    const double              columnSeconds = chart.m_columnSeconds;
+    const auto                count         = static_cast<int>(
+        std::ceil((chart.m_end - chart.m_begin) / columnSeconds));
     // 列时间范围根据起始时间逐列推导，而不是累计上一次舍入后的像素。
     // 导致像素长度不足一行的选区也保留一行可见轨道。
     for ( int index = 0; index < count; ++index ) {
-        const auto first = chart.m_begin + index * COLUMN_SECONDS;
-        const auto last  = std::min(chart.m_end, first + COLUMN_SECONDS);
+        const auto first = chart.m_begin + index * columnSeconds;
+        const auto last  = std::min(chart.m_end, first + columnSeconds);
         visible.clear();
         for ( const auto& [entity, range] : objects ) {
             const auto [start, end] = range;
@@ -939,7 +944,8 @@ std::optional<BeatmapScreenshotImage> prepareBeatmapScreenshot(
             image.m_columnWidth,
             column.m_height,
             chart.m_lanes,
-            PIXELS_PER_SECOND);
+            PIXELS_PER_SECOND,
+            chart.m_drawBeatLines);
         image.m_columns.push_back(std::move(column));
     }
     // 返回的几何和 RGBA 不引用局部 registry、cache 或 SkinManager。

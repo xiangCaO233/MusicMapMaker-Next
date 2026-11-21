@@ -17,12 +17,19 @@ struct EditorConfig;
 
 namespace MMM::UI
 {
+/// @brief 界面与导出快照共用的默认单列时长，单位秒。
+inline constexpr int DEFAULT_SCREENSHOT_COLUMN_SECONDS = 15;
+
 /// @brief 本次导出的编辑器快照，拥有独立的物件、分拍事件及署名。
 struct BeatmapScreenshot {
     /// @brief 只取正式轨道，不包含草稿和 BGM 区。
     int m_lanes{};
     /// @brief 时间窗以秒为单位，列的读取方向与主画布一致。
     double m_begin{}, m_end{};
+    /// @brief 整数秒的单列时长上限，决定 PNG 的分列边界。
+    int m_columnSeconds{ DEFAULT_SCREENSHOT_COLUMN_SECONDS };
+    /// @brief 控制导出图的横向分拍线，轨道边界仍由皮肤绘制。
+    bool m_drawBeatLines{ true };
     /// @brief 没有有效红线时使用的谱面参考节奏。
     double m_defaultBpm{ 120.0 };
     /// @brief MMM 水印开关，独立于作者水印。
@@ -43,7 +50,7 @@ struct BeatmapScreenshotColumn {
     std::string m_label;
     /// @brief 与主画布相同的无 GPU 批次；逻辑坐标是单列局部像素。
     Common::Render::RenderSnapshot m_scene;
-    /// @brief 当前列内容高度，末列可能少于 60 秒。
+    /// @brief 当前列内容高度，末列可能小于用户设定的列时长。
     int m_height{};
 };
 
@@ -74,7 +81,9 @@ enum class ScreenshotResult {
 };
 
 /// @brief 校验时间、轨数和像素预算，不访问文件系统。
-[[nodiscard]] bool validScreenshotRange(int lanes, double begin, double end);
+/// @param columnSeconds 单列时长上限，必须为正整数秒。
+[[nodiscard]] bool validScreenshotRange(int lanes, double begin, double end,
+                                        int columnSeconds);
 
 /// @brief 复用正式画布生成分列批次；调用期间借用当前皮肤。
 /// @warning 只在显式导出时从 UI 线程调用，在后台编码前固定资源代际。

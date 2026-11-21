@@ -82,6 +82,7 @@ public:
     /// @param height 本列实际时长对应的像素高度。
     /// @param trackCount 正式轨道数。
     /// @param pixelsPerSecond 导出时每秒的像素高度。
+    /// @param showBeatLines 是否在轨道和物件之间绘制横向分拍线。
     /// @warning 用户明确导出时才调用，不得在常规渲染路径追加此批次。
     static void generateLongScreenshotColumn(
         entt::registry& registry, const std::vector<entt::entity>& entities,
@@ -89,7 +90,7 @@ public:
         const std::vector<const TimelineComponent*>& bpmEvents,
         RenderSnapshot& snapshot, const Config::EditorConfigView& config,
         double begin, float width, float height, int trackCount,
-        float pixelsPerSecond);
+        float pixelsPerSecond, bool showBeatLines);
 
 private:
     // --- 内部逻辑拆分方法 ---

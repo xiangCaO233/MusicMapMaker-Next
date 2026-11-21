@@ -223,7 +223,8 @@ void drawJudgmentGuideBox(Batcher& batcher, float leftX, float anchorY,
 /// @param height 本列包括上下贴图边距的输出高度。
 /// @param trackCount 正式轨道数，必须大于零。
 /// @param pixelsPerSecond 所有导出列严格使用相同的时间像素比例。
-/// @note 单张谱面可能在 60 秒处同时跨两个列。
+/// @param showBeatLines 控制分拍线图层，导出关闭时跳过其批次生成。
+/// @note 同一个物件可跨过用户设定的分列边界。
 /// 主体裁到两列各自的时间边缘，图形不会复制出额外的头尾。
 /// 此方法不构建播放、草稿、命中和高亮批次。
 /// 调用线程与皮肤更新在同一顺序上生成，快照之后可独立读。
@@ -233,7 +234,7 @@ void NoteRenderSystem::generateLongScreenshotColumn(
     const std::vector<const TimelineComponent*>& bpmEvents,
     RenderSnapshot& snapshot, const Config::EditorConfigView& config,
     double begin, float width, float height, int trackCount,
-    float pixelsPerSecond)
+    float pixelsPerSecond, bool showBeatLines)
 {
     const float laneWidth = width / static_cast<float>(trackCount);
     // 按已重建的线性缓存换算速度，避免将画布缩放重复叠加。
@@ -249,24 +250,27 @@ void NoteRenderSystem::generateLongScreenshotColumn(
     // 预先绘制该列底板，使透明纹理和后续拍线保持与编辑器相同的叠放关系。
     // 轨道贴图使用图集中的同一语义身份，列边界不改变单轨尺寸。
     drawTrackBackground(batcher, trackCount, 0.0f, 0.0f, height, laneWidth);
-    drawBeatLines(batcher,
-                  width,
-                  height,
-                  bottom,
-                  config,
-                  bpmEvents,
-                  begin,
-                  &cache,
-                  0.0f,
-                  top,
-                  bottom,
-                  width,
-                  scale,
-                  false,
-                  1.0f,
-                  false,
-                  false,
-                  false);
+    // 分拍线开关只影响横向网格，底板和物件仍使用同一时间轴。
+    if ( showBeatLines ) {
+        drawBeatLines(batcher,
+                      width,
+                      height,
+                      bottom,
+                      config,
+                      bpmEvents,
+                      begin,
+                      &cache,
+                      0.0f,
+                      top,
+                      bottom,
+                      width,
+                      scale,
+                      false,
+                      1.0f,
+                      false,
+                      false,
+                      false);
+    }
     // 用同一套颜色覆盖、皮肤尺寸比和折线子段策略；导出不写命中框。
     // 编辑器配色与自定义物件覆盖由原渲染上下文选择。
     // 导出只接收已经确认的运动范围，不读取框选、磁吸或鼠标状态。
