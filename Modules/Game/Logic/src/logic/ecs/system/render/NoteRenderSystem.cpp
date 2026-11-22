@@ -774,16 +774,17 @@ void NoteRenderSystem::generateSnapshot(
     if ( cameraId != "Timeline" ) {
         batcher.setScissor(leftX, topY, trackAreaW, bottomY - topY);
         // 先绘制拍线，使其在物件下方
-        // 主画布显示模式控制拍线基础可见性。
+        // 全局显示模式控制主画布和对比画布的拍线可见性，不随对比布局冻结。
         // Timing 线独立于拍线，默认仅由预览分支启用。
         // 近光标渐隐依赖精确编辑指针，不能直接用于缩略预览。
-        const bool beatLinesHidden       = config.visual.beatLineDisplayMode ==
-                                           Config::BeatLineDisplayMode::Hidden;
-        bool       shouldDrawBeatLines   = !beatLinesHidden;
-        bool       shouldDrawTimingLines = false;
-        bool       revealBeatLinesNearCursor =
-            config.visual.beatLineDisplayMode ==
-            Config::BeatLineDisplayMode::NearCursor;
+        const auto beatLineDisplayMode =
+            config.sharedVisual.beatLineDisplayMode;
+        const bool beatLinesHidden =
+            beatLineDisplayMode == Config::BeatLineDisplayMode::Hidden;
+        bool shouldDrawBeatLines   = !beatLinesHidden;
+        bool shouldDrawTimingLines = false;
+        bool revealBeatLinesNearCursor =
+            beatLineDisplayMode == Config::BeatLineDisplayMode::NearCursor;
 
         if ( cameraId == "Preview" ) {
             // 预览区保留自身开关；自动渐隐只应用到具备精确编辑光标的主画布。
