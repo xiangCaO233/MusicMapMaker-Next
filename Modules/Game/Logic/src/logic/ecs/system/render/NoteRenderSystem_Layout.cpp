@@ -652,11 +652,12 @@ void NoteRenderSystem::drawBeatLines(
     const auto revealAlphaAt = [&](float y) {
         // 常显模式完全跳过光标渐隐，悬浮细分和普通线共用相同透明度规则。
         if ( !revealNearCursor ) return 1.0F;
+        // 光标位置仍来自当前视口，渐隐范围实时使用全局工具栏的参数。
         return calculateCursorRevealAlpha(
             std::abs(y - cursorY),
             revealHeight,
-            config.visual.beatLineCursorVisibleRatio,
-            config.visual.beatLineCursorFadeRatio);
+            config.sharedVisual.beatLineCursorVisibleRatio,
+            config.sharedVisual.beatLineCursorFadeRatio);
     };
     // 三维细线会被透视压成亚像素宽，即使常显且 alpha 为一也可能完全漏过采样点。
     // 为同一次区域绘制只构造一次投影；二维与缩略预览继续沿用原始线宽。

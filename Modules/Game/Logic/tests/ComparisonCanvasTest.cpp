@@ -46,6 +46,11 @@ bool near(double a, double b)
 /// 按相同时间锚点分别比较前向位置和逆向编辑落点，覆盖仅修改显示刻度、
 /// 逻辑仍沿用主缓存而导致的错位。
 ///
+/// 分拍线显示是共享偏好。对比的局部快照故意保留另外两种模式，
+/// 以捕捉错误地用视口布局副本决定显隐的回归。
+/// 常显在未悬停时也应产生玩家区分拍线，自动模式则只响应所属视口的指针。
+/// 所有切换走会话配置命令，测试期间不重新注册对比视口。
+///
 /// 每个视口都须拿到自己的同步缓冲。验证透视厚度参数可以捕捉误用
 /// 全局相机配置的回归，也可以捕捉 UI 声明有 3D、逻辑却只生成二维几何的情况。
 ///
@@ -87,7 +92,9 @@ int runComparisonCanvasTest()
     config.visual.judgeline_pos               = 0.5F;
     config.visual.enableLinearScrollMapping   = false;
     config.visual.canvasThicknessCompensation = 50.0F;
-    config.settings.objectPlacementSnap       = false;
+    config.visual.beatLineDisplayMode =
+        MMM::Config::BeatLineDisplayMode::Always;
+    config.settings.objectPlacementSnap = false;
     // 主视口以单位倍率为参照；关闭放置吸附以便精确核对对比视口的逆映射。
     config.visual.timelineZoom            = 1.0F;
     config.visual.scrollAnimationDuration = 0.0F;
@@ -103,6 +110,14 @@ int runComparisonCanvasTest()
         TimelineComponent{ .m_timestamp = 0.0,
                            .m_effect    = MMM::TimingEffect::SCROLL,
                            .m_value     = 2.0 });
+    // 使用真实 BPM 网格，断言实际提交到快照供播放和鼠标反馈使用的分拍线。
+    // BPM 与两倍 SV 同时起始，让不同滚动映射仍有可比较的同一套拍位。
+    // 没有 BPM 时渲染器会跳过整批拍线，无法据此判断显示模式是否生效。
+    ctx.timelineRegistry.emplace<TimelineComponent>(
+        ctx.timelineRegistry.create(),
+        TimelineComponent{ .m_timestamp = 0.0,
+                           .m_effect    = MMM::TimingEffect::BPM,
+                           .m_value     = 120.0 });
     // 对比不仅使用不同映射，还验证轨道起点和判定线也能独立设置。
     // 以 50% 和 150% 分别覆盖比基准小及比基准大的比例。
     // 两者的视口宽高相同，从而区分纵向时间间距与按窗口高缩放的行为。
@@ -117,6 +132,12 @@ int runComparisonCanvasTest()
         std::make_shared<MMM::Config::VisualConfig>(config.visual);
     tiltedVisual->debugCanvasCameraAngleDegrees = 35.0F;
     tiltedVisual->timelineZoom                  = 1.5F;
+    // 模拟两个已打开的对比画布持有切换设置前的显示模式。
+    // 对比自身的布局和缩放仍应参与绘制，只有显示模式由上方的会话设置决定。
+    linearVisual->beatLineDisplayMode =
+        MMM::Config::BeatLineDisplayMode::Hidden;
+    tiltedVisual->beatLineDisplayMode =
+        MMM::Config::BeatLineDisplayMode::NearCursor;
     // 使用隔离的底板 UV 区域，使检查只统计白色轨道线使用的平铺几何。
     // 无需实际皮肤资源，其他轮廓和拍线仍走普通快照生成，但不落在此 UV 内。
     // 两个视图使用同一图集条目，避免不同纹理坐标提前阻止错误复用。
@@ -179,6 +200,15 @@ int runComparisonCanvasTest()
         return 1;
     }
 
+    // 此时没有提交鼠标位置，三个视口应独立绘制同一时间轴上的拍线。
+    // 检查实际绘制收集的拍线列表，避免把判定线或底板顶点当成分拍网格。
+    if ( mainSnap->playerBeatLines.empty() ||
+         linearSnap->playerBeatLines.empty() ||
+         tiltedSnap->playerBeatLines.empty() ) {
+        XERROR("Always-visible beat lines did not reach all comparison views");
+        return 1;
+    }
+
     /// @brief 通过底板的 UV 区域单独检查轨道线上下端。
     /// @details 底板向上多铺半像素用于遮缝，最后一段必须到达当前轨道上沿。
     /// 下沿保持原位，不能随缩放或透视延长一起移动。
@@ -226,6 +256,46 @@ int runComparisonCanvasTest()
          !trackFillsLayout(*resizedTilted, *tiltedVisual, 420.0F) ) {
         XERROR(
             "Resizing a viewport reused track geometry at the previous height");
+        return 1;
+    }
+
+    // 只提交工具栏的全局配置，保持两份画布视觉快照不动。
+    // 自动模式需要当前视口的真实悬停，不能因另一画布悬停而显示拍线。
+    config.visual.beatLineDisplayMode =
+        MMM::Config::BeatLineDisplayMode::NearCursor;
+    session.pushCommand(CmdUpdateEditorConfig{ config });
+    // 在线性对比的独立轨道内悬停。Y 选择该视口的判定线，让光标附近有已知拍位，
+    // 避免测试结果依赖透视反投影或当前画布边缘的渐隐阈值。
+    session.pushCommand(CmdSetMousePosition{ .cameraId       = linear,
+                                             .mouseX         = 600.0F,
+                                             .mouseY         = 450.0F,
+                                             .viewportWidth  = 1000.0F,
+                                             .viewportHeight = 600.0F,
+                                             .isHovering     = true });
+    session.update(0.0, config, true);
+    const auto* autoMain   = ctx.syncBuffers.at(main)->pullLatestSnapshot();
+    const auto* autoLinear = ctx.syncBuffers.at(linear)->pullLatestSnapshot();
+    const auto* autoTilted = ctx.syncBuffers.at(tilted)->pullLatestSnapshot();
+    // 线性视口原先缓存的是隐藏，必须从共享模式追上本帧的自动显示。
+    // 仍无鼠标的两份快照都须为空，覆盖误用会话级悬停标志的情况。
+    if ( !autoMain || !autoLinear || !autoTilted ||
+         !autoMain->playerBeatLines.empty() ||
+         autoLinear->playerBeatLines.empty() ||
+         !autoTilted->playerBeatLines.empty() ) {
+        XERROR(
+            "Near-cursor beat lines did not follow the hovered comparison "
+            "view");
+        return 1;
+    }
+    // 此时仍悬停在线性画布上。全局隐藏应立即清除该处刚显示的拍线。
+    config.visual.beatLineDisplayMode =
+        MMM::Config::BeatLineDisplayMode::Hidden;
+    session.pushCommand(CmdUpdateEditorConfig{ config });
+    session.update(0.0, config, true);
+    // 从该视口重新消费，确认显隐变化在暂停状态也能发布新快照。
+    const auto* hiddenLinear = ctx.syncBuffers.at(linear)->pullLatestSnapshot();
+    if ( !hiddenLinear || !hiddenLinear->playerBeatLines.empty() ) {
+        XERROR("Hiding beat lines did not update the open comparison view");
         return 1;
     }
 

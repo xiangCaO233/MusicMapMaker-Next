@@ -1151,8 +1151,11 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
     for ( auto& [cameraId, camera] : m_ctx->cameras ) {
         if ( camera.comparison && !camera.comparison->visible ) continue;
         // 对比相机借用自己的视觉快照，谱面编辑规则仍由会话配置提供。
+        // 分拍线显示模式来自本轮会话配置，已打开的对比不用重新发布布局。
         const Config::EditorConfigView viewportConfig{
-            SessionUtils::visualForCamera(*m_ctx, cameraId), config.settings
+            SessionUtils::visualForCamera(*m_ctx, cameraId),
+            config.settings,
+            config.visual
         };
         const auto* cache =
             SessionUtils::scrollCacheForCamera(*m_ctx, cameraId);
