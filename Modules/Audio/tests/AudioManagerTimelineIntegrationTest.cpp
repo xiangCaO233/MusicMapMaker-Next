@@ -851,6 +851,15 @@ bool testSharedMainStretcher(MMM::Audio::AudioManager& manager,
         passed = passed &&
                  std::abs(manager.getAuditionPlaybackSpeed() - 0.75) < 1.0e-9;
         manager.playAudition();
+        // 变速器仍在为试听拉取输入，但停止的谱面不能接纳新的编辑器节拍。
+        // 直接检查 voice 是否被创建，让回归无需碰巧卡在同一个回调边界。
+        manager.playSoundEffect(EDITOR_BEAT);
+        manager.playSoundEffectScheduled(EDITOR_BEAT, 0.0);
+        // 音效池同步发布最近实例，因此此处无需等待设备推进播放游标。
+        if ( manager.isSFXPlaying(EDITOR_BEAT) ) {
+            XERROR("Stopped editor accepted a metronome beat during audition");
+            passed = false;
+        }
         passed = passed && waitUntil([&] {
                      return manager.getAuditionCurrentTime() > 0.01;
                  });
@@ -863,6 +872,7 @@ bool testSharedMainStretcher(MMM::Audio::AudioManager& manager,
         // 这里不测声卡墙钟延迟，只验证可观察的 voice 消费方向。
         // 先清掉旧试听历史，保证下一段检查处于稳定暂停状态。
         manager.playSoundEffect(EDITOR_BEAT);
+        manager.playSoundEffectScheduled(EDITOR_BEAT, 0.0);
         manager.updateSFXSyncSpeedRouting(false);
         std::this_thread::sleep_for(30ms);
         // 禁用打击音效同步也不能把节拍器移到主输出；主暂停时它应冻结。
@@ -878,6 +888,14 @@ bool testSharedMainStretcher(MMM::Audio::AudioManager& manager,
         passed              = passed && waitUntil([&] {
                      return manager.getCurrentTime() > before + 0.01;
                               });
+        // 恢复后重新预约本拍，确认节拍仍通过绑定到主时间线的输入段推进。
+        // 预约已到达的拍点也覆盖目标帧落在当前音频块之前的调度边界。
+        // 断言源游标实际前进，能捕获总线接错或恢复后门控未打开。
+        manager.playSoundEffectScheduled(EDITOR_BEAT, manager.getCurrentTime());
+        passed = passed && waitUntil([&] {
+                     return manager.getSFXPlaybackTime(EDITOR_BEAT) > 0.0;
+                 });
+        manager.stopSoundEffect(EDITOR_BEAT);
         // 主谱面仍在播放时，BPM 节拍只能跟随暂停的试听源，不能被主总线消费。
         manager.playSoundEffect(AUDITION_BEAT);
         manager.updateSFXSyncSpeedRouting(true);
