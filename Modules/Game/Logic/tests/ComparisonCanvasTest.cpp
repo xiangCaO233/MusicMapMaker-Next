@@ -1,5 +1,5 @@
 /// @file ComparisonCanvasTest.cpp
-/// @brief 同一谱面的多相机映射、独立快照和编辑事务回归。
+/// @brief 同一谱面的多相机缩放、映射、独立快照和编辑事务回归。
 /// @details 使用真实命令处理和同步缓冲，不要求 Vulkan、窗口焦点或音频设备。
 /// 时刻和轨道由两种视觉映射换算；确定的 2 倍 SV 让映射误用可被精确观察。
 /// 比较结束后独立关闭一个视口，另外两份状态仍可读取。
@@ -16,6 +16,7 @@
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/metadata/MapMetadata.h"
 #include "mmm/timing/TimingEffect.h"
 
 #include <cmath>
@@ -35,8 +36,10 @@ bool near(double a, double b)
 /// 覆盖绘制坐标与撤销共享、窗口关闭，以及主设置变化后对比仍保有自身选项。
 ///
 /// 初始化只建一个 ECS 和一个动作栈。相机使用相同尺寸、不同标识，
-/// 因而换算结果的差异只能由变速映射产生，不能归因于画布比例或 DPI。
-/// 对照相机同时覆盖共用主映射与使用备用映射，测试分别检查这两种复用关系。
+/// 因而换算结果的差异由变速映射及缩放产生，不能归因于 DPI。
+/// 对照相机分别借用主积分和备用积分，以独立倍率投影渲染及拾取坐标。
+/// 按相同时间锚点分别比较前向位置和逆向编辑落点，覆盖仅修改显示刻度、
+/// 逻辑仍沿用主缓存而导致的错位。
 ///
 /// 每个视口都须拿到自己的同步缓冲。验证透视厚度参数可以捕捉误用
 /// 全局相机配置的回归，也可以捕捉 UI 声明有 3D、逻辑却只生成二维几何的情况。
@@ -60,22 +63,26 @@ int runComparisonCanvasTest()
     // 只建立一个实际谱面，不为对比窗口单独创建 Session 或音频环境。
     // 固定轨道与判定线几何，输入时按目标视口缓存换算像素。
     ctx.currentBeatmap = std::make_shared<MMM::BeatMap>();
-    ctx.currentBeatmap->m_baseMapMetadata.track_count = 4;
-    ctx.trackCount                                    = 4;
-    ctx.currentTime                                   = 1.0;
-    ctx.animateTime                                   = 1.0;
-    ctx.currentTool                                   = EditTool::Draw;
-    auto config                                       = ctx.lastConfig;
-    config.visual.trackLayout.left                    = 0.1F;
-    config.visual.trackLayout.right                   = 0.5F;
-    config.visual.judgeline_pos                       = 0.5F;
-    config.visual.enableLinearScrollMapping           = false;
-    config.visual.canvasThicknessCompensation         = 50.0F;
-    config.settings.objectPlacementSnap               = false;
-    // 固定缩放保证变速差来自时间线事件。关闭放置吸附使两种映射
-    // 即使落在同一分拍网格附近也不会被吸到相同的时间点。
-    config.visual.timelineZoom = 1.0F;
-    const std::string main     = "Basic2DCanvas";
+    // 锁定 osu! 滑条倍率，否则变速积分还会叠加格式默认的 1.4 倍。
+    ctx.currentBeatmap->m_metadata
+        .map_properties[MMM::MapMetadataType::OSU]
+                       ["Difficulty::SliderMultiplier"] = "1";
+    ctx.currentBeatmap->m_baseMapMetadata.track_count   = 4;
+    ctx.trackCount                                      = 4;
+    ctx.currentTime                                     = 1.0;
+    ctx.animateTime                                     = 1.0;
+    ctx.currentTool                                     = EditTool::Draw;
+    auto config                                         = ctx.lastConfig;
+    config.visual.trackLayout.left                      = 0.1F;
+    config.visual.trackLayout.right                     = 0.5F;
+    config.visual.judgeline_pos                         = 0.5F;
+    config.visual.enableLinearScrollMapping             = false;
+    config.visual.canvasThicknessCompensation           = 50.0F;
+    config.settings.objectPlacementSnap                 = false;
+    // 主视口以单位倍率为参照；关闭放置吸附以便精确核对对比视口的逆映射。
+    config.visual.timelineZoom            = 1.0F;
+    config.visual.scrollAnimationDuration = 0.0F;
+    const std::string main                = "Basic2DCanvas";
     const std::string prefix =
         main + std::string(MMM::Common::COMPARISON_CANVAS_SUFFIX);
     const auto linear = prefix + "1";
@@ -88,14 +95,19 @@ int runComparisonCanvasTest()
                            .m_effect    = MMM::TimingEffect::SCROLL,
                            .m_value     = 2.0 });
     // 对比不仅使用不同映射，还验证轨道起点和判定线也能独立设置。
+    // 以 50% 和 150% 分别覆盖比基准小及比基准大的比例。
+    // 两者的视口宽高相同，从而区分纵向时间间距与按窗口高缩放的行为。
+    // 每次配置发布后都保留同一份只读视觉对象，以覆盖 UI 的实际命令协议。
     auto linearVisual =
         std::make_shared<MMM::Config::VisualConfig>(config.visual);
     linearVisual->trackLayout.left  = .55F;
     linearVisual->trackLayout.right = .95F;
     linearVisual->judgeline_pos     = .75F;
+    linearVisual->timelineZoom      = .5F;
     auto tiltedVisual =
         std::make_shared<MMM::Config::VisualConfig>(config.visual);
     tiltedVisual->debugCanvasCameraAngleDegrees = 35.0F;
+    tiltedVisual->timelineZoom                  = 1.5F;
     // 经真实队列注册三种画布，验证同步缓冲使用各自相机 ID。
     // 主画布的命令不带覆盖参数，保持普通入口的注册语义。
     session.pushCommand(CmdUpdateViewport{ main, 1000.0F, 600.0F });
@@ -113,14 +125,20 @@ int runComparisonCanvasTest()
     session.update(0.0, config, true);
 
     // 线性视图的像素时间必须与变速图不同。3D 只改变观察矩阵，
-    // 所以同为变速的两个相机应复用一套时间分段和位置索引。
+    // 所以同为变速的两个相机复用时间分段和位置索引，各自投影为不同间距。
+    // 这里同时检查源缓存身份，不允许为了独立缩放为每个标签重复做时间积分。
+    // 线性对比同时关闭两倍 SV 并使用一半缩放，预期位置为主画布的四分之一。
     const auto* mainCache   = SessionUtils::scrollCacheForCamera(ctx, main);
     const auto* linearCache = SessionUtils::scrollCacheForCamera(ctx, linear);
     const auto* tiltedCache = SessionUtils::scrollCacheForCamera(ctx, tilted);
-    if ( !mainCache || !linearCache || mainCache == linearCache ||
-         mainCache != tiltedCache ||
-         near(mainCache->getAbsY(1.5), linearCache->getAbsY(1.5)) ) {
-        XERROR("Comparison views did not share the correct scroll caches");
+    if ( !mainCache || !linearCache || !tiltedCache ||
+         &linearCache->integralSource() == mainCache ||
+         &tiltedCache->integralSource() != mainCache ||
+         !near(tiltedCache->getAbsY(1.5), mainCache->getAbsY(1.5) * 1.5) ||
+         !near(linearCache->getAbsY(1.5), mainCache->getAbsY(1.5) * .25) ) {
+        XERROR(
+            "Comparison views did not use independent zoom over shared "
+            "integrals");
         return 1;
     }
 
@@ -144,6 +162,7 @@ int runComparisonCanvasTest()
     // 单独选择仅右移后的对比轨道才包含的 X，以排除主布局误命中的情况。
     // 即使画笔进入函数，旧全局左右边界也会拒绝这个位置，导致物件数不符。
     // 同步检查判定线的 Y 偏移，可以捕捉命中正确但时间映射采用旧值的回归。
+    // 输入使用一个有明显垂直间距的时间点。仅比较判定线会让错误倍率恰好通过。
     // 从线性视图起笔；时间由该视图的逆映射计算，动作进入同一历史。
     const double expectedTime = ctx.animateTime + 0.25;
     // 判定线在对比视口的 450 px。目标时间直接由线性积分向上投影，
@@ -172,16 +191,46 @@ int runComparisonCanvasTest()
         return 1;
     }
 
-    // 主设置改为线性，已有 3D 视图仍使用变速，且未关闭的标签继续共用数据。
-    // 交换主缓存和备用缓存的职责，检查已建立视口不会随全局开关改值。
-    // 切换后两套缓存继续复用稳定地址，避免渲染位置索引逐帧重建。
+    // 只改线性对比的缩放，验证主视口及其余对比保持原有可见范围。
+    // 模拟滑块只发布一条零尺寸 CmdUpdateViewport，保持相机高度和水平位置。
+    // 复制旧配置是为保留布局字段；不修改仍被相机借用的上一次发布对象。
+    // 将线性倍率调到 200%，抵消主视口两倍 SV 的差异，便于精确比较绝对坐标。
+    auto zoomedVisual =
+        std::make_shared<MMM::Config::VisualConfig>(*linearVisual);
+    zoomedVisual->timelineZoom = 2.0F;
+    session.pushCommand(CmdUpdateViewport{
+        .cameraId   = linear,
+        .comparison = MMM::Common::ComparisonCanvasSettings{
+            .linearMapping = true, .visual = zoomedVisual } });
+    session.update(0.0, config, true);
+    const double mainPosition   = mainCache->getAbsY(1.5);
+    const double linearPosition = linearCache->getAbsY(1.5);
+    const double tiltedPosition = tiltedCache->getAbsY(1.5);
+    // 同时检查共享动画状态，排除一帧内先改主缩放再覆盖缓存的实现。
+    if ( !near(linearPosition, mainPosition) ||
+         !near(tiltedPosition, mainPosition * 1.5) ||
+         !near(ctx.animatedTimelineZoom, 1.0) ) {
+        XERROR("Changing one comparison zoom leaked into another view");
+        return 1;
+    }
+
+    // 切换主映射和基准缩放，验证对比仍保持各自映射及绝对间距。
+    // 此次切换会触发积分重建；对比倍率应重新除以主缓存的新基础值。
+    // 测试禁用了主视口缩放过渡，用零时间推进即可得到目标倍率。
+    // 两个旧视口分别重新绑定到原来相反的积分槽，继续持有自己的绝对倍率。
+    const auto* alternate                   = &linearCache->integralSource();
     config.visual.enableLinearScrollMapping = true;
+    config.visual.timelineZoom              = 3.0F;
     session.pushCommand(CmdUpdateEditorConfig{ config });
     session.update(0.0, config, true);
-    // 比较稳定地址同时检验了复用路径，确保主映射切换没有为每个标签
-    // 单独分配对应的时间线缓存。
-    if ( SessionUtils::scrollCacheForCamera(ctx, linear) != mainCache ||
-         SessionUtils::scrollCacheForCamera(ctx, tilted) != linearCache ||
+    // 相机投影保留稳定地址，积分源可以随主映射设置交换。
+    // 单独验证主视口确实到达 300%，避免测试在缩放操作被忽略时假阳性。
+    // 3D 视角沿用原视觉快照，切换时间映射也不应触发布局恢复。
+    if ( &linearCache->integralSource() != mainCache ||
+         &tiltedCache->integralSource() != alternate ||
+         !near(linearCache->getAbsY(1.5), linearPosition) ||
+         !near(tiltedCache->getAbsY(1.5), tiltedPosition) ||
+         !near(mainCache->getAbsY(1.5), linearPosition * 1.5) ||
          ctx.cameras.at(tilted)
                  .comparison->visual->debugCanvasCameraAngleDegrees != 35.0F ) {
         XERROR("Main editor mapping override changed comparison view settings");
@@ -194,6 +243,7 @@ int runComparisonCanvasTest()
     session.pushCommand(CmdUpdateViewport{ linear, 100.0F, 100.0F });
     session.update(0.0, config, true);
     // 相机和同步缓冲都须移除，后者仍存在会导致窗口反复开关时积累资源。
+    // 关闭发生在重新绑定以后，可同时检查一个投影销毁不会释放共享积分。
     if ( !ctx.cameras.contains(main) || !ctx.cameras.contains(tilted) ||
          ctx.cameras.contains(linear) || ctx.syncBuffers.contains(linear) ) {
         XERROR("Closing a comparison did not isolate its camera lifetime");

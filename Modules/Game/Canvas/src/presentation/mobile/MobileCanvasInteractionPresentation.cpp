@@ -245,7 +245,8 @@ public:
             m_gesture.cancel();
             m_handle.reset();
         }
-        navigate(raw,
+        navigate(canvas,
+                 raw,
                  m_ownership.ownsGesture() && !interrupted,
                  ctx.cameraId,
                  frame,
@@ -462,6 +463,7 @@ private:
     std::uintptr_t m_handleInstance{};
     /// @brief 多指导航只发布增量和最终倍率，不修改键盘状态或借用桌面中键。
     /// @warning 每帧固定数学，只有释放边沿更新配置值；不取得会话长锁。
+    /// @param canvas 所属交互控制器，负责保存对比页的局部倍率。
     /// @param raw 原始手势值快照，只在本次 UI 栈内借用。
     /// @param allowed 包含画布起点归属、播放与弹层阻挡的最终导航许可。
     /// @param camera 命令绑定原始画布，焦点改变不允许重投活动会话。
@@ -474,7 +476,8 @@ private:
     /// 最终设置只提交已经实际显示过的倍率，不能提交被投影拒绝的目标。
     /// 配置值只在释放边沿发布，连续帧不复制完整设置或保存项目文件。
     /// 所有权仍由 UI 外壳管理，本方法不创建会话或后台任务。
-    void navigate(const Graphic::MobileTouchSnapshot& raw, bool allowed,
+    void navigate(Basic2DCanvasInteraction&           canvas,
+                  const Graphic::MobileTouchSnapshot& raw, bool allowed,
                   const std::string&                    camera,
                   const UI::Interaction::SurfaceFrame&  frame,
                   const Common::Render::RenderSnapshot& snapshot, float width,
@@ -493,15 +496,19 @@ private:
         // 两指与三指轻触的历史分类仍在同一原始代际结束后判断。
         // 系统 Cancel 不解释为重做，避免设备截图手势意外修改谱面。
         // 公共 helper 只有移动私有调用方可见，不进入桌面公共头文件。
-        routeMobileNavigation(m_navigation,
-                              m_navigationZoom,
-                              raw,
-                              allowed,
-                              camera,
-                              frame,
-                              snapshot,
-                              width,
-                              height);
+        // 对比倍率即时写给本画布发布，普通画布仍由公共路由在收尾提交设置。
+        if ( const auto zoom =
+                 routeMobileNavigation(m_navigation,
+                                       m_navigationZoom,
+                                       raw,
+                                       allowed,
+                                       camera,
+                                       frame,
+                                       snapshot,
+                                       width,
+                                       height,
+                                       canvas.comparisonTimelineZoom()) )
+            canvas.setComparisonTimelineZoom(*zoom);
     }
     /// @brief 长按弹层复用桌面业务动作，布局与触摸释放保护仅在移动端编译。
     /// @param canvas 用于关联批注和重叠层菜单，不能切到其他画布。

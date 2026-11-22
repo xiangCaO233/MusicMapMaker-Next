@@ -758,20 +758,10 @@ bool publishCanvasHoverSeek(const Common::Render::RenderSnapshot& snapshot)
     return true;
 }
 
-/// @brief 获取无 ScrollSegment 快照下的默认绝对 Y 速度。
-/// @return 默认绝对 Y 速度，单位像素/秒。
-/// @details 500 像素/秒为基础投影，乘 timelineZoom 与无 SV 路径保持一致；
-/// zoom 至少 0.01，避免反投影除零或产生极端时间跨度。
-/// @warning UI 热路径：只读取视觉配置并做常量计算。
-double defaultSnapshotAbsYSpeed()
-{
-    const auto& visual = Config::AppConfig::instance().getVisualConfig();
-    return 500.0 * static_cast<double>(std::max(0.01f, visual.timelineZoom));
-}
-
 /// @brief 从 UI 快照估算指定显示时间对应的绝对 Y。
 /// @param snapshot 当前渲染快照。
 /// @param time 显示时间，单位秒。
+/// @param fallbackSpeed 没有分段时该视口采用的线性速度。
 /// @return 对应的绝对 Y。
 /// @details 有分段时以 upper_bound 找到目标之后的首段，
 /// 使用前一段起点 absY 与 speed 线性外推；早于首段时使用首段。
@@ -779,11 +769,11 @@ double defaultSnapshotAbsYSpeed()
 /// @warning UI 热路径：Move 工具空白拖动画布时调用；只读取快照中的
 /// ScrollSegment，不访问 ECS 或文件系统。
 double snapshotAbsYAtTime(const Common::Render::RenderSnapshot& snapshot,
-                          double                                time)
+                          double time, double fallbackSpeed)
 {
     if ( snapshot.scrollSegments.empty() ) {
         // 无 SV 快照采用与时间线缩放一致的线性速度。
-        return time * defaultSnapshotAbsYSpeed();
+        return time * fallbackSpeed;
     }
 
     auto it = std::upper_bound(
@@ -859,6 +849,7 @@ bool trySnapshotTimeAtSegmentAbsY(
 /// @brief 从 UI 快照估算指定绝对 Y 对应的显示时间。
 /// @param snapshot 当前渲染快照。
 /// @param absY 目标绝对 Y。
+/// @param fallbackSpeed 与正向换算相同的视口线性速度。
 /// @return 对应的显示时间，单位秒。
 /// @details 无分段时按默认绝对速度直接反算。
 /// 有分段时先尝试当前视觉时间所在段，常见小幅拖动可 O(log n)+O(1) 命中；
@@ -867,12 +858,12 @@ bool trySnapshotTimeAtSegmentAbsY(
 /// @warning UI 热路径：Move 工具空白拖动画布时调用；通常命中当前
 /// ScrollSegment，跨段拖拽时才扫描快照分段。
 double snapshotTimeAtAbsY(const Common::Render::RenderSnapshot& snapshot,
-                          double                                absY)
+                          double absY, double fallbackSpeed)
 {
     if ( snapshot.scrollSegments.empty() ) {
-        const double speed = defaultSnapshotAbsYSpeed();
         // 默认速度正常为正；防御近零配置时保持当前视觉时间。
-        return std::abs(speed) > 1e-9 ? absY / speed : snapshot.currentTime;
+        return std::abs(fallbackSpeed) > 1e-9 ? absY / fallbackSpeed
+                                              : snapshot.currentTime;
     }
 
     auto currentIt = std::upper_bound(
@@ -923,6 +914,7 @@ double snapshotTimeAtAbsY(const Common::Render::RenderSnapshot& snapshot,
 /// @param viewportHeight 当前画布高度，单位像素。
 /// @param mouseY 当前本地鼠标 Y 坐标，单位像素。
 /// @param deltaTime 当前 UI 帧间隔，单位秒。
+/// @param zoom 交互视口的缩放，仅用于快照没有积分段时的线性回退。
 /// @param scrolled 输出是否需要执行自动滚动。
 /// @return 自动滚动后的显示时间，单位秒。
 /// @param isAccelerated 是否应用 Shift 加速。
@@ -933,7 +925,8 @@ double snapshotTimeAtAbsY(const Common::Render::RenderSnapshot& snapshot,
 /// @warning UI 热路径：框选拖动时每帧调用；只做数值换算并读取快照。
 double marqueeAutoScrollTargetTime(
     const Common::Render::RenderSnapshot& snapshot, float viewportHeight,
-    float mouseY, float deltaTime, bool isAccelerated, bool& scrolled)
+    float mouseY, float deltaTime, float zoom, bool isAccelerated,
+    bool& scrolled)
 {
     scrolled = false;
     // 非有限坐标、退化视口或鼠标仍在内容内都不触发自动滚动。
@@ -982,11 +975,15 @@ double marqueeAutoScrollTargetTime(
                              ? static_cast<double>(snapshot.renderScaleY)
                              : 1.0;
     // renderScaleY 越大，同样屏幕像素对应的绝对 Y 位移越小。
+    // 无积分段时只用当前视口的倍率，保证正反换算的空间一致。
+    // 500 像素/秒与 ScrollCache 为空时的基础速度一致。
+    const double fallbackSpeed = 500.0 * std::max(0.01f, zoom);
     const double currentAbsY =
-        snapshotAbsYAtTime(snapshot, snapshot.currentTime);
+        snapshotAbsYAtTime(snapshot, snapshot.currentTime, fallbackSpeed);
     const double targetAbsY =
         currentAbsY + direction * pixelsPerSecond * dt / scale;
-    const double targetTime = snapshotTimeAtAbsY(snapshot, targetAbsY);
+    const double targetTime =
+        snapshotTimeAtAbsY(snapshot, targetAbsY, fallbackSpeed);
     // 只有有限且实际变化的时间才声明滚动，调用方据此发布 Seek。
     scrolled = std::isfinite(targetTime) &&
                std::abs(targetTime - snapshot.currentTime) > 1e-6;
@@ -2233,7 +2230,8 @@ void Basic2DCanvasInteraction::update(
 /// - Shift 将步长乘用户滚动倍率。
 /// - timelineZoom 被限制在 0.1 到 10.0。
 /// - 缩放未发生实际变化时不发布完整编辑器配置。
-/// - 缩放配置通过 EditorEngine 统一更新。
+/// - 普通画布通过 EditorEngine 更新共享配置；对比从自己的倍率起步。
+/// - 对比只在本轮发布视口配置，不改变共享传输或触发停止播放。
 ///
 /// @details Alt 分拍调整：
 /// - 触控板分数滚轮按 cameraId 分别累计。
@@ -2284,15 +2282,27 @@ bool Basic2DCanvasInteraction::handleModifierWheel(
         UI::Interaction::modifier(UI::Interaction::Modifier::Alt);
     const bool isShiftPressed =
         UI::Interaction::modifier(UI::Interaction::Modifier::Shift);
-    auto&      engine = Logic::EditorEngine::instance();
-    const bool shouldPlayAdjustmentFeedback =
-        engine.getEditorConfig().settings.stopPlaybackOnScroll;
+    auto& engine = Logic::EditorEngine::instance();
     // 框选活动时 Command 滚轮扩展选择时间范围，不应先发零位移
     // Adjustment 打断其连续选择状态。
     const bool scrollsActiveSelection =
         allowSelectionScroll && isCommandPressed && !isAltPressed &&
         currentSnapshot->currentTool == Logic::EditTool::Marquee &&
         currentSnapshot->isSelecting;
+    if ( const auto localZoom = comparisonTimelineZoom();
+         localZoom && isCommandPressed && !isAltPressed &&
+         !scrollsActiveSelection ) {
+        // 只调比较视口的间距，手势不需要停止共享播放或刷新编辑器配置。
+        const float step = isShiftPressed
+                               ? 0.1f * Config::AppConfig::instance()
+                                            .getEditorConfig()
+                                            .settings.scrollSpeedMultiplier
+                               : 0.1f;
+        setComparisonTimelineZoom(*localZoom + wheel * step);
+        return true;
+    }
+    const bool shouldPlayAdjustmentFeedback =
+        engine.getEditorConfig().settings.stopPlaybackOnScroll;
     if ( !scrollsActiveSelection ) {
         // 零位移命令只表达修饰调整意图，由逻辑设置决定是否停止播放。
         UI::Interaction::dispatchCommand(
@@ -2769,6 +2779,26 @@ void Basic2DCanvasInteraction::setLocalLayout(Config::VisualConfig* visual,
     m_localVisual        = visual;
     m_localLayoutDirty   = dirty;
     m_localLayoutEditing = editing;
+}
+
+/// @brief 读取绑定到对比标签的时间线倍率。
+/// @warning 输入热路径，只借用当前视口保存的标量。
+std::optional<float> Basic2DCanvasInteraction::comparisonTimelineZoom() const
+{
+    if ( !m_localVisual ) return std::nullopt;
+    return m_localVisual->timelineZoom;
+}
+
+/// @brief 更新对比时间线，沿现有布局变更路径发布对应视口。
+/// @warning 输入热路径不直接派发命令或保存配置。
+void Basic2DCanvasInteraction::setComparisonTimelineZoom(float zoom)
+{
+    if ( !m_localVisual || !std::isfinite(zoom) ) return;
+    zoom = std::clamp(zoom, 0.1f, 10.0f);
+    if ( m_localVisual->timelineZoom == zoom ) return;
+    m_localVisual->timelineZoom = zoom;
+    // 将本帧多个局部视觉改动一并交给画布收尾，避免发送中间配置。
+    *m_localLayoutDirty = true;
 }
 
 /// @brief 获取视口图形及布局交互的共同配置来源。
@@ -6682,6 +6712,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                     targetHeight,
                     localMousePos.y,
                     ImGui::GetIO().DeltaTime,
+                    visualConfig().timelineZoom,
                     UI::Interaction::acceleratedScroll(),
                     autoScrolled);
                 if ( autoScrolled ) {

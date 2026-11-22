@@ -61,6 +61,14 @@ public:
     void setLocalLayout(Config::VisualConfig* visual, bool* dirty,
                         const bool* editing);
 
+    /// @brief 读取本对比视口的缩放；普通画布继续使用应用设置。
+    /// @warning 输入热路径，只读取视口本地标量。
+    [[nodiscard]] std::optional<float> comparisonTimelineZoom() const;
+
+    /// @brief 立即更新对比视口缩放，在画布收尾统一发布视觉快照。
+    /// @warning 交互热路径，只写本地数值和变更标记。
+    void setComparisonTimelineZoom(float zoom);
+
     /// @brief 发布与当前画面同一组观察矩阵和动态顶点插值偏移。
     /// @param projection 屏幕与谱面平面的双向映射，二维模式为恒等映射。
     /// @param snapshotYOffset 当前帧动态顶点相对原命中框的播放插值。

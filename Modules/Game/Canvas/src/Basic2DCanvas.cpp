@@ -714,6 +714,9 @@ Basic2DCanvas::Basic2DCanvas(
         m_comparisonLayout = std::make_unique<ComparisonLayout>();
         m_comparisonLayout->m_config =
             Config::AppConfig::instance().getEditorConfig();
+        // 初始化时继承主画布的当前比例，旧配置中的异常值回退到正常范围。
+        auto& zoom = m_comparisonLayout->m_config.visual.timelineZoom;
+        zoom       = std::isfinite(zoom) ? std::clamp(zoom, 0.1f, 10.0f) : 1.0f;
         m_comparisonLayout->m_popupName =
             "##LayoutComponentsPopup/" + m_cameraId;
         // 初始布局从当前普通编辑器取得一份副本，随后不受其它视图覆盖。
@@ -4161,8 +4164,9 @@ void Basic2DCanvas::drawComparisonToolbar(UI::UIManager& manager,
             }
             // 样式覆盖只在按钮提交期间有效，外层窗口的皮肤颜色不会变化。
             // 热区和音效由工具栏的常规按钮实现提供，短文本只用于触控布局。
+            // 无短标签的控件让图标居中，保留同样大小的触摸命中区。
             const bool clicked = UI::ToolbarView::drawIconButton(
-                icon, id, shortLabel, size, height, showLabels);
+                icon, id, shortLabel, size, height, showLabels && *shortLabel);
             ImGui::PopStyleColor(3);
             if ( !mobile && ImGui::IsItemHovered() )
                 ImGui::SetTooltip("%s", tooltip);
@@ -4185,6 +4189,38 @@ void Basic2DCanvas::drawComparisonToolbar(UI::UIManager& manager,
             m_comparisonSettings.linearMapping =
                 !m_comparisonSettings.linearMapping;
             layout.m_dirty = true;
+        }
+        // 缩放浮层挂在本视口的工具栏 ID 下，多个对比的滑条互不复用。
+        // 浮层沿用点击工具按钮时的指针位置，窄页签无需让出一行画布高度。
+        // 使用普通弹层让移动端现有画布手势门闩阻止点穿。
+        if ( button(UI::ICON_MMM_SEARCH,
+                    "##Zoom",
+                    TR("ui.settings.visual.timeline_zoom").data(),
+                    "",
+                    ImGui::IsPopupOpen("##ComparisonTimelineZoom")) )
+            UI::FeedbackOpenPopup("##ComparisonTimelineZoom");
+        if ( ImGui::BeginPopup("##ComparisonTimelineZoom") ) {
+            // 每帧读本地倍率，因此键鼠或触控调整后打开面板能看到实际比例。
+            // 滑块采用对数步进，低倍率范围内的差异仍可用手指控制。
+            // 恢复按钮免去手动拖回精确刻度。
+            // 预设和滑块共用视口交互控制器，后者统一限制倍率和设置发布标记。
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.timeline_zoom").data());
+            ImGui::SetNextItemWidth(200.0f * dpiScale);
+            float percent = layout.m_config.visual.timelineZoom * 100.0f;
+            if ( UI::FeedbackSliderFloat("##ComparisonZoomSlider",
+                                         &percent,
+                                         10.0f,
+                                         1000.0f,
+                                         "%.0f%%",
+                                         ImGuiSliderFlags_Logarithmic |
+                                             ImGuiSliderFlags_AlwaysClamp |
+                                             ImGuiSliderFlags_NoInput) )
+                m_interaction->setComparisonTimelineZoom(percent / 100.0f);
+            if ( UI::FeedbackButton("100%##ResetComparisonZoom",
+                                    { 0.0f, mobile ? height : 0.0f }) )
+                m_interaction->setComparisonTimelineZoom(1.0f);
+            ImGui::EndPopup();
         }
     }
     // EndChild 先提交其命中范围，随后回到父窗口的画布位置。

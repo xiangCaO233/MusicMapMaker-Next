@@ -103,7 +103,7 @@ const System::ScrollCache* scrollCacheForCamera(const SessionContext& ctx,
 const Config::VisualConfig& visualForCamera(const SessionContext& ctx,
                                             const std::string&    cameraId);
 
-/// @brief 按主映射修订同步备用映射，供所有对比相机共用。
+/// @brief 按主映射修订同步备用积分和各对比视口的独立缩放。
 /// @warning 逻辑热路径：只有首次需要或主缓存失效才复制配置并重建。
 void refreshComparisonScrollCache(SessionContext&             ctx,
                                   const Config::EditorConfig& config);
