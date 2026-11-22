@@ -984,6 +984,14 @@ private:
     /// 普通打击音效的可选变速路由不能移动这个子总线。
     std::shared_ptr<ice::MixBus> m_timingEffectMixer;
 
+    /// @brief 编辑器节拍池的专用总线，仅消费主时间线提供的输入段。
+    std::shared_ptr<ice::MixBus> m_editorMetronomeMixer;
+
+    /// @brief 当前拉伸输入段是否含有主时间线输入。
+    /// @warning 仅由音频线程在边界回调写入，紧随其后的节拍总线读取；
+    /// 试听单独延长的输入段不得推进主谱面节拍，无需跨线程同步。
+    bool m_editorMetronomeInputActive{ false };
+
     /// @brief 主输出混音器。
     std::shared_ptr<ice::MixBus> m_mainMixer;
 

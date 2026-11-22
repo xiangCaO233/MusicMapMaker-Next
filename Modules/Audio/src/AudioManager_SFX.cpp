@@ -244,7 +244,7 @@ void AudioManager::setSFXPoolMute(const std::string& key, bool muted,
 void AudioManager::updateSFXSyncSpeedRouting(bool syncSpeed)
 {
     if ( !m_mainMixer || !m_preStretcherMixer || !m_hitEffectMixer ||
-         !m_hitEffectSpectrumCapture ) {
+         !m_hitEffectSpectrumCapture || !m_editorMetronomeMixer ) {
         return;
     }
 
@@ -263,14 +263,14 @@ void AudioManager::updateSFXSyncSpeedRouting(bool syncSpeed)
         m_mainMixer->remove_source(mixer);
         m_preStretcherMixer->remove_source(mixer);
         m_hitEffectMixer->remove_source(mixer);
-        m_timingEffectMixer->remove_source(mixer);
+        m_editorMetronomeMixer->remove_source(mixer);
         m_auditionEffectMixer->remove_source(mixer);
         if ( key.starts_with("metronome.") ) {
             // 只由歌曲混合节点消费，禁止又接到主输出而重复推进 voice。
             m_auditionEffectMixer->add_source(mixer);
         } else if ( key.starts_with(EDITOR_METRONOME_KEY_PREFIX) ) {
             // 编辑器节拍器固定跟随主拉伸器，与打击音效可选设置无关。
-            m_timingEffectMixer->add_source(mixer);
+            m_editorMetronomeMixer->add_source(mixer);
         } else if ( usesHitEffectRouting(key) ) {
             // HitEffect 统一进入专用总线，普通和交互音效直达主总线。
             m_hitEffectMixer->add_source(mixer);
@@ -564,7 +564,7 @@ bool AudioManager::attachSoundEffectPool(
         m_auditionEffectMixer->add_source(pool->getMixer());
     } else if ( key.starts_with(EDITOR_METRONOME_KEY_PREFIX) ) {
         // 主画布节拍器使用效果音量分组，并固定进入主时间线拉伸前级。
-        m_timingEffectMixer->add_source(pool->getMixer());
+        m_editorMetronomeMixer->add_source(pool->getMixer());
     } else if ( registration->second.m_isBoundNoteSound ) {
         pool->useOnDemandMixer(*m_hitEffectMixer);
         std::lock_guard lock(m_sfxLoading->m_boundMixersMutex);
@@ -596,7 +596,8 @@ void AudioManager::detachSoundEffectPool(const std::string& key)
         if ( m_mainMixer ) m_mainMixer->remove_source(mixer);
         if ( m_preStretcherMixer ) m_preStretcherMixer->remove_source(mixer);
         if ( m_hitEffectMixer ) m_hitEffectMixer->remove_source(mixer);
-        if ( m_timingEffectMixer ) m_timingEffectMixer->remove_source(mixer);
+        if ( m_editorMetronomeMixer )
+            m_editorMetronomeMixer->remove_source(mixer);
         if ( m_auditionEffectMixer )
             m_auditionEffectMixer->remove_source(mixer);
     }
@@ -979,11 +980,19 @@ void AudioManager::waitForQueuedSoundEffectLoads()
 /// @param key 音效池标识。
 /// @param volumeFactor 本次播放额外音量倍率。
 /// @param pitchSemitones 本次播放的音高偏移，单位为半音。
+/// @warning 播放提交路径；只查询控制意图和已准备的池，不等待音频回调。
 void AudioManager::playSoundEffect(const std::string& key, float volumeFactor,
                                    double pitchSemitones)
 {
     // 显式池静音在提交前短路，不占用一个 voice。
     if ( getSFXPoolMute(key) ) return;
+
+    // 暂停已经提交时不再创建编辑器节拍 voice。先前已进入变速器的块可能仍在
+    // 拉取旧输入，不能让它读到暂停之后才提交的新节拍。
+    if ( key.starts_with(EDITOR_METRONOME_KEY_PREFIX) &&
+         (!m_audioTimelineNode || m_audioTimelineNode->requestedState() !=
+                                      AudioTimelinePlaybackState::Playing) )
+        return;
 
     auto it = m_sfxPools.find(key);
     // 播放热入口不隐式解码；未加载音效由预载或异步队列负责。
@@ -1056,6 +1065,7 @@ void AudioManager::stopSoundEffect(const std::string& key)
 ///
 /// targetTime 表示听感起点；资源自身 lead-in 会提前调度文件播放。同步路由保留
 /// 绝对谱面帧，非同步路由换算为输出域相对延迟。
+/// @warning 逻辑预约热路径；只读取控制意图和已准备池，不等待回调确认。
 void AudioManager::playSoundEffectScheduled(
     const std::string& key, double targetTime, float volumeFactor,
     const StereoGainEnvelope&      stereoEnvelope,
@@ -1069,6 +1079,12 @@ void AudioManager::playSoundEffectScheduled(
     if ( it == m_sfxPools.end() ) return;
 
     if ( !m_audioTimelineLoaded || !m_audioTimelineNode ) return;
+
+    // 与即时入口共用已提交的播放意图，不能把暂停中的拍点积压到恢复后播放。
+    const bool editorMetronome = key.starts_with(EDITOR_METRONOME_KEY_PREFIX);
+    if ( editorMetronome && m_audioTimelineNode->requestedState() !=
+                                AudioTimelinePlaybackState::Playing )
+        return;
 
     double samplerate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
@@ -1086,8 +1102,7 @@ void AudioManager::playSoundEffectScheduled(
     const std::size_t currentReferenceFrame =
         currentPosition > 0 ? static_cast<std::size_t>(currentPosition) : 0U;
     // 节拍器固定在主拉伸前，绝不能使用除以倍率的输出域延迟。
-    const bool syncSpeed = m_timelineHasStops ||
-                           key.starts_with(EDITOR_METRONOME_KEY_PREFIX) ||
+    const bool syncSpeed = m_timelineHasStops || editorMetronome ||
                            Config::AppConfig::instance()
                                .getEditorSettings()
                                .sfxConfig.hitSfxSyncSpeed;

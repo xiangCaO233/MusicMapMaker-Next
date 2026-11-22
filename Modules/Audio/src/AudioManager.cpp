@@ -15,11 +15,14 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <ice/config/config.hpp>
+#include <ice/core/IAudioNode.hpp>
 #include <ice/core/MixBus.hpp>
 #include <ice/core/effect/TimeStretcher.hpp>
+#include <ice/manage/AudioBuffer.hpp>
 #include <ice/manage/AudioPool.hpp>
 #include <ice/out/IReceiver.hpp>
 #include <ice/out/play/openal/ALPlayer.hpp>
@@ -196,6 +199,38 @@ ice::TimeStretcher::InputSpan readTimelineInputBoundary(
     };
 }
 
+/// @brief 只在主时间线实际提供输入时拉取编辑器节拍总线。
+/// 试听能独自延长共用变速器的输入；这样的片段没有主谱面帧可供节拍消费。
+class EditorMetronomeInputGate final : public ice::IAudioNode
+{
+public:
+    /// @brief 连接预分配的节拍总线及音频线程的输入段标记。
+    /// @warning 图建立时转移所有权，标记由后端生命周期覆盖的 AudioManager
+    /// 持有。
+    EditorMetronomeInputGate(std::shared_ptr<ice::MixBus> mixer,
+                             const bool&                  inputActive)
+        : m_mixer(std::move(mixer)), m_inputActive(inputActive)
+    {
+    }
+
+    /// @brief 按同一输入段的边界决策拉取节拍或输出静音。
+    /// @warning 每音频输入段调用；只读线程内标记，不等待或复制所有权。
+    void process(ice::AudioBuffer& buffer) override
+    {
+        // 静音段跳过上游，避免悄悄推进已经预约的节拍游标。
+        if ( m_inputActive )
+            m_mixer->process(buffer);
+        else
+            buffer.clear();
+    }
+
+private:
+    /// @brief 建图后固定的编辑器节拍总线，持有到在途回调退出。
+    std::shared_ptr<ice::MixBus> m_mixer;
+    /// @brief 仅在同一回调线程使用，由拉伸输入边界回调先发布。
+    const bool& m_inputActive;
+};
+
 /// @brief 在上游自然结束的同一 block 通知拉伸器提交 final 输入。
 /// @param context 生命周期覆盖音频后端的 TimeStretcher。
 /// @warning 音频回调热路径：只写入 lock-free 代际邮箱。
@@ -316,8 +351,9 @@ void AudioManager::init()
     m_preStretcherMixer = std::make_shared<ice::MixBus>();
     m_hitEffectMixer    = std::make_shared<ice::MixBus>();
     // 专用节拍先与试听歌曲混合，再一起接到主拉伸前级。
-    m_auditionEffectMixer = std::make_shared<ice::MixBus>();
-    m_timingEffectMixer   = std::make_shared<ice::MixBus>();
+    m_auditionEffectMixer  = std::make_shared<ice::MixBus>();
+    m_timingEffectMixer    = std::make_shared<ice::MixBus>();
+    m_editorMetronomeMixer = std::make_shared<ice::MixBus>();
     const std::size_t maximumBlockFrames =
         std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U);
     // 三个 MixBus 都预留同一最大 block，回调期只复用内部缓冲而不扩容。
@@ -333,6 +369,11 @@ void AudioManager::init()
     // 最大倍率输入空间与试听节点一致，不在播放过程中重新 prepare。
     m_timingEffectMixer->prepare(ice::ICEConfig::internal_format,
                                  maximumBlockFrames * 10U + 1U);
+    // 编辑器节拍与试听共用父总线；分别拉取可让试听独立播放。
+    m_editorMetronomeMixer->prepare(ice::ICEConfig::internal_format,
+                                    maximumBlockFrames * 10U + 1U);
+    m_timingEffectMixer->add_source(std::make_shared<EditorMetronomeInputGate>(
+        m_editorMetronomeMixer, m_editorMetronomeInputActive));
     m_audioTimelineNode = std::make_shared<AudioTimelineMixerNode>(
         std::vector<PreparedTimelineClip>{},
         0,
@@ -361,6 +402,9 @@ void AudioManager::init()
             auto& manager = *static_cast<AudioManager*>(context);
             auto  span    = readTimelineInputBoundary(
                 manager.m_audioTimelineNode.get(), maximumFrames);
+            // 必须先记录真实谱面区间；后续为试听补出的输入不能带动编辑器节拍。
+            // 正常末段仍可消费拍点，谱面自然结束后的试听段才关闭节拍门控。
+            manager.m_editorMetronomeInputActive = span.frameCount != 0U;
             // 仍处理谱面控制邮箱和 discontinuity；只延长停止或尾部区间。
             // 标量邮箱不发布资源，MixBus 独立负责图边的安全更新。
             if ( manager.m_auditionPlaying.load(std::memory_order_relaxed) &&
@@ -456,6 +500,7 @@ void AudioManager::shutdown()
     m_hitEffectMixer.reset();
     m_auditionEffectMixer.reset();
     m_timingEffectMixer.reset();
+    m_editorMetronomeMixer.reset();
     m_mainMixer.reset();
     m_preStretcherMixer.reset();
     m_player.reset();

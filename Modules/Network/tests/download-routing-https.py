@@ -20,7 +20,8 @@ root.mkdir(parents=True, exist_ok=True)
 payload = bytes(range(256)) * 8192
 expected = hashlib.sha256(payload).hexdigest()
 config = root / 'openssl.cnf'
-config.write_text('[req]\ndistinguished_name=dn\nx509_extensions=ext\nprompt=no\n[dn]\nCN=downloads.xiang233.top\n[ext]\nsubjectAltName=DNS:downloads.xiang233.top,DNS:mmm.xiang233.top\nbasicConstraints=critical,CA:TRUE\n')
+# 同一张自签名证书同时用作测试信任锚和服务端证书；macOS 仍要求声明 serverAuth。
+config.write_text('[req]\ndistinguished_name=dn\nx509_extensions=ext\nprompt=no\n[dn]\nCN=downloads.xiang233.top\n[ext]\nsubjectAltName=DNS:downloads.xiang233.top,DNS:mmm.xiang233.top\nbasicConstraints=critical,CA:TRUE\nextendedKeyUsage=serverAuth\n')
 certificate, key = root / 'ca.pem', root / 'key.pem'
 # SAN 保持真实请求主机名，不能只信任 CA 而跳过主机名验证。
 # 短期证书只服务本次构建，不引入需要长期维护的过期资源。
