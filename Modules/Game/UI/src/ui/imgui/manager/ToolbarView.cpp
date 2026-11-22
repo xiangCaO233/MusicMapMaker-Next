@@ -1711,20 +1711,11 @@ void ToolbarView::update(UIManager* sourceManager)
 
         if ( independentButtonVisibility.playbackSpeed ||
              independentButtonVisibility.trackCount ) {
-            // 倍速和轨道数都依赖活动谱面，因此共享一次短作用域会话锁。
-            // 锁覆盖两项绘制是既有约束：控件回调只入队命令，不在此同步执行。
-            std::lock_guard<std::recursive_mutex> sessionLock(
-                engine.getSessionMutex());
-            auto session = engine.getActiveSession();
-
+            // 用同一个已发布标量决定按钮的可用性和键数，避免工具栏等待整轮
+            // 会话更新。多个对比相机生成快照时，逻辑线程持锁时间会随之增长。
+            const int currentTracks = engine.activeBeatmapTrackCount();
             // 无谱面时仍绘制占位按钮以保持底部工具栏布局稳定。
-            bool hasBeatmap = session && session->getContext().currentBeatmap;
-            int  currentTracks = 4;
-            if ( hasBeatmap ) {
-                currentTracks =
-                    session->getContext()
-                        .currentBeatmap->m_baseMapMetadata.track_count;
-            }
+            const bool hasBeatmap = currentTracks > 0;
 
             if ( !hasBeatmap ) {
                 // 禁用整个依赖谱面的控件区，避免占位文本仍能打开空弹层。
@@ -1870,19 +1861,37 @@ void ToolbarView::update(UIManager* sourceManager)
                              .enableToolbarValueWheelAdjustment ) {
                         const float wheel = Interaction::mouseWheel();
                         if ( std::abs(wheel) > 0.1F ) {
-                            const int newTracks = std::clamp(
-                                currentTracks + (wheel > 0.0F ? 1 : -1), 1, 32);
-                            if ( newTracks != currentTracks ) {
-                                // 复制完整元数据，只替换轨道数，避免丢失其他字段。
-                                auto metadata =
-                                    session->getContext()
-                                        .currentBeatmap->m_baseMapMetadata;
-                                metadata.track_count = newTracks;
-                                engine.pushCommand(
-                                    Logic::CmdUpdateBeatmapMetadata{
-                                        metadata });
-                                ::MMM::UI::PlayInteractionMouseUpFeedback();
+                            bool changed = false;
+                            {
+                                // 只有实际滚轮编辑才捕获元数据，保留既有尾随保存入口。
+                                // 锁内复核活动条目，从最新轨道数累加这一格的变化。
+                                std::lock_guard<std::recursive_mutex> lock(
+                                    engine.getSessionMutex());
+                                const auto* entry = engine.getSessionEntry(
+                                    engine.getActiveSessionIndex());
+                                if ( entry && entry->session &&
+                                     entry->session->getContext()
+                                         .currentBeatmap ) {
+                                    auto metadata =
+                                        entry->session->getContext()
+                                            .currentBeatmap->m_baseMapMetadata;
+                                    const int newTracks =
+                                        std::clamp(metadata.track_count +
+                                                       (wheel > 0.0F ? 1 : -1),
+                                                   1,
+                                                   32);
+                                    if ( newTracks != metadata.track_count ) {
+                                        metadata.track_count = newTracks;
+                                        engine.pushCommand(
+                                            Logic::CmdUpdateBeatmapMetadata{
+                                                std::move(metadata) });
+                                        changed = true;
+                                    }
+                                }
                             }
+                            // 音效播放与谱面快照生命周期无关，离开锁后再执行。
+                            if ( changed )
+                                ::MMM::UI::PlayInteractionMouseUpFeedback();
                         }
                     }
                     drawTooltip(TR("ui.settings.beatmap.tracks").data());
@@ -2419,8 +2428,8 @@ void ToolbarView::update(UIManager* sourceManager)
     // 内任意小数，快捷按钮提供常用减速值。applyPopupSpeed 再次夹取所有输入，
     // 使将来增加其他入口时也无法向音频层提交越界倍速。
     //
-    // 会话锁覆盖当前弹层绘制是既有同步约束；控件回调只投递命令，不等待
-    // 音频线程完成。显示值每帧从 AudioManager 读取，不假设命令已同步执行。
+    // 使用活动谱面的已发布状态决定弹层是否可用；显示值从 AudioManager
+    // 读取，不假设控件刚投递的命令已被逻辑线程应用。
     if ( m_showSpeedPopup ) {
         const auto* toolbarWindow = ImGui::FindWindowByName(" ###Toolbar");
         // 每种弹层保留独立尺寸缓存，方向与边界统一由工具栏定位入口处理。
@@ -2455,13 +2464,8 @@ void ToolbarView::update(UIManager* sourceManager)
                             ImVec2(itemSpacing, itemSpacing));
 
         if ( ImGui::Begin("##PlaybackSpeedPopup", nullptr, popupFlags) ) {
-            // 谱面指针只在持锁期间访问；命令提交不会直接递归修改对象。
             auto& engine = Logic::EditorEngine::instance();
-            std::lock_guard<std::recursive_mutex> sessionLock(
-                engine.getSessionMutex());
-            auto session = engine.getActiveSession();
-
-            if ( session && session->getContext().currentBeatmap ) {
+            if ( engine.hasActiveBeatmap() ) {
                 // 所有入口统一夹取合法倍速，防止预设与滑条范围漂移。
                 /// @brief 夹取弹层输入并投递统一倍速命令。
                 auto applyPopupSpeed = [&engine](double speed) {

@@ -449,6 +449,11 @@ public:
     /// 只供 UI 可用状态判定，不承诺与后续编辑命令构成事务。
     bool hasActiveBeatmap() const;
 
+    /// @brief 获取活动谱面的玩家轨道数，未载谱时为零。
+    /// @warning 工具栏每帧读取 relaxed 原子；逻辑更新和会话切换发布该值，
+    /// 避免为显示键数等待整个会话更新。
+    int32_t activeBeatmapTrackCount() const;
+
     /// @brief 判断当前活跃 Session 是否存在已选谱面物件。
     /// @return 玩家物件或自动采样至少有一个被选中时返回 true。
     /// @warning UI 菜单每帧读取 relaxed 原子；逻辑 update 发布最终状态，

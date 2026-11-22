@@ -3168,7 +3168,15 @@ bool EditorEngine::isPlaybackPlaying() const
 /// @warning UI 菜单每帧 relaxed 读取；只控制可用性显示，编辑命令自行校验。
 bool EditorEngine::hasActiveBeatmap() const
 {
-    return impl().m_activeHasBeatmap.load(std::memory_order_relaxed);
+    return activeBeatmapTrackCount() > 0;
+}
+
+/// @brief 读取最近一次发布的活动谱面键数，零表示没有可用谱面。
+/// @warning 逻辑更新和会话切换写入；UI 每帧 relaxed
+/// 读取该标量，不访问谱面对象。
+int32_t EditorEngine::activeBeatmapTrackCount() const
+{
+    return impl().m_activeBeatmapTrackCount.load(std::memory_order_relaxed);
 }
 
 /// @brief 判断当前活跃 Session 是否存在已选谱面物件。
@@ -3727,8 +3735,8 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 新谱面尚未处理载入与播放命令，旧活动项状态不能继续显示。
                 impl().m_activePlaybackPlaying.store(false,
                                                      std::memory_order_relaxed);
-                impl().m_activeHasBeatmap.store(false,
-                                                std::memory_order_relaxed);
+                impl().m_activeBeatmapTrackCount.store(
+                    0, std::memory_order_relaxed);
                 impl().m_activeHasChartObjectSelection.store(
                     false, std::memory_order_relaxed);
                 // 会话条目身份变化后立即刷新候选并发布快照，UI 不能继续看到
@@ -3869,22 +3877,21 @@ void EditorEngine::closeSession(int32_t index, bool updateWorkspace)
         remainingSessions[activeIndex].session->getContext().isPlaying;
     impl().m_activePlaybackPlaying.store(activePlaying,
                                          std::memory_order_relaxed);
-    const bool activeHasBeatmap =
-        activeIndex >= 0 &&
-        activeIndex < static_cast<int32_t>(remainingSessions.size()) &&
-        remainingSessions[activeIndex].session &&
-        remainingSessions[activeIndex].session->getContext().currentBeatmap;
-    impl().m_activeHasBeatmap.store(activeHasBeatmap,
-                                    std::memory_order_relaxed);
-    bool activeHasSelection = false;
+    int32_t activeTrackCount   = 0;
+    bool    activeHasSelection = false;
     if ( activeIndex >= 0 &&
          activeIndex < static_cast<int32_t>(remainingSessions.size()) &&
          remainingSessions[activeIndex].session ) {
         const auto& context =
             remainingSessions[activeIndex].session->getContext();
+        // 关闭活动标签后只发布剩余活动谱面的键数，缺省项保留零。
+        if ( context.currentBeatmap )
+            activeTrackCount = std::max(1, context.trackCount);
         activeHasSelection = !context.selectedNoteEntities.empty() ||
                              !context.selectedSampleEntities.empty();
     }
+    impl().m_activeBeatmapTrackCount.store(activeTrackCount,
+                                           std::memory_order_relaxed);
     impl().m_activeHasChartObjectSelection.store(activeHasSelection,
                                                  std::memory_order_relaxed);
     refreshMainAudioSyncPeerStateUnsafe();
@@ -3960,7 +3967,7 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
     impl().m_sessionRegistry.setActiveIndex(index);
     // Logo 不控制 transport；原槽重置后旧播放状态立即失效。
     impl().m_activePlaybackPlaying.store(false, std::memory_order_relaxed);
-    impl().m_activeHasBeatmap.store(false, std::memory_order_relaxed);
+    impl().m_activeBeatmapTrackCount.store(0, std::memory_order_relaxed);
     impl().m_activeHasChartObjectSelection.store(false,
                                                  std::memory_order_relaxed);
     refreshMainAudioSyncPeerStateUnsafe();
@@ -4038,7 +4045,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
     impl().m_sessionRegistry.setActiveIndex(index);
     // 切换期间先撤销旧会话的播放标记，防止 UI 把旧状态用于新目标。
     impl().m_activePlaybackPlaying.store(false, std::memory_order_relaxed);
-    impl().m_activeHasBeatmap.store(false, std::memory_order_relaxed);
+    impl().m_activeBeatmapTrackCount.store(0, std::memory_order_relaxed);
     impl().m_activeHasChartObjectSelection.store(false,
                                                  std::memory_order_relaxed);
     auto& activeSession = sessions[index].session;
@@ -4102,8 +4109,9 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
     // transport 最终状态已确定，再发布给逐帧工具栏读取。
     impl().m_activePlaybackPlaying.store(ctx.isPlaying,
                                          std::memory_order_relaxed);
-    impl().m_activeHasBeatmap.store(ctx.currentBeatmap != nullptr,
-                                    std::memory_order_relaxed);
+    impl().m_activeBeatmapTrackCount.store(
+        ctx.currentBeatmap ? std::max(1, ctx.trackCount) : 0,
+        std::memory_order_relaxed);
     impl().m_activeHasChartObjectSelection.store(
         !ctx.selectedNoteEntities.empty() ||
             !ctx.selectedSampleEntities.empty(),
@@ -4723,15 +4731,17 @@ void EditorEngine::loop()
                             sessionDt, editorConfigSnapshot, isActiveSession);
                         if ( isActiveSession ) {
                             // 命令可能在本轮改变播放状态；发布只含活动源的最终值。
-                            impl().m_activePlaybackPlaying.store(
-                                entry.session->getContext().isPlaying,
-                                std::memory_order_relaxed);
-                            impl().m_activeHasBeatmap.store(
-                                entry.session->getContext().currentBeatmap !=
-                                    nullptr,
-                                std::memory_order_relaxed);
                             const auto& activeContext =
                                 entry.session->getContext();
+                            impl().m_activePlaybackPlaying.store(
+                                activeContext.isPlaying,
+                                std::memory_order_relaxed);
+                            // 使用处理命令后的键数，让修改、撤销与谱面切换共用一个发布点。
+                            impl().m_activeBeatmapTrackCount.store(
+                                activeContext.currentBeatmap
+                                    ? std::max(1, activeContext.trackCount)
+                                    : 0,
+                                std::memory_order_relaxed);
                             impl().m_activeHasChartObjectSelection.store(
                                 !activeContext.selectedNoteEntities.empty() ||
                                     !activeContext.selectedSampleEntities

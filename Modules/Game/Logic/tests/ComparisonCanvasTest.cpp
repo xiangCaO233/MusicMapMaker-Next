@@ -6,10 +6,12 @@
 #include "common/ComparisonCanvas.h"
 #include "common/LogicCommands.h"
 #include "common/render/RenderSnapshot.h"
+#include "common/render/TextureID.h"
 #include "config/EditorConfig.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
+#include "logic/EditorEngine.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
@@ -19,7 +21,10 @@
 #include "mmm/metadata/MapMetadata.h"
 #include "mmm/timing/TimingEffect.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 
@@ -75,10 +80,14 @@ int runComparisonCanvasTest()
     auto config                                         = ctx.lastConfig;
     config.visual.trackLayout.left                      = 0.1F;
     config.visual.trackLayout.right                     = 0.5F;
-    config.visual.judgeline_pos                         = 0.5F;
-    config.visual.enableLinearScrollMapping             = false;
-    config.visual.canvasThicknessCompensation           = 50.0F;
-    config.settings.objectPlacementSnap                 = false;
+    // 垂直留白使旧底板越出布局的情况也能被捕获。
+    // 顶部不取零，防止错误复用旧高度时碰巧通过上沿检查。
+    config.visual.trackLayout.top             = 0.05F;
+    config.visual.trackLayout.bottom          = 0.95F;
+    config.visual.judgeline_pos               = 0.5F;
+    config.visual.enableLinearScrollMapping   = false;
+    config.visual.canvasThicknessCompensation = 50.0F;
+    config.settings.objectPlacementSnap       = false;
     // 主视口以单位倍率为参照；关闭放置吸附以便精确核对对比视口的逆映射。
     config.visual.timelineZoom            = 1.0F;
     config.visual.scrollAnimationDuration = 0.0F;
@@ -108,6 +117,17 @@ int runComparisonCanvasTest()
         std::make_shared<MMM::Config::VisualConfig>(config.visual);
     tiltedVisual->debugCanvasCameraAngleDegrees = 35.0F;
     tiltedVisual->timelineZoom                  = 1.5F;
+    // 使用隔离的底板 UV 区域，使检查只统计白色轨道线使用的平铺几何。
+    // 无需实际皮肤资源，其他轮廓和拍线仍走普通快照生成，但不落在此 UV 内。
+    // 两个视图使用同一图集条目，避免不同纹理坐标提前阻止错误复用。
+    // 通过真实图集发布接口注入数据，保留快照的相机图集同步过程。
+    auto&      engine = EditorEngine::instance();
+    const auto trackTexture =
+        static_cast<std::uint32_t>(MMM::Common::Render::TextureID::Track);
+    engine.setAtlasUVMap(main,
+                         { { trackTexture, { .25F, .5F, .25F, .025F } } });
+    engine.setAtlasUVMap(tilted,
+                         { { trackTexture, { .25F, .5F, .25F, .025F } } });
     // 经真实队列注册三种画布，验证同步缓冲使用各自相机 ID。
     // 主画布的命令不带覆盖参数，保持普通入口的注册语义。
     session.pushCommand(CmdUpdateViewport{ main, 1000.0F, 600.0F });
@@ -156,6 +176,56 @@ int runComparisonCanvasTest()
          linearSnap->thicknessCompensation.m_amount != 0.0F ||
          tiltedSnap->thicknessCompensation.m_amount <= 0.0F ) {
         XERROR("Comparison view perspective leaked into another viewport");
+        return 1;
+    }
+
+    /// @brief 通过底板的 UV 区域单独检查轨道线上下端。
+    /// @details 底板向上多铺半像素用于遮缝，最后一段必须到达当前轨道上沿。
+    /// 下沿保持原位，不能随缩放或透视延长一起移动。
+    /// 只比较图元数无法捕捉整片底板错位，需要检查实际坐标。
+    /// @return 找到底板且两端与指定视口的逻辑坐标一致时返回真。
+    const auto trackFillsLayout =
+        [](const auto& snapshot, const auto& visual, float height) {
+            float top    = std::numeric_limits<float>::infinity();
+            float bottom = -top;
+            for ( const auto& vertex : snapshot.vertices ) {
+                // 半像素内缩使轨道底板顶点落在已登记 UV 矩形的内部。
+                if ( vertex.uv.u <= .25F || vertex.uv.u >= .5F ||
+                     vertex.uv.v <= .5F || vertex.uv.v >= .525F )
+                    continue;
+                top    = std::min(top, vertex.pos.y);
+                bottom = std::max(bottom, vertex.pos.y);
+            }
+            const auto layout = visual.trackLayoutForKeyCount(4);
+            // 没有底板时极值保持无穷，范围检查也会失败。
+            // 斜轨远端延长只改变上沿，CPU 逻辑坐标无需 GPU 投影即可验证。
+            return std::abs(top - (height * (layout.top -
+                                             visual.canvasCameraExtension()) -
+                                   0.5F)) < 0.01F &&
+                   std::abs(bottom - height * layout.bottom) < 0.01F;
+        };
+    if ( !trackFillsLayout(*mainSnap, config.visual, 600.0F) ||
+         !trackFillsLayout(*tiltedSnap, *tiltedVisual, 600.0F) ) {
+        XERROR("Track geometry did not cover the initial viewport");
+        return 1;
+    }
+    // 模拟纵向拆分 Dock。只改高度，水平位置、单轨宽、颜色和皮肤保持相同。
+    // 旧缓存若只匹配横向键，会把 600px 高的底板带进缩小后的平面或斜轨视图。
+    // 两个视图使用不同的新高度，不能以一份重建结果覆盖另一个视图。
+    // 两次命令在同一轮更新处理，覆盖两个视图在同一生产线程交替访问缓存的情况。
+    session.pushCommand(CmdUpdateViewport{ main, 1000.0F, 360.0F });
+    session.pushCommand(CmdUpdateViewport{ tilted, 1000.0F, 420.0F });
+    session.update(0.0, config, true);
+    // 从各自的同步缓冲消费新快照，不借用测试前一轮的顶点指针。
+    const auto* resizedMain = ctx.syncBuffers.at(main)->pullLatestSnapshot();
+    const auto* resizedTilted =
+        ctx.syncBuffers.at(tilted)->pullLatestSnapshot();
+    // 即使只回退一扇窗口的底板，也要使整个多视图用例失败。
+    if ( !resizedMain || !resizedTilted ||
+         !trackFillsLayout(*resizedMain, config.visual, 360.0F) ||
+         !trackFillsLayout(*resizedTilted, *tiltedVisual, 420.0F) ) {
+        XERROR(
+            "Resizing a viewport reused track geometry at the previous height");
         return 1;
     }
 

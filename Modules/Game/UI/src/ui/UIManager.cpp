@@ -2002,57 +2002,51 @@ void UIManager::trackImGuiFocusForAutoSave()
 /// 热路径：每帧命令录制阶段执行；只允许遍历可渲染视图序列并委托录制命令。
 void UIManager::onRecordOffscreen(vk::CommandBuffer& cmd, uint32_t frameIndex)
 {
-    // 在循环前固定数量，要求录制期间不修改可渲染视图序列。
+    // 在循环前完成可见性筛选，录制期间保持任务索引不变。
     const uint32_t taskCount = getOffscreenRecordTaskCount();
     for ( uint32_t taskIndex = 0; taskIndex < taskCount; ++taskIndex ) {
-        // 单任务入口统一处理边界、过渡状态和能力检查。
         onRecordOffscreenTask(cmd, frameIndex, taskIndex);
     }
 }
 
 /// @brief 获取当前帧可并行录制的离屏视图数量。
-/// @return 当前可渲染视图序列的数量。
+/// @return 当前帧需要录制离屏命令的视图数量。
 ///
 /// 返回值只在本轮任务枚举期间有效；注册或注销视图后调用方必须重新查询。
 /// 数量使用 uint32_t 与渲染任务调度接口保持一致。
-/// @warning 渲染热路径：每帧命令录制前调用，只读取稳定序列长度。
+/// 按注册顺序保留任务，串行和并行录制使用同一套索引映射。
+/// @warning 渲染热路径：主线程在派发前筛选一次，复用任务列表的容量。
 uint32_t UIManager::getOffscreenRecordTaskCount() const
 {
-    return static_cast<uint32_t>(m_renderableUiSequence.size());
+    m_frameOffscreenRecordViews.clear();
+    const bool transitioning = isProjectTransitionInProgress();
+    for ( const auto& name : m_renderableUiSequence ) {
+        // 会话过渡时避开仍可能引用即将释放的项目资源的视图。
+        if ( transitioning && isProjectWorkspaceDynamicView(name) ) continue;
+        const auto it = m_uiviews.find(name);
+        if ( it == m_uiviews.end() ) continue;
+
+        // 先过滤隐藏和无需重绘的视图，避免为它们调度空命令缓冲。
+        auto* view = it->second->asRenderableView();
+        if ( view && view->shouldRecordOffscreen() ) {
+            m_frameOffscreenRecordViews.push_back(view);
+        }
+    }
+    return static_cast<uint32_t>(m_frameOffscreenRecordViews.size());
 }
 
 /// @brief 录制指定可渲染视图的离屏命令。
 /// @param cmd 当前任务独占的命令缓冲。
 /// @param frameIndex 当前并发帧索引。
-/// @param taskIndex 可渲染视图序列索引。
+/// @param taskIndex 当前帧离屏任务序列索引。
 /// @warning 渲染热路径：可能在渲染线程池中执行，只能读取 UIManager
-/// 的稳定视图表并录制对应视图。
+/// 的稳定任务序列并录制对应视图。
 void UIManager::onRecordOffscreenTask(vk::CommandBuffer& cmd,
                                       uint32_t frameIndex, uint32_t taskIndex)
 {
-    // 防御调用方持有的旧任务数量，避免序列缩短后越界。
-    if ( taskIndex >= m_renderableUiSequence.size() ) {
-        return;
-    }
-
-    const auto& name = m_renderableUiSequence[taskIndex];
-    // 会话过渡中动态视图可能仍引用即将释放的项目资源。
-    if ( isProjectTransitionInProgress() &&
-         isProjectWorkspaceDynamicView(name) ) {
-        return;
-    }
-    const auto& views = m_uiviews;
-    auto        it    = views.find(name);
-    // 名称序列与注册表短暂不同步时安全跳过该任务。
-    if ( it == views.end() ) {
-        return;
-    }
-
-    // renderable 标记仍需通过能力接口取得实际录制对象。
-    auto renderableView = it->second->asRenderableView();
-    if ( renderableView && renderableView->shouldRecordOffscreen() ) {
+    if ( taskIndex < m_frameOffscreenRecordViews.size() ) {
         // 每个任务只录制自己的离屏目标，不提交队列或等待 GPU。
-        renderableView->recordCmds(cmd, frameIndex);
+        m_frameOffscreenRecordViews[taskIndex]->recordCmds(cmd, frameIndex);
     }
 }
 
