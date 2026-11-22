@@ -962,6 +962,8 @@ static NoteAbsYBucketIndex& getOrBuildNoteAbsYBucketIndex(
     using Indices = std::array<NoteAbsYBucketIndex, 2>;
     auto* indices = registry.ctx().find<Indices>();
     if ( !indices ) indices = &registry.ctx().emplace<Indices>();
+    // 桶以未缩放位置索引。多个对比倍率只共享源缓存的键，无需反复建桶。
+    if ( cache ) cache = &cache->integralSource();
     // 主映射与反向映射各保留一个位置索引，跨窗口切换不会使桶反复失效。
     // 两套缓存均由会话维持稳定地址，版本检查负责处理换图和 timing 编辑。
     auto& primary = (*indices)[0];

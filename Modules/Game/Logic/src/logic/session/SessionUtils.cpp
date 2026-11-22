@@ -609,6 +609,10 @@ const System::ScrollCache* scrollCacheForCamera(const SessionContext& ctx,
     if ( Common::isComparisonCanvas(cameraId) ) {
         const auto camera = ctx.cameras.find(cameraId);
         if ( camera == ctx.cameras.end() ) return nullptr;
+        // 编辑和渲染都先借用此投影，选择、吸附与画面使用同一坐标倍率。
+        // 未发布局部视觉的调用方仍能直接选择原有两套映射。
+        if ( camera->second.m_comparisonProjection )
+            return &*camera->second.m_comparisonProjection;
         if ( camera->second.comparison ) settings = &*camera->second.comparison;
     }
     return scrollCacheForSettings(
@@ -634,12 +638,14 @@ const Config::VisualConfig& visualForCamera(const SessionContext& ctx,
     return ctx.lastConfig.visual;
 }
 
-/// @brief 同步整个谱面会话唯一的反向映射缓存。
+/// @brief 同步共用的反向积分缓存及各对比视口的缩放。
 /// @param ctx 谱面 ECS 与对比视口的所属会话，仅由逻辑线程访问。
-/// @param config 当前会话生效的配置，包含主映射开关及公共目标缩放。
-/// @details 只有两种映射，每个对比选择其中一种。增开或切换多个视图
-/// 不增加同一映射的拷贝，保留稳定缓存地址供物件可见性索引使用。
+/// @param config 当前会话生效的主画布映射和积分基准。
+/// @details 每个对比只保存相对于积分基准的倍率，音符索引仍共用两套未缩放坐标。
 /// @warning 逐帧只检查已注册相机及缓存修订；重积分只在首次使用或失效发生。
+/// @note 重建不会替换缓存槽，原位置索引通过源缓存的地址和修订判断有效性。
+/// 鼠标输入与渲染共用会话内的投影对象，在同一逻辑线程顺序消费。
+/// 变速开关切换时可以重新绑定积分源，无需替换每个视口的投影槽位。
 void refreshComparisonScrollCache(SessionContext&             ctx,
                                   const Config::EditorConfig& config)
 {
@@ -656,32 +662,53 @@ void refreshComparisonScrollCache(SessionContext&             ctx,
             return settings && settings->visible &&
                    settings->linearMapping != linear;
         });
-    if ( !needed ) return;
-
-    // 在可能插入新上下文槽之前读取主映射参数，后面不借用上下文内部指针。
-    const auto mainRevision = main->getRevision();
-    const auto zoomScale    = main->getAnimatedZoomScale();
-    // 保留缓存地址，让对应的音符可见性桶能跨快照复用。
+    // 先保证两套积分均已就绪，再给相机绑定本轮对应的来源。
+    // 不按窗口数量建表，同曲多个变速对比只计算一次 timing 积分。
     auto* alternate = storage.find<System::ComparisonScrollCache>();
-    if ( !alternate )
-        alternate = &storage.emplace<System::ComparisonScrollCache>();
+    if ( needed ) {
+        // 在插入上下文槽之前记下版本与倍率，插入后再从容器借用主映射。
+        const auto mainRevision = main->getRevision();
+        const auto zoomScale    = main->getAnimatedZoomScale();
+        if ( !alternate ) {
+            alternate = &storage.emplace<System::ComparisonScrollCache>();
+            main      = storage.find<System::ScrollCache>();
+        }
 
-    // 两种映射都使用同一 timing ECS 与目标缩放，只有时间坐标公式不同。
-    if ( alternate->cache.getRevision() == 0 ||
-         alternate->mainRevision != mainRevision ||
-         alternate->linearMapping == linear ) {
-        auto comparisonConfig                             = config;
-        comparisonConfig.visual.enableLinearScrollMapping = !linear;
-        alternate->cache.rebuild(
-            ctx.timelineRegistry, comparisonConfig, ctx.currentBeatmap.get());
-        alternate->mainRevision  = mainRevision;
-        alternate->linearMapping = !linear;
+        // 两种积分都以同一缩放基准重建；只有映射或时间线失效才重新遍历事件。
+        if ( alternate->cache.getRevision() == 0 ||
+             alternate->mainRevision != mainRevision ||
+             alternate->linearMapping == linear ) {
+            auto comparisonConfig                             = config;
+            comparisonConfig.visual.enableLinearScrollMapping = !linear;
+            alternate->cache.rebuild(ctx.timelineRegistry,
+                                     comparisonConfig,
+                                     ctx.currentBeatmap.get());
+            alternate->mainRevision  = mainRevision;
+            alternate->linearMapping = !linear;
+        }
+        // 保留没有局部视觉快照的旧视口语义，独立投影则使用自己的绝对值。
+        alternate->cache.setAnimatedZoomScale(zoomScale);
     }
 
-    // 动画缩放只影响投影倍率，不能把每一帧动画当作时间线编辑重建。
-    // 两份缓存的基础目标缩放来自同一配置，因此相对倍率可以直接同步。
-    // 分段积分保持原精度，视图切回同一映射时可继续复用已有缓存。
-    alternate->cache.setAnimatedZoomScale(zoomScale);
+    for ( auto& [id, camera] : ctx.cameras ) {
+        const auto& options = camera.comparison;
+        if ( !options || !options->visible || !options->visual ) {
+            // 隐藏视口不生成渲染数据，重新显示时会以当前积分基准重新绑定。
+            // 相机配置仍保留缩放目标，释放观察指针不会改变重新出现后的比例。
+            camera.m_comparisonProjection.reset();
+            continue;
+        }
+        // 已显示的反向视口保证上面已建立备用积分；每个视口只计算自己的倍率。
+        const auto& source =
+            options->linearMapping == linear ? *main : alternate->cache;
+        const float zoom = options->visual->timelineZoom;
+        // 只更新相对基准的比例，缩放滑条不会触发全谱位置缓存失效。
+        // 主画布或备用积分重建时，重新换算使对比保持原有绝对间距。
+        if ( !camera.m_comparisonProjection )
+            camera.m_comparisonProjection.emplace();
+        camera.m_comparisonProjection->setProjection(
+            source, std::isfinite(zoom) ? std::clamp(zoom, 0.1F, 10.0F) : 1.0F);
+    }
 }
 
 /// @brief 从已登记相机中借用一个主画布相机，找不到时返回空指针。
@@ -1234,12 +1261,16 @@ SnapResult getSnapResult(
 {
     SnapResult result;
 
-    const auto* cache =
-        viewportCache ? viewportCache
-                      : scrollCacheForSettings(
-                            timelineRegistry,
-                            camera.comparison ? &*camera.comparison : nullptr,
-                            config.visual.enableLinearScrollMapping);
+    const auto* cache = viewportCache;
+    if ( !cache ) {
+        // 旧调用点允许不显式传入缓存，仍应优先使用相机已发布的投影。
+        cache = camera.m_comparisonProjection
+                    ? &*camera.m_comparisonProjection
+                    : scrollCacheForSettings(
+                          timelineRegistry,
+                          camera.comparison ? &*camera.comparison : nullptr,
+                          config.visual.enableLinearScrollMapping);
+    }
     // 只借用已准备好的滚动映射，输入查询不能把首次构建成本带入连续拖动。
     // 除 BPM 时间网格外，吸附近邻检查还依赖当前视口的屏幕距离。
     // 变速图和线性图可能同样接近一条拍线的时间，却相距多个像素阈值。

@@ -1,5 +1,6 @@
 #include "logic/session/PlaybackController.h"
 #include "audio/AudioManager.h"
+#include "common/ComparisonCanvas.h"
 #include "common/LogicCommands.h"
 #include "config/AppPaths.h"
 #include "config/Utf8Path.h"
@@ -971,13 +972,14 @@ void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
         handlePreviewNavigation(cmd);
         return;
     }
+    const bool comparison = Common::isComparisonCanvas(cmd.cameraId);
     if ( cmd.finishNavigation ) {
         // 下次手势必须从实际落点开始，不能继承上一笔未满一格的余量。
         m_ctx.m_pointerScrollVisualTime.reset();
         // 收尾不需要有效视口或尚存相机；窗口关闭仍能释放局部覆盖。
         // 标记最终配置已经发布，显示覆盖由会话在同版配置可见时移除。
         // 不阻塞等待，也不让处理到旧配置的当前轮次产生一次缩放回跳。
-        m_ctx.m_pointerZoomFinished = true;
+        if ( !comparison ) m_ctx.m_pointerZoomFinished = true;
         // 连续定位的最终状态立即提交，不能让音频或联机停留在中间帧。
         // 即使最后一帧没有位移，也需要结束 isScrubbing 生命周期。
         // 纯横移从未开启定位，不为它额外触发一次音频 seek。
@@ -1001,8 +1003,8 @@ void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
     auto cameraIt = m_ctx.cameras.find(cmd.cameraId);
     if ( cameraIt == m_ctx.cameras.end() ) {
         // 首条输入可能早于相机注册，但必须有有效视口尺寸才能建立相机。
-        if ( !std::isfinite(cmd.viewportWidth) || cmd.viewportWidth <= 0.0F ||
-             !std::isfinite(cmd.viewportHeight) ||
+        if ( comparison || !std::isfinite(cmd.viewportWidth) ||
+             cmd.viewportWidth <= 0.0F || !std::isfinite(cmd.viewportHeight) ||
              cmd.viewportHeight <= 0.0F ) {
             return;
         }
@@ -1042,7 +1044,8 @@ void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
                                   cmd.timelineZoom > 0.0F &&
                                   std::isfinite(cmd.anchorY);
     const bool directZoom =
-        directNavigation &&
+        // 对比捏合由视口配置发布；这里仅处理它的平移，不能覆盖共享倍率。
+        !comparison && directNavigation &&
         std::abs(cmd.timelineZoom - m_ctx.animatedTimelineZoom) > 1e-6F;
     if ( !std::isfinite(cmd.deltaY) ||
          (std::abs(cmd.deltaY) <= 0.001F && !directZoom) ) {

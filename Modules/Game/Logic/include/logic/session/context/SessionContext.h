@@ -16,6 +16,7 @@
 #include "logic/ecs/components/SampleComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/HitFXSystem.h"
+#include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/AnnotationRenderData.h"
 #include "logic/session/ClipboardTypes.h"
 #include "logic/session/EditorAction.h"
@@ -53,6 +54,8 @@ struct CameraInfo {
     float horizontalOffsetX{ 0.0F };
     /// @brief 仅对比视口覆盖全局映射及观察方式。
     std::optional<Common::ComparisonCanvasSettings> comparison{};
+    /// @brief 对比视口缩放，借用本会话两套映射之一的积分数据。
+    std::optional<System::ScrollCache> m_comparisonProjection{};
 };
 
 /// @brief 矩形框选区域

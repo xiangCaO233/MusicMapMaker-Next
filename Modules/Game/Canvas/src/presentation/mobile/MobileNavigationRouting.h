@@ -18,14 +18,17 @@ namespace MMM::Canvas
 /// @param navigation 只归本视图的双指分类器，不在视图间共享代际。
 /// @param navigationZoom
 /// 同一手势的即时倍率，不读取滞后的逻辑回流作为下一步基线。
+/// @param comparisonZoom 对比标签的独立倍率；为空时导航写入主画布的设置。
+/// @return 对比标签本次更新的倍率，由所属画布发布；普通导航返回空。
 /// @details 主画布可提供三维逆投影，时间线保持二维且忽略横向平移。
 /// 两者都先更新本地反馈，再发布连续定位；收尾只发布一次最终缩放与结束命令。
 /// @warning 每帧处理固定数量触点；不得等待会话、复制谱面或读取文件。
-inline void routeMobileNavigation(
+inline std::optional<float> routeMobileNavigation(
     MobileCanvasNavigation& navigation, float& navigationZoom,
     const Graphic::MobileTouchSnapshot& raw, bool allowed,
     const std::string& camera, const UI::Interaction::SurfaceFrame& frame,
-    const Common::Render::RenderSnapshot& snapshot, float width, float height)
+    const Common::Render::RenderSnapshot& snapshot, float width, float height,
+    std::optional<float> comparisonZoom = std::nullopt)
 {
     // 输入位置是逻辑像素，主画布可选逆投影来自同一帧的固定矩阵。
     // Timeline 不提供三维矩阵，直接采用纵向逻辑像素作为时间轴位移。
@@ -43,9 +46,12 @@ inline void routeMobileNavigation(
                                            allowed,
                                            display.x,
                                            display.y,
-                                           zoom,
+                                           comparisonZoom.value_or(zoom),
                                            10.0f * app.getWindowContentScale());
-    if ( delta.m_changed ) {
+    const bool localZoomChanged =
+        comparisonZoom && delta.m_changed && delta.m_zoom != *comparisonZoom;
+    // 对比捏合只调整判定线周围的间距，纯平移仍定位到各视图共用的播放点。
+    if ( delta.m_changed && !localZoomChanged ) {
         // 与普通拾取共用屏幕到谱面平面的逆投影，三维视角不另猜移动比例。
         const glm::vec2 oldScreen{ delta.m_anchorX - frame.m_x,
                                    delta.m_anchorY - frame.m_y };
@@ -85,8 +91,10 @@ inline void routeMobileNavigation(
         // 逻辑侧先保留当前直接显示值，下一轮配置可见后再无缝移除局部覆盖。
         // 一次手势只有一次收尾；第二指先抬起时就提交，不等待残留指针。
         // 外部取消也保留已完成的视图变换，因为它没有修改谱面物件。
-        zoom = navigationZoom;
-        Logic::EditorEngine::instance().updateTimelineZoom(zoom);
+        if ( !comparisonZoom ) {
+            zoom = navigationZoom;
+            Logic::EditorEngine::instance().updateTimelineZoom(zoom);
+        }
         UI::Interaction::dispatchCommand(
             Event::LogicCommandEvent(Logic::CmdPanCanvas{
                 .cameraId = camera, .finishNavigation = true }));
@@ -100,6 +108,7 @@ inline void routeMobileNavigation(
     if ( delta.m_redo )
         UI::Interaction::dispatchCommand(
             Event::LogicCommandEvent(Logic::CmdRedo{ camera }));
+    return localZoomChanged ? std::optional(delta.m_zoom) : std::nullopt;
 }
 
 }  // namespace MMM::Canvas

@@ -440,6 +440,15 @@ void ScrollCache::setAnimatedZoomScale(double scale)
     m_animatedZoomScale = scale;
 }
 
+/// @brief 将独立视口倍率换算到共享积分基准，复用位置反查和音符裁剪索引。
+/// @warning 逻辑线程逐视口同步；只读取共享基准，不重建或复制积分表。
+void ScrollCache::setProjection(const ScrollCache& source, double zoom)
+{
+    m_projectionSource = &source.integralSource();
+    // 积分已有基础倍率，对比视口只叠加相对比例，主画布补间不参与计算。
+    setAnimatedZoomScale(zoom / getBaseZoom());
+}
+
 /// @brief 返回反查索引采用的未动画缩放位置区间。
 /// @param index 时间顺序中的段号，不是位置索引中的条目号。
 /// @return 有限段的端点包围区间；末段返回带无穷远边界的区间。
@@ -595,21 +604,21 @@ double ScrollCache::toUnscaledAbsY(double animatedAbsY) const
 /// @warning 热路径使用二分查找，不遍历时间线实体。
 double ScrollCache::getUnscaledRawAbsY(double t) const
 {
+    const auto& segments = getSegments();
     // 空缓存使用与线性模式相同的基础速度，但仍保留最近一次规范后的基础缩放。
-    const double DEFAULT_SPEED = 500.0 * m_lastZoom;
-    if ( m_segments.empty() ) return t * DEFAULT_SPEED;
+    const double DEFAULT_SPEED = 500.0 * getBaseZoom();
+    if ( segments.empty() ) return t * DEFAULT_SPEED;
 
     // 查找严格晚于 t 的段，回退一步使边界时刻采用新段状态。
     auto it = std::upper_bound(
-        m_segments.begin(),
-        m_segments.end(),
+        segments.begin(),
+        segments.end(),
         t,
         [](double val, const ScrollSegment& seg) { return val < seg.time; });
 
-    if ( it == m_segments.begin() ) {
+    if ( it == segments.begin() ) {
         // 如果 t 比第一个点还早，按第一个点的速度回溯
-        return m_segments[0].absY +
-               (t - m_segments[0].time) * m_segments[0].speed;
+        return segments[0].absY + (t - segments[0].time) * segments[0].speed;
     }
     --it;
     // 段内位置由锚点加线性位移得到，不跨段累加，查询成本不随谱面时长增加。
@@ -633,19 +642,20 @@ double ScrollCache::getRawAbsY(double t) const
 /// @warning 热路径只做二分查找和插值，不新建窗口。
 double ScrollCache::applyMicroImpulseWindow(double t, double rawAbsY) const
 {
-    if ( m_microImpulseWindows.empty() ) {
+    const auto& windows = integralSource().m_microImpulseWindows;
+    if ( windows.empty() ) {
         return rawAbsY;
     }
 
     auto it =
-        std::upper_bound(m_microImpulseWindows.begin(),
-                         m_microImpulseWindows.end(),
+        std::upper_bound(windows.begin(),
+                         windows.end(),
                          t,
                          [](double value, const MicroImpulseWindow& window) {
                              return value < window.startTime;
                          });
 
-    if ( it == m_microImpulseWindows.begin() ) {
+    if ( it == windows.begin() ) {
         // 查询早于第一个窗口，不向前外推平滑区间。
         return rawAbsY;
     }
@@ -694,24 +704,26 @@ double ScrollCache::getVisualAnchorAbsY(double t) const
 /// @warning 查询会遍历下界匹配的区间候选，不是纯二分常量查询。
 double ScrollCache::getTime(double absY) const
 {
-    const double DEFAULT_SPEED = 500.0 * m_lastZoom;
+    const auto&  segments      = getSegments();
+    const auto&  rangeIndex    = integralSource().m_absYRangeIndex;
+    const double DEFAULT_SPEED = 500.0 * getBaseZoom();
     // 区间索引保存未动画缩放坐标，查询前必须回到同一坐标空间。
     absY = toUnscaledAbsY(absY);
-    if ( m_segments.empty() ) return absY / DEFAULT_SPEED;
+    if ( segments.empty() ) return absY / DEFAULT_SPEED;
 
     constexpr double EPS = 1e-6;
     // 容差用于位置区间边界比较，不代表把返回时间吸附到某个毫秒网格。
     std::size_t bestIndex = std::numeric_limits<std::size_t>::max();
     auto        endIt =
-        std::upper_bound(m_absYRangeIndex.begin(),
-                         m_absYRangeIndex.end(),
+        std::upper_bound(rangeIndex.begin(),
+                         rangeIndex.end(),
                          absY + EPS,
                          [](double value, const AbsYRangeEntry& entry) {
                              return value < entry.minAbsY;
                          });
 
     // 反向滚动可能使多个时间段覆盖同一位置，索引排序不代表时间先后。
-    for ( auto it = m_absYRangeIndex.begin(); it != endIt; ++it ) {
+    for ( auto it = rangeIndex.begin(); it != endIt; ++it ) {
         if ( it->maxAbsY < absY - EPS ) continue;
         if ( it->segmentIndex < bestIndex ) {
             bestIndex = it->segmentIndex;
@@ -720,13 +732,13 @@ double ScrollCache::getTime(double absY) const
 
     if ( bestIndex != std::numeric_limits<std::size_t>::max() ) {
         // 候选已经排除停止段，可按该段速度直接反解；不再选择离当前播放点最近的解。
-        const auto& seg = m_segments[bestIndex];
+        const auto& seg = segments[bestIndex];
         return seg.time + (absY - seg.absY) / seg.speed;
     }
 
     // 没有区间命中时按较近的首尾锚点外推；距离相等选末段。
-    const auto& first = m_segments.front();
-    const auto& last  = m_segments.back();
+    const auto& first = segments.front();
+    const auto& last  = segments.back();
     const auto& edge =
         std::abs(absY - first.absY) < std::abs(absY - last.absY) ? first : last;
     // 外推不是将坐标截断到首尾范围，返回时间可能落在现有事件范围之外。
@@ -741,18 +753,19 @@ double ScrollCache::getTime(double absY) const
 /// @warning 热路径仅二分现有段落，不应用微脉冲窗口插值。
 double ScrollCache::getSpeedAt(double t) const
 {
+    const auto& segments = getSegments();
     // 该值是原始分段速度，不是 getVisualAnchorAbsY 平滑曲线的数值导数。
-    if ( m_segments.empty() ) {
-        return applyAnimatedZoomScale(500.0 * m_lastZoom);
+    if ( segments.empty() ) {
+        return applyAnimatedZoomScale(500.0 * getBaseZoom());
     }
     auto it = std::upper_bound(
-        m_segments.begin(),
-        m_segments.end(),
+        segments.begin(),
+        segments.end(),
         t,
         [](double val, const ScrollSegment& seg) { return val < seg.time; });
 
-    if ( it == m_segments.begin() ) {
-        return m_segments[0].speed * m_animatedZoomScale;
+    if ( it == segments.begin() ) {
+        return segments[0].speed * m_animatedZoomScale;
     }
     // 边界时刻采用新段速度，与原始位置查询的 upper_bound 约定一致。
     --it;
@@ -765,15 +778,16 @@ double ScrollCache::getSpeedAt(double t) const
 /// @warning 热路径二分查询；HS 本身不随动画缩放变化。
 double ScrollCache::getHsAt(double t) const
 {
+    const auto& segments = getSegments();
     // HS 独立于积分速度；不能从 getSpeedAt 的结果中反推它。
-    if ( m_segments.empty() ) return 1.0;
+    if ( segments.empty() ) return 1.0;
     auto it = std::upper_bound(
-        m_segments.begin(),
-        m_segments.end(),
+        segments.begin(),
+        segments.end(),
         t,
         [](double val, const ScrollSegment& seg) { return val < seg.time; });
 
-    if ( it == m_segments.begin() ) return m_segments[0].hs;
+    if ( it == segments.begin() ) return segments[0].hs;
     // 首点之前沿用首段，其余时间取不晚于查询时刻的最后一段。
     --it;
     return it->hs;
@@ -785,19 +799,20 @@ double ScrollCache::getHsAt(double t) const
 /// @warning 逻辑热路径：每个 Session update 调用一次；只执行二分查找。
 ScrollTimingState ScrollCache::getTimingStateAt(double t) const
 {
+    const auto& segments = getSegments();
     // 返回重建时保存的活动语义值，不根据当前视觉速度重新推算 BPM 或 SV。
-    if ( m_segments.empty() ) {
+    if ( segments.empty() ) {
         return {};
     }
 
-    auto it = std::upper_bound(m_segments.begin(),
-                               m_segments.end(),
+    auto it = std::upper_bound(segments.begin(),
+                               segments.end(),
                                t,
                                [](double value, const ScrollSegment& segment) {
                                    return value < segment.time;
                                });
 
-    if ( it == m_segments.begin() ) {
+    if ( it == segments.begin() ) {
         return { it->activeBpmValue, it->activeScrollValue };
     }
 
@@ -816,21 +831,22 @@ ScrollTimingState ScrollCache::getTimingStateAt(double t) const
 double ScrollCache::getDisplayDelta(double t, double currentAbsY,
                                     double anchorTime) const
 {
-    const double DEFAULT_SPEED = 500.0 * m_lastZoom;
-    if ( m_segments.empty() ) {
+    const auto&  segments      = getSegments();
+    const double DEFAULT_SPEED = 500.0 * getBaseZoom();
+    if ( segments.empty() ) {
         return applyAnimatedZoomScale(t * DEFAULT_SPEED) - currentAbsY;
     }
 
     // 查询端点所在段只用于同锚点快速取 HS，跨锚点情况还需独立查询倍率。
     auto it = std::upper_bound(
-        m_segments.begin(),
-        m_segments.end(),
+        segments.begin(),
+        segments.end(),
         t,
         [](double val, const ScrollSegment& seg) { return val < seg.time; });
 
     const ScrollSegment* seg = nullptr;
-    if ( it == m_segments.begin() ) {
-        seg = &m_segments.front();
+    if ( it == segments.begin() ) {
+        seg = &segments.front();
     } else {
         seg = &(*std::prev(it));
     }
@@ -851,7 +867,7 @@ double ScrollCache::getDisplayDelta(double t, double currentAbsY,
 /// @warning 热路径常量查询，不扫描段落。
 bool ScrollCache::hasJumpEffects() const
 {
-    return m_hasJumpEffects;
+    return integralSource().m_hasJumpEffects;
 }
 
 /// @brief 判断给定时间跨度是否可使用线性插值快速路径。
@@ -864,6 +880,8 @@ bool ScrollCache::hasJumpEffects() const
 bool ScrollCache::canInterpolateLinearly(double startTime,
                                          double duration) const
 {
+    const auto& segments = getSegments();
+    const auto& windows  = integralSource().m_microImpulseWindows;
     if ( !std::isfinite(startTime) || !std::isfinite(duration) ||
          duration <= 0.0 ) {
         return false;
@@ -876,41 +894,41 @@ bool ScrollCache::canInterpolateLinearly(double startTime,
     }
 
     auto nextSegmentIt = std::upper_bound(
-        m_segments.begin(),
-        m_segments.end(),
+        segments.begin(),
+        segments.end(),
         startTime,
         [](double val, const ScrollSegment& seg) { return val < seg.time; });
 
     // 区间内部不能跨段；恰好位于终点的段界由后续跳变检查进一步判断。
-    if ( nextSegmentIt != m_segments.end() && nextSegmentIt->time < endTime ) {
+    if ( nextSegmentIt != segments.end() && nextSegmentIt->time < endTime ) {
         return false;
     }
 
-    if ( nextSegmentIt != m_segments.begin() ) {
+    if ( nextSegmentIt != segments.begin() ) {
         // 段起点上的 Jump 即使不处于查询区间内部，也会使本段拒绝简单插值。
         const auto& currentSegment = *std::prev(nextSegmentIt);
         if ( (currentSegment.effects & SCROLL_EFFECT_JUMP) != 0 ) {
             return false;
         }
-    } else if ( !m_segments.empty() &&
-                (m_segments.front().effects & SCROLL_EFFECT_JUMP) != 0 ) {
+    } else if ( !segments.empty() &&
+                (segments.front().effects & SCROLL_EFFECT_JUMP) != 0 ) {
         // 查询早于首段时仍考虑首段跳变状态，不把向前外推视为无条件安全。
         return false;
     }
 
     // 向前多查一个跨度，保守排除刚经过瞬时跳变的插值区间。
-    if ( m_hasJumpEffects ) {
+    if ( hasJumpEffects() ) {
         const double jumpQueryStart = startTime - duration;
         // 扩展范围来自调用者本次跨度，不是固定时间等待或人为延迟本地反馈。
         auto jumpIt =
-            std::lower_bound(m_segments.begin(),
-                             m_segments.end(),
+            std::lower_bound(segments.begin(),
+                             segments.end(),
                              jumpQueryStart,
                              [](const ScrollSegment& seg, double value) {
                                  return seg.time < value;
                              });
 
-        for ( ; jumpIt != m_segments.end() && jumpIt->time <= endTime;
+        for ( ; jumpIt != segments.end() && jumpIt->time <= endTime;
               ++jumpIt ) {
             // 终点上的 Jump 也拒绝插值，不能跨过瞬时不连续边界混合位置。
             if ( (jumpIt->effects & SCROLL_EFFECT_JUMP) != 0 ) {
@@ -920,18 +938,17 @@ bool ScrollCache::canInterpolateLinearly(double startTime,
     }
 
     // 原始积分与视觉锚点在微脉冲窗口中不同，交叠时不能共用简单插值。
-    if ( !m_microImpulseWindows.empty() ) {
+    if ( !windows.empty() ) {
         // 窗口按时间排列且不重叠，找到首个末端不早于起点的窗口即可判断相交。
         auto windowIt = std::lower_bound(
-            m_microImpulseWindows.begin(),
-            m_microImpulseWindows.end(),
+            windows.begin(),
+            windows.end(),
             startTime,
             [](const MicroImpulseWindow& window, double value) {
                 return window.endTime < value;
             });
 
-        if ( windowIt != m_microImpulseWindows.end() &&
-             windowIt->startTime < endTime ) {
+        if ( windowIt != windows.end() && windowIt->startTime < endTime ) {
             // 恰好在查询终点才开始的窗口不影响这次区间，故使用严格小于。
             return false;
         }
@@ -950,6 +967,7 @@ bool ScrollCache::canInterpolateLinearly(double startTime,
 double ScrollCache::getMaxJumpSecondsInRange(double startTime, double endTime,
                                              double padding) const
 {
+    const auto& segments = getSegments();
     if ( startTime > endTime ) {
         std::swap(startTime, endTime);
     }
@@ -959,7 +977,7 @@ double ScrollCache::getMaxJumpSecondsInRange(double startTime, double endTime,
     // padding 与时间戳使用秒，只有 jumpValue 本身在读取时由毫秒换算。
     double maxJump = 0.0;
 
-    for ( const auto& seg : m_segments ) {
+    for ( const auto& seg : segments ) {
         if ( seg.time < queryStart ) continue;
         // 时间有序，超过上界即可结束，不能对未排序容器套用这一提前退出。
         if ( seg.time > queryEnd ) break;
@@ -982,8 +1000,10 @@ double ScrollCache::getMaxJumpSecondsInRange(double startTime, double endTime,
 std::vector<std::pair<double, double>> ScrollCache::getTimeRangesForAbsYWindow(
     double minAbsY, double maxAbsY) const
 {
+    const auto& segments   = getSegments();
+    const auto& rangeIndex = integralSource().m_absYRangeIndex;
     std::vector<std::pair<double, double>> ranges;
-    if ( m_segments.empty() ) return ranges;
+    if ( segments.empty() ) return ranges;
 
     if ( minAbsY > maxAbsY ) {
         std::swap(minAbsY, maxAbsY);
@@ -1018,14 +1038,14 @@ std::vector<std::pair<double, double>> ScrollCache::getTimeRangesForAbsYWindow(
     std::vector<std::size_t> candidateIndices;
     // 位置索引先排除下界已经越过窗口的条目，再检查各候选上界。
     auto rangeEndIt =
-        std::upper_bound(m_absYRangeIndex.begin(),
-                         m_absYRangeIndex.end(),
+        std::upper_bound(rangeIndex.begin(),
+                         rangeIndex.end(),
                          maxAbsY + 1e-6,
                          [](double value, const AbsYRangeEntry& entry) {
                              return value < entry.minAbsY;
                          });
 
-    for ( auto it = m_absYRangeIndex.begin(); it != rangeEndIt; ++it ) {
+    for ( auto it = rangeIndex.begin(); it != rangeEndIt; ++it ) {
         if ( it->maxAbsY < minAbsY - 1e-6 ) continue;
         candidateIndices.push_back(it->segmentIndex);
     }
@@ -1038,11 +1058,11 @@ std::vector<std::pair<double, double>> ScrollCache::getTimeRangesForAbsYWindow(
         candidateIndices.end());
 
     for ( std::size_t i : candidateIndices ) {
-        const auto& seg = m_segments[i];
+        const auto& seg = segments[i];
         // 保留局部除法保护，不依赖索引构建阶段的过滤作为唯一前提。
         if ( std::abs(seg.speed) < 1e-9 ) continue;
 
-        const bool hasNext = i + 1 < m_segments.size();
+        const bool hasNext = i + 1 < segments.size();
         // 先反解整条直线，再按实际段时域收窄，不把位置包围框当精确可见结果。
         // 负速度会交换两个反解时间的大小，统一取 min/max 后再裁剪。
         double t0           = seg.time + (minAbsY - seg.absY) / seg.speed;
@@ -1051,7 +1071,7 @@ std::vector<std::pair<double, double>> ScrollCache::getTimeRangesForAbsYWindow(
         double overlapEnd   = std::max(t0, t1);
 
         if ( hasNext ) {
-            double segEndTime = m_segments[i + 1].time;
+            double segEndTime = segments[i + 1].time;
             // 使用本段速度算终点，不能直接拿下一段可能已发生 Jump 的位置。
             double segEndAbsY = seg.absY + (segEndTime - seg.time) * seg.speed;
             // Jump 造成的空白位置不属于本段连续运动，需要在粗索引命中后排除。
@@ -1086,7 +1106,7 @@ std::vector<std::pair<double, double>> ScrollCache::getTimeRangesForAbsYWindow(
 /// @warning 快照导出涉及完整复制，调用方应复用输出容量并控制触发频率。
 void ScrollCache::copyAnimatedSegmentsTo(std::vector<ScrollSegment>& out) const
 {
-    out = m_segments;
+    out = getSegments();
     // 单位倍率也必须先复制，不能因无需缩放而返回调用方残留的旧内容。
     if ( std::abs(m_animatedZoomScale - 1.0) <= 1e-9 ) {
         return;
@@ -1110,13 +1130,14 @@ void ScrollCache::copyAnimatedSegmentsTo(std::vector<ScrollSegment>& out) const
 std::vector<std::pair<double, double>> ScrollCache::getTimeSlices(
     double startTime, double endTime) const
 {
+    const auto&                            segments = getSegments();
     std::vector<std::pair<double, double>> slices;
     // 与位置窗口查询不同，本接口不接受逆序时间范围并自动修正。
     if ( startTime >= endTime ) return slices;
 
     auto it = std::upper_bound(
-        m_segments.begin(),
-        m_segments.end(),
+        segments.begin(),
+        segments.end(),
         startTime,
         [](double val, const ScrollSegment& seg) { return val < seg.time; });
 
@@ -1124,7 +1145,7 @@ std::vector<std::pair<double, double>> ScrollCache::getTimeSlices(
     double current = startTime;
     while ( current < endTime ) {
         // 越过最后段界后仍补齐到请求终点；空缓存也得到一个完整切片。
-        double nextTime = (it != m_segments.end()) ? it->time : endTime;
+        double nextTime = (it != segments.end()) ? it->time : endTime;
         if ( nextTime > endTime ) nextTime = endTime;
         if ( nextTime > current ) {
             // 跳过重合段界产生的零跨度，避免下游对空片段做除法或插值。
@@ -1132,7 +1153,7 @@ std::vector<std::pair<double, double>> ScrollCache::getTimeSlices(
         }
         current = nextTime;
         // 消费段界后继续前进，剩余尾片仍由请求的 endTime 决定。
-        if ( it != m_segments.end() ) ++it;
+        if ( it != segments.end() ) ++it;
     }
     // 不对相邻片段合并，否则会抹去调用方需要的速度或效果切换边界。
     return slices;

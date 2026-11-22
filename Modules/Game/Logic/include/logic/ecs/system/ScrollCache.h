@@ -76,13 +76,25 @@ public:
     /// @warning 逻辑/渲染热路径：每个 Session update 执行；只做常量级赋值。
     void setAnimatedZoomScale(double scale);
 
+    /// @brief 借用同一会话的分段积分，仅保留本视口的绝对缩放。
+    /// @pre 来源为会话持有的积分缓存，投影实例不参与重建。
+    /// @warning 逐视口同步路径，只更新观察指针和倍率。
+    void setProjection(const ScrollCache& source, double zoom);
+
+    /// @brief 返回未缩放坐标的所属缓存，供同一映射的物件索引复用。
+    /// @warning 热路径只读取观察指针，不转移缓存所有权。
+    const ScrollCache& integralSource() const
+    {
+        return m_projectionSource ? *m_projectionSource : *this;
+    }
+
     /// @brief 获取当前渲染用动画时间线缩放比例。
     /// @return 当前动画缩放相对缓存目标缩放的比例。
     /// @warning 热路径：渲染剔除和快照生成时读取；只返回缓存值。
     double getAnimatedZoomScale() const { return m_animatedZoomScale; }
     /// @brief 返回实际积分缓存采用的基础倍率，可能暂时不同于新配置目标。
     /// @warning 热路径只读标量；用于直接操纵期间复用积分而不重建时间线。
-    double getBaseZoom() const { return m_lastZoom; }
+    double getBaseZoom() const { return integralSource().m_lastZoom; }
 
     /// @brief 获取给定时间戳对应的绝对 Y 坐标。
     double getAbsY(double t) const;
@@ -131,7 +143,7 @@ public:
     /// @brief 是否存在会使物件位移不同于统一画布位移的有效 HS。
     /// @return 任一生效段的 HS 不为 1 时返回真；线性显示模式下为假。
     /// @warning 每份渲染快照读取，仅访问重建时缓存的标志，不扫描时间线。
-    bool hasNonUnitHs() const { return m_hasNonUnitHs; }
+    bool hasNonUnitHs() const { return integralSource().m_hasNonUnitHs; }
 
     /// @brief 判断给定播放窗口是否可以用当前瞬时速度做 UI 侧线性补间。
     /// @param startTime 播放窗口起点时间。
@@ -155,7 +167,10 @@ public:
                                                          double endTime) const;
 
     /// @brief 获取所有分段信息 (只读)
-    const std::vector<ScrollSegment>& getSegments() const { return m_segments; }
+    const std::vector<ScrollSegment>& getSegments() const
+    {
+        return integralSource().m_segments;
+    }
 
     /// @brief 拷贝已应用动画缩放的分段信息到输出容器。
     /// @param out 接收动画分段的输出容器。
@@ -164,7 +179,7 @@ public:
 
     /// @brief 获取缓存重建版本号。
     /// @return 每次 rebuild 后递增的版本号。
-    std::uint64_t getRevision() const { return m_revision; }
+    std::uint64_t getRevision() const { return integralSource().m_revision; }
 
     /// @brief 脏标记，用于触发延迟重建
     bool isDirty{ true };
@@ -173,10 +188,13 @@ public:
     const std::vector<Common::Render::TimingInterpolationElement>&
     getInterpolations() const
     {
-        return m_interpolations;
+        return integralSource().m_interpolations;
     }
 
 private:
+    /// @brief 非空时借用会话缓存的积分数据；投影销毁时不释放源缓存。
+    const ScrollCache* m_projectionSource{};
+
     std::vector<ScrollSegment> m_segments;
     /// @brief 原始段落定义与运行时积分采样分开保存。
     std::vector<Common::Render::TimingInterpolationElement> m_interpolations;
