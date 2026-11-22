@@ -647,8 +647,20 @@ StartupPreparationResult prepareStartupAssets()
             }
         }
 
-        // 成功加载立即退出重试循环，不再触碰仅失败分支使用的错误字符串。
-        if ( skinLoaded ) break;
+        if ( skinLoaded ) {
+            // 自动包是可执行文件旁的单次导入入口。等解压和皮肤加载都成功再移除，
+            // 让下一次启动恢复普通校验；用户在文件选择器中选的原文件不参与清理。
+            if ( !manual && !localPackage.empty() ) {
+                std::error_code removeError;
+                std::filesystem::remove(localPackage, removeError);
+                if ( removeError ) {
+                    // 安装已经可用，目录没有删除权限也不阻碍进入编辑器。
+                    XWARN("Failed to remove imported startup asset package: {}",
+                          removeError.message());
+                }
+            }
+            break;
+        }
 
         // 错误日志用于诊断，界面文本同时保留用户可执行的恢复方案。
         XERROR("Startup asset preparation failed: {}", startupErrorMessage);
