@@ -3,6 +3,9 @@
 
 #if defined(_WIN32)
 #    include <windows.h>
+#elif defined(__ANDROID__)
+#    include <SDL3/SDL_system.h>
+#    include <jni.h>
 #elif defined(MMM_ENABLE_XDG_PORTAL_THEME)
 #    include <gio/gio.h>
 #    include <memory>
@@ -10,8 +13,8 @@
 #endif
 
 /// @file
-/// @brief 实现 Windows 注册表、macOS AppKit 与 Linux XDG Portal
-/// 的系统主题查询入口。
+/// @brief 实现 Windows 注册表、macOS AppKit、Linux XDG Portal 与 Android
+/// Activity 的系统主题查询入口。
 ///
 /// 首次查询允许执行平台初始化；运行期刷新只读取轻量平台状态或非阻塞派发
 /// 已到达的 Portal 信号。所有平台失败都收敛为 `Unknown`，由上层决定默认主题，
@@ -52,6 +55,42 @@ SystemTheme queryWindowsSystemTheme()
     }
     // Windows 以零表示暗色，任意非零值按亮色处理。
     return appUsesLightTheme == 0 ? SystemTheme::Dark : SystemTheme::Light;
+}
+#elif defined(__ANDROID__)
+/// @brief 读取 Activity 发布的亮暗外观，供启动页和编辑器共用。
+/// @return Activity 不可用或系统未明确报告外观时返回 Unknown。
+/// @warning 启动时及编辑器限频检查调用；不等待 Java UI 线程执行任务。
+SystemTheme queryAndroidSystemTheme()
+{
+    auto* env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
+    if ( !env ) return SystemTheme::Unknown;
+    // 不保留 Activity 引用，经过 Activity 重建也能读取当前实例的配置。
+    if ( env->PushLocalFrame(2) < 0 ) {
+        env->ExceptionClear();
+        return SystemTheme::Unknown;
+    }
+    jint appearance = -1;
+    auto activity   = static_cast<jobject>(SDL_GetAndroidActivity());
+    if ( activity && !env->ExceptionCheck() ) {
+        auto type = env->GetObjectClass(activity);
+        if ( type && !env->ExceptionCheck() ) {
+            auto method = env->GetMethodID(type, "systemTheme", "()I");
+            if ( method && !env->ExceptionCheck() )
+                appearance = env->CallIntMethod(activity, method);
+        }
+    }
+    // Java 查询失败时保持既有的 Unknown 回退契约，避免向后续 JNI 调用传播异常。
+    if ( env->ExceptionCheck() ) {
+        env->ExceptionClear();
+        appearance = -1;
+    }
+    env->PopLocalFrame(nullptr);
+    // Activity 返回明确的深浅偏好时才覆盖回退值。
+    switch ( appearance ) {
+    case 1: return SystemTheme::Dark;
+    case 0: return SystemTheme::Light;
+    default: return SystemTheme::Unknown;
+    }
 }
 #elif defined(MMM_ENABLE_XDG_PORTAL_THEME)
 /// @brief 释放 GLib 主上下文所有权。
@@ -383,6 +422,9 @@ SystemTheme getSystemTheme()
 #elif defined(__APPLE__)
     // AppKit 查询被隔离在 Objective-C++ 实现中。
     return queryMacOSSystemTheme();
+#elif defined(__ANDROID__)
+    // 首次取样使用 Activity 启动时发布的 uiMode，资源尚未下载也可查询。
+    return queryAndroidSystemTheme();
 #elif defined(MMM_ENABLE_XDG_PORTAL_THEME)
     // Linux 首次调用建立 Portal 代理，后续仅返回缓存值。
     return initializeLinuxSystemTheme().theme;
@@ -402,6 +444,9 @@ SystemTheme refreshSystemTheme()
 #elif defined(__APPLE__)
     // macOS 直接读取应用当前有效外观。
     return queryMacOSSystemTheme();
+#elif defined(__ANDROID__)
+    // Activity 的配置变更回调已发布最新值，无需等待或手动派发事件。
+    return queryAndroidSystemTheme();
 #elif defined(MMM_ENABLE_XDG_PORTAL_THEME)
     // Linux 只派发已到达事件，不执行新的同步 Portal 方法调用。
     return refreshLinuxSystemTheme();

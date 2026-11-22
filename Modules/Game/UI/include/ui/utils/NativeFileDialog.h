@@ -83,6 +83,11 @@ void openFileAsync(const nfdu8filteritem_t* filters, nfdfiltersize_t count,
 /// @details 桌面返回用户文件原路径。Android 副本由调用方使用后移除。
 /// @warning 用户触发的低频路径；Android 结果由 pollAsyncDialogs 消费。
 void openAssetPackageAsync(DialogCompletion completion);
+#ifdef __ANDROID__
+/// @brief 只读选取 MSK 皮肤包，返回独立缓存副本，由调用方使用后清理。
+/// @warning 用户触发的低频路径；结果由 UI 帧消费，不持久化源文档授权。
+void openSkinPackageAsync(DialogCompletion completion);
+#endif
 /// @brief 异步选择保存目标，writer 必须确认文档发布成功后才报告保存成功。
 void saveFileAsync(const nfdu8filteritem_t* filters, nfdfiltersize_t count,
                    const char* directory, const char* name,

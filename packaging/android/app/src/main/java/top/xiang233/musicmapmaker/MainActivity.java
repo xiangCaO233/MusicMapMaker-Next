@@ -2,6 +2,7 @@ package top.xiang233.musicmapmaker;
 
 import org.libsdl.app.SDLActivity;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
@@ -26,6 +27,9 @@ public final class MainActivity extends SDLActivity {
     /** 只在 Java UI 线程修改；私有资源下载完成前不显示共享文件授权引导。 */
     private boolean editorResourcesReady;
 
+    /** Java UI 线程发布系统外观，SDL 线程只读取这一份值快照。 */
+    private volatile int systemNightMode = Configuration.UI_MODE_NIGHT_UNDEFINED;
+
     /** 返回回调只在 Activity 生命周期内存活，旧版系统不解析 API 33 类型。 */
     private Object backNavigationCallback;
     /** 鼠标监听器随 Activity 注册和释放，不依赖原生窗口是否已经构造。 */
@@ -40,12 +44,30 @@ public final class MainActivity extends SDLActivity {
 
     /** SDL 初始化之后接管系统返回手势，保留平台 IME 的更高优先级处理。 */
     @Override protected void onCreate(Bundle state) {
+        // SDL 开始原生启动流程前先发布外观，启动页的第一帧就能读取。
+        systemNightMode = getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
         super.onCreate(state);
         backNavigationCallback = BackNavigation.register(this);
         inputDevices = new InputDevices(this);
         softKeyboard = new SoftKeyboard(this);
         // 只建立引导对象，显示与返回核验统一交给 onResume，避免启动时重复弹窗。
         fileAccessPrompt = new FileAccessPrompt(this, this::requestLocalFileAccess);
+    }
+
+    /** uiMode 改变时继续复用当前 Activity，并将更新后的外观交给 SDL 线程读取。 */
+    @Override public void onConfigurationChanged(Configuration configuration) {
+        systemNightMode = configuration.uiMode & Configuration.UI_MODE_NIGHT_MASK;
+        super.onConfigurationChanged(configuration);
+    }
+
+    /** @return 原生主题查询结果，1 表示暗色，0 表示亮色，-1 表示系统未明确报告。 */
+    public int systemTheme() {
+        // Android 的类型位已在写入时屏蔽，JNI 接口只传递三态外观。
+        switch (systemNightMode) {
+            case Configuration.UI_MODE_NIGHT_YES: return 1;
+            case Configuration.UI_MODE_NIGHT_NO: return 0;
+            default: return -1;
+        }
     }
 
     /** Activity 销毁时精确解除自己的回调，SDL 生命周期仍由基类负责。 */

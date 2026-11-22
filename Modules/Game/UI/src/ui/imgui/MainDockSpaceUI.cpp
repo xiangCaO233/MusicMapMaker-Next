@@ -689,60 +689,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             }
         }
 
-        // ASCII 字体选择器更新配置后请求渲染器在安全时机重建字体图集。
-        {
-            // ASCII 与 CJK 分开配置，允许皮肤覆盖时保留用户字体回退策略。
-            Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
-            if ( ImGuiFileDialog::Instance()->IsOpened("AsciiFontPicker") ) {
-                Utils::prepareCenteredModalWindow(fileDialogSize);
-            }
-            if ( ImGuiFileDialog::Instance()->Display(
-                     "AsciiFontPicker",
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                         ImGuiWindowFlags_NoSavedSettings,
-                     fileDialogSize) ) {
-                if ( ImGuiFileDialog::Instance()->IsOk() ) {
-                    // 配置保存原始 UTF-8 路径，加载器负责后续有效性检查。
-                    std::string filePath =
-                        ImGuiFileDialog::Instance()->GetFilePathName();
-                    auto config = engine.getEditorConfig();
-                    config.settings.preferredAsciiFont = filePath;
-                    engine.setEditorConfig(config);
-                    // Vulkan 上下文可能正在关闭；不可用时只保留配置变更。
-                    if ( auto ctx = Graphic::VKContext::get() )
-                        ctx->get().requestFontRebuild();
-                }
-                // 取消时不修改配置，也不请求字体图集重建。
-                ImGuiFileDialog::Instance()->Close();
-            }
-        }
-
-        // CJK 字体使用独立配置键，但共享同一延迟字体重建机制。
-        {
-            // CJK 字体通常体积更大，仍只置重建请求而不阻塞当前模态帧。
-            Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
-            if ( ImGuiFileDialog::Instance()->IsOpened("CjkFontPicker") ) {
-                Utils::prepareCenteredModalWindow(fileDialogSize);
-            }
-            if ( ImGuiFileDialog::Instance()->Display(
-                     "CjkFontPicker",
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                         ImGuiWindowFlags_NoSavedSettings,
-                     fileDialogSize) ) {
-                if ( ImGuiFileDialog::Instance()->IsOk() ) {
-                    // 不在文件选择回调中直接创建 GPU 字体资源。
-                    std::string filePath =
-                        ImGuiFileDialog::Instance()->GetFilePathName();
-                    auto config                      = engine.getEditorConfig();
-                    config.settings.preferredCjkFont = filePath;
-                    engine.setEditorConfig(config);
-                    if ( auto ctx = Graphic::VKContext::get() )
-                        ctx->get().requestFontRebuild();
-                }
-                // 路径有效性和字体解析错误由字体资源重载流程统一反馈。
-                ImGuiFileDialog::Instance()->Close();
-            }
-        }
+        // 字体文件模态由设置页打开并消费结果；这里只处理主界面的文件入口。
+        // IGFD 每帧只向一个调用方返回结果，重复处理会绕过设置页的校验与保存。
     }
 
     // 事件或文件选择器只置请求位，实际 OpenPopup 必须发生在当前 ImGui 帧。

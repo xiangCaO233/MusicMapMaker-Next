@@ -120,6 +120,16 @@ void openAssetPackageAsync(DialogCompletion completion)
 #endif
 }
 
+#ifdef __ANDROID__
+/// @brief 请求 MSK 的只读副本，重新选择同一文档时重新读取当前内容。
+/// @warning 只由用户操作触发，使用后由导入方清理缓存文件。
+void openSkinPackageAsync(DialogCompletion completion)
+{
+    // 皮肤归档与谱面工作副本的授权生命周期不同，不加入持久化映射。
+    beginAsync(4, nullptr, std::move(completion));
+}
+#endif
+
 /// @brief 创建授权保存目标，真正字节发布由 writer 成功后执行。
 /// @details 系统创建占位文档不是谱面保存成功，不能提前清理编辑脏位。
 /// @warning 请求参数只在启动阶段借用，平台方法会同步复制默认名称。
