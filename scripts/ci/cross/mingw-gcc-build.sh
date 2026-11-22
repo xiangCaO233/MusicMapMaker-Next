@@ -35,7 +35,7 @@ Environment overrides:
   MINGW_SYSROOT                    MinGW sysroot path
   MINGW_GCC_PREBUILT_COMPILER_TAG  Default prebuilt compiler tag
   WINDOWS_CROSS_ROOT               Default: /mnt/cross/windows
-  VULKAN_SDK                       Default: ${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0
+  VULKAN_SDK                       Default: ${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.363.1
   CMAKE_GENERATOR                  Default: Ninja
 EOF
 }
@@ -328,7 +328,7 @@ export MINGW_SYSROOT="${mingwSysroot}"
 # 下游 CMake 与第三方子构建共享同一 ABI 标签。
 export MINGW_GCC_PREBUILT_COMPILER_TAG="${compilerTag}"
 export WINDOWS_CROSS_ROOT="${WINDOWS_CROSS_ROOT:-/mnt/cross/windows}"
-export VULKAN_SDK="${VULKAN_SDK:-${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0}"
+export VULKAN_SDK="${VULKAN_SDK:-${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.363.1}"
 
 requireCommand cmake
 # 编译、资源和归档工具必须全部来自相同目标前缀。

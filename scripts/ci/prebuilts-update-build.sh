@@ -14,8 +14,8 @@ Usage: scripts/ci/prebuilts-update-build.sh [options]
 Configure, build, and stage all source-built prebuilt libraries used by CI.
 
 Default matrix:
-  Windows MSVC 2026:    clang-cl 22 + lld-link + MSVC/UCRT
-  Windows MinGW clang64: clang 22 llvm-mingw UCRT + libc++
+  Windows MSVC 2026:    clang-cl 23 + lld-link + MSVC/UCRT
+  Windows MinGW clang64: clang 23 llvm-mingw UCRT + libc++
   Windows MinGW ucrt64:  GCC 14 UCRT64
   Linux gcc14:           native GCC 14
   Linux clang19:         native Clang 19
@@ -731,7 +731,7 @@ fi
 runBuildPhase
 
 # 维护约束：矩阵坐标必须与仓库预编译目录布局完全一致。
-# 维护约束：Windows MSVC 默认组合固定 clang-cl 22 与 compiler tag 2026。
+# 维护约束：Windows MSVC 默认组合固定 clang-cl 23 与 compiler tag 2026。
 # 维护约束：MinGW Clang 默认组合固定 llvm-mingw UCRT、libc++ 与 clang64。
 # 维护约束：MinGW GCC 默认组合固定 GCC 14 UCRT64 与 ucrt64。
 # 维护约束：Linux GCC 默认组合固定 gcc14 可执行文件与 gcc/gcc14。

@@ -17,7 +17,7 @@ Options:
   --build-dir <path>     Build directory. Default: build_cross_msvc
   --build-type <type>    CMake build type. Default: RelWithDebInfo
   --compiler-tag <tag>   Prebuilt compiler tag. Default: 2026
-  --llvm-version <major> LLVM tool suite major version. Default: 22
+  --llvm-version <major> LLVM tool suite major version. Default: 23
   --jobs <count>         Parallel build jobs. Default: 75% of CPU threads
   --linkage <mode>       PROJECT_LINKAGE value: static or shared. Default: static
   --toolchain <path>     CMake toolchain file. Default: cmake/toolchain/cross-msvc.cmake
@@ -36,7 +36,7 @@ Environment overrides:
   MSVC_LLVM_VERSION      Default LLVM tool suite major version
   MMM_PGO_PROFILE_RUNTIME  Windows compiler-rt profile library override
   WINDOWS_CROSS_ROOT     Default: /mnt/cross/windows
-  VULKAN_SDK             Default: ${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0
+  VULKAN_SDK             Default: ${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.363.1
   CMAKE_GENERATOR        Default: Ninja
 EOF
 }
@@ -121,7 +121,7 @@ buildJobs="$(detectBuildJobs)"
 # compiler tag 对应预编译目录中的 MSVC 工具集版本。
 compilerTag="${MSVC_PREBUILT_COMPILER_TAG:-2026}"
 # LLVM 主版本只选择宿主工具，不改变预编译目录的 MSVC ABI 标签。
-llvmVersion="${MSVC_LLVM_VERSION:-22}"
+llvmVersion="${MSVC_LLVM_VERSION:-23}"
 projectLinkage="static"
 toolchainFile="cmake/toolchain/cross-msvc.cmake"
 sourcesBuild="OFF"
@@ -300,7 +300,7 @@ requireCommand readlink
 requireCommand "clang-cl-${llvmVersion}"
 
 # 版本化 clang-cl 可能是系统链接；解析真实目录后只使用同目录工具。
-# 编译器保留版本化入口，避免默认 LLVM 22 使现有 CI cache 发生无意义切换。
+# 编译入口保留 clang-cl 名称，因为 Clang 驱动会据此选择 MSVC 参数模式。
 clangClEntry="$(command -v "clang-cl-${llvmVersion}")"
 llvmBinDir="$(dirname "$(readlink -f "${clangClEntry}")")"
 clangCl="${clangClEntry}"
@@ -316,7 +316,7 @@ llvmObjcopy="$(resolveLlvmTool llvm-objcopy)"
 
 # Make、Meson 与 ICE 外部项目通过环境变量复用 CMake 选择的同一套工具。
 # MMM_* 服务主项目 LuaJIT 包装器，ICE_* 服务引擎内的外部依赖包装器。
-# 路径写入当前构建进程环境，源码依赖模式不会回退到 wrapper 的 LLVM 22 默认值。
+# 路径写入当前构建进程环境，源码依赖模式不会回退到 wrapper 的 LLVM 23 默认值。
 export MMM_CLANG_CL="${clangCl}"
 export MMM_CLANG_C="${clangC}"
 export MMM_LLD_LINK="${lldLink}"
@@ -351,8 +351,8 @@ fi
 
 export WINDOWS_CROSS_ROOT="${WINDOWS_CROSS_ROOT:-/mnt/cross/windows}"
 # Vulkan、MSVC 与 WinSDK 默认路径均从同一资源根派生。
-export VULKAN_SDK="${VULKAN_SDK:-${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0}"
-export MSVC_BASE="${MSVC_BASE:-${WINDOWS_CROSS_ROOT}/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231}"
+export VULKAN_SDK="${VULKAN_SDK:-${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.363.1}"
+export MSVC_BASE="${MSVC_BASE:-${WINDOWS_CROSS_ROOT}/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.52.37025}"
 export WINSDK_BASE="${WINSDK_BASE:-${WINDOWS_CROSS_ROOT}/Program Files (x86)/Windows Kits/10}"
 export WINSDK_VER="${WINSDK_VER:-10.0.26100.0}"
 
@@ -465,7 +465,7 @@ fi
 
 # 维护约束：目标平台固定 Windows x86_64，不得继承 Linux 宿主 ABI。
 # 维护约束：clang-cl、clang、lld-link 与 LLVM binutils 必须来自同一目录。
-# 维护约束：LLVM 主版本默认保持 CI 的 22，调用方可显式选择其他已安装版本。
+# 维护约束：LLVM 主版本默认与 CI 的 23 一致，调用方可显式选择其他已安装版本。
 # 维护约束：LLVM 主版本只接受无前导零的正整数。
 # 维护约束：版本化 clang-cl 是定位工具集目录的唯一 PATH 入口。
 # 维护约束：工具集目录缺少任一必需工具时不得回退到其他 PATH 目录。

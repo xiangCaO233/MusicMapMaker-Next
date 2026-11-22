@@ -1,6 +1,6 @@
 # Linux 到 Windows MinGW clang 交叉工具链。
 #
-# 编译和链接优先使用完整 llvm-mingw UCRT 工具链，也兼容 Linux 宿主上的 clang-22/clang++-22 + MinGW
+# 编译和链接优先使用完整 llvm-mingw UCRT 工具链，也兼容 Linux 宿主上的 clang-23/clang++-23 + MinGW
 # binutils。CLANG64 使用 UCRT C runtime 与 libc++，预编译库必须写入 mingw/clang64， 避免和 GCC
 # UCRT64 的 mingw/ucrt64 布局混用。 搜索顺序优先完整 llvm-mingw 根目录，再退回宿主 PATH 中的版本化工具。
 # sysroot 可来自 llvm-mingw、MSYS2 CLANG64 挂载或传统 MinGW 安装。
@@ -110,10 +110,10 @@ set(CMAKE_SYSROOT "${MINGW_SYSROOT}")
 # 工具程序与 sysroot 可以来自不同安装根。 sysroot 负责目标头与库，编译器程序本身仍从 Linux 主机执行。 C/C++ 编译器优先选择带
 # target prefix 的 llvm-mingw 包装器。
 find_mingw_clang_tool(MMM_MINGW_CLANG_C ${MINGW_TOOLCHAIN_PREFIX}-clang
-                      clang-22 clang)
+                      clang-23 clang)
 # C++ 候选优先使用同 prefix 包装器，避免与 C 编译器来自不同发行包。
 find_mingw_clang_tool(MMM_MINGW_CLANG_CXX ${MINGW_TOOLCHAIN_PREFIX}-clang++
-                      clang++-22 clang++)
+                      clang++-23 clang++)
 # 资源、归档与二进制工具允许使用 MinGW 或等价 LLVM 名称。 windres 负责把图标、manifest 等资源编译为 COFF 对象。
 find_mingw_clang_tool(MMM_MINGW_WINDRES ${MINGW_TOOLCHAIN_PREFIX}-windres
                       llvm-windres)
@@ -126,16 +126,24 @@ find_mingw_clang_tool(MMM_MINGW_STRIP ${MINGW_TOOLCHAIN_PREFIX}-strip
                       llvm-strip)
 find_mingw_clang_tool(MMM_MINGW_OBJCOPY ${MINGW_TOOLCHAIN_PREFIX}-objcopy
                       llvm-objcopy)
-# nm 允许多个 LLVM 主版本名称，以兼容 CI 镜像的安装命名方式。
-find_mingw_clang_tool(MMM_MINGW_NM ${MINGW_TOOLCHAIN_PREFIX}-nm llvm-nm-22
-                      llvm-nm-21 llvm-nm-20 llvm-nm)
+# nm 允许多个 LLVM 主版本名称，以兼容 CI 镜像的安装命名方式。 llvm-mingw 的目标前缀 wrapper
+# 优先于宿主工具，避免归档检查走到另一套安装。 只有缺少该 wrapper 时，才按主版本选择能识别 COFF 符号的宿主工具。 此处只选择符号读取工具，C
+# 和 C++ 仍使用前面解析的目标编译器。
+find_mingw_clang_tool(
+  MMM_MINGW_NM
+  ${MINGW_TOOLCHAIN_PREFIX}-nm
+  llvm-nm-23
+  llvm-nm-22
+  llvm-nm-21
+  llvm-nm-20
+  llvm-nm)
 if(NOT MMM_MINGW_CLANG_C)
   # 编译器缺失时给出可操作的根目录覆盖入口。
-  message(FATAL_ERROR "找不到 clang，请安装 LLVM clang 22 或提供 LLVM_MINGW_ROOT。")
+  message(FATAL_ERROR "找不到 clang，请安装 LLVM clang 23 或提供 LLVM_MINGW_ROOT。")
 endif()
 if(NOT MMM_MINGW_CLANG_CXX)
   # C++ 驱动单独校验，避免误用 clang C 驱动链接 libc++ 目标。
-  message(FATAL_ERROR "找不到 clang++，请安装 LLVM clang++ 22 或提供 LLVM_MINGW_ROOT。")
+  message(FATAL_ERROR "找不到 clang++，请安装 LLVM clang++ 23 或提供 LLVM_MINGW_ROOT。")
 endif()
 if(NOT MMM_MINGW_WINDRES)
   # Windows 图标和版本资源要求 PE 资源编译器。
@@ -233,7 +241,7 @@ set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE BOTH)
 # package 配置遵循相同策略，使预编译 Config.cmake 不被错误重映射。
 set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE BOTH)
 
-# 本工具链使用 Linux clang-22 + MSYS2 CLANG64 sysroot。当前 CI 先禁用项目级
+# 本工具链使用 Linux clang-23 + MSYS2 CLANG64 sysroot。当前 CI 先禁用项目级
 # ThinLTO，避免与第三方预编译库和跨平台调试信息组合时产生额外变量。
 set(MMM_DISABLE_CLANG_LTO
     ON

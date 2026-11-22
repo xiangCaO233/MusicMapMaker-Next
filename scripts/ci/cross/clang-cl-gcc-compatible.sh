@@ -5,8 +5,8 @@
 set -euo pipefail
 
 # 三个环境变量允许交叉构建脚本固定 LLVM 版本与目标 triple。
-clangCl="${MMM_CLANG_CL:-clang-cl-22}"
-clangC="${MMM_CLANG_C:-clang-22}"
+clangCl="${MMM_CLANG_CL:-clang-cl-23}"
+clangC="${MMM_CLANG_C:-clang-23}"
 targetTriple="${MMM_MSVC_TARGET_TRIPLE:-x86_64-pc-windows-msvc}"
 
 # 参数扫描不执行外部进程，完成后仅选择一个最终 exec 路径。

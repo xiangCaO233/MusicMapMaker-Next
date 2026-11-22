@@ -4,7 +4,7 @@
 set -euo pipefail
 
 # 环境覆盖允许上层固定与 clang-cl 配套的 LLVM 主版本。
-llvmLib="${MMM_LLVM_LIB:-llvm-lib-22}"
+llvmLib="${MMM_LLVM_LIB:-llvm-lib-23}"
 
 # 至少需要输出库参数，空调用无法安全推导目标。
 if (( $# < 1 )); then
