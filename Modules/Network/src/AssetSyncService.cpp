@@ -1186,7 +1186,7 @@ bool importLocalPackage(const AssetSyncOptions& options, bool assetsExist,
         }
     }
     if ( ec ) errorMessage = ec.message();
-    // 在最终操作后确认取消位，防止已经切换来源时仍发出清单或增量下载请求。
+    // 在最终操作后确认取消位，防止切换来源时把旧导入报告为就绪。
     return !ec && !isCancellationRequested(options);
 }
 
@@ -1410,6 +1410,10 @@ std::string AssetSyncService::resolveDownloadUrl(const std::string& baseUrl,
 /// 使用完整包完成首次安装，任何清单结构错误都直接失败；本地目录存在时，
 /// 网络或清单失败保留现有资源并返回 kReady。版本标记匹配可走快速路径，
 /// forcePreciseVerification 则强制逐文件检查。增量更新错误同样降级到已有资源。
+/// @par 离线导入决策
+/// - 本轮指定本地 ZIP 时，在安全解压和发布后直接返回 kReady。
+/// - 本地包无效或取消时直接报告结果，由启动界面决定重试来源。
+/// - 仅普通联网流程可确认版本；本地导入保留未验证状态。
 /// @par 首次安装决策
 /// - 资源根不存在且清单合法时使用清单完整包。
 /// - 资源根不存在且清单下载失败时使用配置完整包回退。
@@ -1429,15 +1433,12 @@ std::string AssetSyncService::resolveDownloadUrl(const std::string& baseUrl,
 /// @return 就绪、下载、更新、取消或首次安装错误结果。
 AssetSyncResult AssetSyncService::sync(const AssetSyncOptions& options)
 {
-    // libcurl 全局初始化是幂等入口，确保调用线程尚未使用下载 API 时也可工作。
-    curl_global_init(CURL_GLOBAL_DEFAULT);
-
     // 同步开始前取消不检查文件系统或触发进度回调。
     if ( isCancellationRequested(options) ) return cancelledResult();
 
     std::error_code existsError;
     // exists 查询失败等同于路径不可可靠使用；后续目录检查会形成明确错误。
-    bool assetsExist =
+    const bool assetsExist =
         std::filesystem::exists(options.assetsRootPath, existsError);
     if ( assetsExist ) {
         // 已存在路径必须是目录，普通文件不能被完整包解压覆盖。
@@ -1453,9 +1454,7 @@ AssetSyncResult AssetSyncService::sync(const AssetSyncOptions& options)
     }
 
     // 非空路径仅表示本轮选定来源，不保留到后续启动的远程配置中。
-    // 导入和普通更新使用同一份目录和校验逻辑，包旧格式或损坏时仍能重试。
-    const bool importing = !options.localPackagePath.empty();
-    if ( importing ) {
+    if ( !options.localPackagePath.empty() ) {
         // 本地包优先于清单请求和完整下载，即使目标已有同版本资源也先导入。
         AssetSyncResult result;
         if ( !importLocalPackage(options, assetsExist, result.errorMessage) ) {
@@ -1463,10 +1462,17 @@ AssetSyncResult AssetSyncService::sync(const AssetSyncOptions& options)
             result.status = AssetSyncStatus::kError;
             return result;
         }
-        // 导入成功后的网络分支只核对清单和逐文件补齐。
-        // 若清单不可达，保留刚完成的文件以便离线启动。启动层再加载默认皮肤。
-        assetsExist = true;
+        // 只跳过远端校验；归档的路径和解压完整性已检查，启动层仍要加载默认皮肤。
+        // 导入已移除版本标记，未选择本地包的下一轮可以完整核对这些文件。
+        XINFO(
+            "AssetSync: local package imported; remote verification deferred");
+        emitProgress(options,
+                     { AssetSyncProgressStage::kFinished, "Assets ready" });
+        return result;
     }
+
+    // libcurl 初始化只用于联网启动，本地包完成路径无需进入下载准备。
+    curl_global_init(CURL_GLOBAL_DEFAULT);
 
     std::string manifestText;
     std::string manifestDownloadError;
@@ -1538,12 +1544,11 @@ AssetSyncResult AssetSyncService::sync(const AssetSyncOptions& options)
         return keepExistingAssetsAfterUpdateFailure(manifestParseError);
     }
 
-    // 本地导入主动绕过快路径；离线后也没有可充当已验证依据的版本号。
-    // 清单成功时只下载内容不同的条目，导入包本身的 ZIP 摘要不参与判断。
+    // 本地导入不留下已验证版本，首次联网同步会进入逐文件检查。
     const auto localVersion = readLocalVersionFile(options.assetsRootPath);
     // 默认快速路径信任完整安装后写入的版本标记，显式精确模式绕过该优化。
-    if ( !importing && !options.forcePreciseVerification &&
-         !manifest->version.empty() && localVersion == manifest->version ) {
+    if ( !options.forcePreciseVerification && !manifest->version.empty() &&
+         localVersion == manifest->version ) {
         XINFO(
             "AssetSync: local assets version {} is current; precise file "
             "verification skipped",

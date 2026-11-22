@@ -821,18 +821,20 @@ int testSyncReportsPreciseCheckProgress()
     return fail;
 }
 
-/// @brief 验证冷启动本地 ZIP 先发布文件，再按清单增量补齐。
-/// @details 归档故意写入与清单匹配的版本号；验收必须忽略该标记且只取缺失文件。
+/// @brief 验证冷启动本地 ZIP 后直接就绪，下一次普通启动才按清单补齐。
+/// @details
+/// 归档故意写入匹配线上清单的版本号。只有后续联网同步通过后才能保存它。
 /// @par 测试输入
 /// 本地源包包含一份已匹配资源和一份伪造的已验证版本标记。
 /// 完整包下载地址和命中项下载地址均无可用文件。
 /// 只有缺失项提供可读取的增量源；无需外部服务或 DNS。
 /// @par 发布约束
-/// 校验启动前应已看见已安装的本地文件。
+/// 清单与缺失项始终可访问，因此不发出检查进度且保持缺失项可证明主动跳过。
+/// 普通启动复用已导入文件，只下载缺失项。
 /// 线上版本号只能来自实际完成校验的清单。
 /// 非 assets 顶层条目不进入应用配置目录，源 ZIP 保持可用。
 /// @return 阶段、最终文件及下载计数不符合预期的断言数。
-int testImportLocalPackageThenVerify()
+int testImportLocalPackageDefersVerification()
 {
     int        fail = 0;
     const auto root = createTempRoot();
@@ -873,33 +875,45 @@ int testImportLocalPackageThenVerify()
     options.assetsRootPath   = assets;
     options.localPackagePath = zip;
     options.manifestUrl      = fileUrlFor(manifest);
+    // 即使从强制校验的重试界面选中 ZIP，本轮也应保持离线导入语义。
+    options.forcePreciseVerification = true;
     // 整包和已匹配条目都使用不存在的 URL；测试成功依赖真实的增量路径选择。
     options.packageUrl = fileUrlFor(root / "unavailable-full.zip");
     std::vector<AssetSyncProgressStage> stages;
-    // 观察开始请求清单时的落盘字节，防止把进度阶段名称误当作已经完成解压。
-    bool hadImportedFileWhenCheckingManifest = false;
     options.progressCallback = [&](const AssetSyncProgress& progress) {
         // 回调由当前测试线程执行，文件读取与服务的阶段切换有确定先后。
         stages.push_back(progress.stage);
-        if ( progress.stage == AssetSyncProgressStage::kCheckingManifest )
-            hadImportedFileWhenCheckingManifest =
-                readTextFile(assets / "keep.txt") == "offline";
     };
-    // 直接调用和启动页共用的服务入口，检测完整优先级和版本快路径。
-    const auto result = AssetSyncService::sync(options);
-    // 阶段检查同时要求目标中已经写入内容；只发了阶段通知仍算失败。
-    // 前一轮测试的目录随机隔离，目标不可能靠旧的资源碰巧通过。
+    // 结果中的远端版本为空，调用方可据此判断尚未与线上版本比较。
+    // 完成阶段仍需发布，启动页依赖它把导入进度收尾。
+    const auto imported = AssetSyncService::sync(options);
     fail += expectTrue(
-        !stages.empty() &&
-            stages.front() == AssetSyncProgressStage::kImportingPackage &&
-            hadImportedFileWhenCheckingManifest,
-        "local package is published before manifest request");
+        imported.status == AssetSyncStatus::kReady &&
+            imported.checkedFileCount == 0 && imported.updatedFileCount == 0 &&
+            imported.remoteVersion.empty() && imported.errorMessage.empty() &&
+            stages == std::vector{ AssetSyncProgressStage::kImportingPackage,
+                                   AssetSyncProgressStage::kFinished },
+        "local import is ready without checking the manifest or updating "
+        "files");
+    // 在空目录上建立的安装须实际写入 ZIP 内容，也不能把归档的标记当成线上证明。
+    fail +=
+        expectTrue(readTextFile(assets / "keep.txt") == "offline" &&
+                       !std::filesystem::exists(assets / "missing.txt") &&
+                       !std::filesystem::exists(assets / ".mmm-assets-version"),
+                   "local import publishes only available files and leaves "
+                   "version unverified");
+
+    // 下一次未选本地包的启动恢复默认模式，以清单补齐缺失文件。
+    options.localPackagePath.clear();
+    options.forcePreciseVerification = false;
+    // 复用同一个资源根，防止重建空目录掩盖导入后的版本状态。
+    const auto result = AssetSyncService::sync(options);
     // 用检查数量区分读取 ZIP 与完整清单校验。
     // 用更新数量区分增量更新与重新下载相同内容。
     fail += expectTrue(
         result.status == AssetSyncStatus::kUpdated &&
             result.checkedFileCount == 2 && result.updatedFileCount == 1,
-        "local import bypasses version shortcut and downloads one file");
+        "normal startup after local import verifies and downloads one file");
     // 文件落盘与版本标记必须同时生效，否则后续启动会漏检更新。
     fail += expectTrue(
         readTextFile(assets / "missing.txt") == "new" &&
@@ -938,7 +952,7 @@ int testImportLocalPackageOffline()
     AssetSyncOptions options;
     options.assetsRootPath   = assets;
     options.localPackagePath = zip;
-    // file URL 缺失模拟不可达清单，没有回环服务或外部网络时也能测试离线分支。
+    // 成功导入不需要可用清单或整包下载地址。
     options.manifestUrl = fileUrlFor(root / "no-manifest.json");
     options.packageUrl  = fileUrlFor(root / "no-full.zip");
 
@@ -961,11 +975,10 @@ int testImportLocalPackageOffline()
     options.progressCallback     = {};
     options.cancellationCallback = {};
     result                       = AssetSyncService::sync(options);
-    // Ready
-    // 表示本地资源可继续使用；仍需保存网络诊断以区分已完成在线校验的结果。
-    fail += expectTrue(result.status == AssetSyncStatus::kReady &&
-                           !result.errorMessage.empty(),
-                       "unreachable manifest allows offline startup");
+    // Ready 表示本地资源可继续使用，离线导入阶段不会产生网络错误。
+    fail += expectTrue(
+        result.status == AssetSyncStatus::kReady && result.errorMessage.empty(),
+        "local import succeeds without accessing an unavailable manifest");
     // 自定义文件是源包之外的保留资源；离线情况下必须移除上一次的可信标记。
     fail += expectTrue(
         readTextFile(assets / "file.txt") == "new offline" &&
@@ -1035,7 +1048,7 @@ int main()
     fail += testSyncSkipsPreciseCheckWhenVersionMatches();
     fail += testSyncForcePreciseCheckRepairsMissingFile();
     fail += testSyncReportsPreciseCheckProgress();
-    fail += testImportLocalPackageThenVerify();
+    fail += testImportLocalPackageDefersVerification();
     fail += testImportLocalPackageOffline();
     // 取消用例最后执行，证明默认 options 无需 fixture 即可安全退出。
     fail += testSyncHonorsCancellationRequest();
