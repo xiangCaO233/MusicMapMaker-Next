@@ -14,6 +14,7 @@
 #include "ui/IEditorApplicationService.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
+#include "ui/image/ImageViewer.h"
 #include "ui/imgui/CanvasTabManager.h"
 #include "ui/imgui/FloatingManagerUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
@@ -469,24 +470,26 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
     const bool analysisWindow = MobileDockLayout::isAudioAnalysisWindow(title);
     // 控制器不是谱面画布，独立关闭不能受最后一个主画布的数量保护限制。
     const bool audioController = id.starts_with("TrackController_");
-    const bool workbench       = id == "MobileWorkbench";
-    const bool docked = mainCanvas || id == "Welcome" || settingsWindow ||
-                        analysisWindow || audioController ||
-                        id == "TimelineWindow" || id == "Timeline" ||
-                        id == "PreviewWindow" || workbench;
+    // 项目图片属于中央文档标签，通过同一长按菜单关闭。
+    const bool imageTab  = id == FILE_IMAGE_TAB_ID;
+    const bool workbench = id == "MobileWorkbench";
+    const bool docked    = mainCanvas || id == "Welcome" || settingsWindow ||
+                           analysisWindow || audioController || imageTab ||
+                           id == "TimelineWindow" || id == "Timeline" ||
+                           id == "PreviewWindow" || workbench;
     // Begin 同样计算标题区域高度，必须与宿主标签计算使用相同内边距。
     // Begin 后立即恢复，不把触摸标签的高度传播给内容中的输入和按钮。
     if ( docked )
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
                             MobileDockLayout::tabPadding(m_scale));
     if ( mainCanvas || id == "Welcome" || settingsWindow || analysisWindow ||
-         audioController ) {
+         audioController || imageTab ) {
         // 分析页首次出现聚焦一次；后续允许用户自由切换，不逐帧抢回标签。
         const auto* previous = ImGui::FindWindowByName(title.c_str());
         if ( analysisWindow && (!previous || !previous->WasActive) )
             ImGui::SetNextWindowFocus();
         // 使用整个中心区域，不把桌面最小宽度约束带入移动端标签。
-        if ( settingsWindow || audioController )
+        if ( settingsWindow || audioController || imageTab )
             ImGui::SetNextWindowSizeConstraints({ 1, 1 }, m_size);
         // 原生标题和标签承接触摸拖动；内容区仍由画布或滚动器独占。
         flags &= ~(ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking);
