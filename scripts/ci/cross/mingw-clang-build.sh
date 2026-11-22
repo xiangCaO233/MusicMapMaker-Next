@@ -39,7 +39,7 @@ Environment overrides:
   MINGW_CLANG_PREBUILT_COMPILER_TAG Default prebuilt compiler tag
   LLVM_MINGW_ROOT                   Complete llvm-mingw UCRT toolchain root
   WINDOWS_CROSS_ROOT                Default: /mnt/cross/windows
-  VULKAN_SDK                        Default: ${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0
+  VULKAN_SDK                        Default: ${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.363.1
   CMAKE_GENERATOR                   Default: Ninja
 EOF
 }
@@ -128,7 +128,7 @@ detectLlvmMingwRoot() {
 
     local candidate
     # 兼容固定版本目录、版本通配目录与系统级安装。
-    for candidate in "${HOME:-}/llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64" "${HOME:-}"/llvm-mingw-*-ucrt-*-x86_64 /opt/llvm-mingw; do
+    for candidate in "${HOME:-}/llvm-mingw-20261117-ucrt-ubuntu-22.04-x86_64" "${HOME:-}"/llvm-mingw-*-ucrt-*-x86_64 /opt/llvm-mingw; do
         if [[ -d "${candidate}/bin" ]]; then
             # bin 存在是可作为工具链根的最低条件。
             printf "%s\n" "${candidate}"
@@ -249,9 +249,9 @@ verifyMingwClangCxxRuntime() {
     if command -v "${toolPrefix}-clang++" >/dev/null 2>&1; then
         # 目标前缀编译器最能表达完整工具链配置。
         cxxCompiler="${toolPrefix}-clang++"
-    elif command -v clang++-22 >/dev/null 2>&1; then
+    elif command -v clang++-23 >/dev/null 2>&1; then
         # 版本化宿主 Clang 是标准 CI 回退。
-        cxxCompiler="clang++-22"
+        cxxCompiler="clang++-23"
     elif command -v clang++ >/dev/null 2>&1; then
         # 无版本命令仅在前两项缺失时使用。
         cxxCompiler="clang++"
@@ -512,17 +512,17 @@ export MINGW_SYSROOT="${mingwSysroot}"
 export MINGW_TOOLCHAIN_PREFIX="${toolPrefix}"
 export MINGW_CLANG_PREBUILT_COMPILER_TAG="${compilerTag}"
 export WINDOWS_CROSS_ROOT="${WINDOWS_CROSS_ROOT:-/mnt/cross/windows}"
-export VULKAN_SDK="${VULKAN_SDK:-${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0}"
+export VULKAN_SDK="${VULKAN_SDK:-${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.363.1}"
 
 requireCommand cmake
 if [[ -n "${llvmMingwRoot}" ]]; then
     # 完整分发接受目标前缀命令或版本化宿主命令。
-    requireAnyCommand "${toolPrefix}-clang" clang-22 clang
-    requireAnyCommand "${toolPrefix}-clang++" clang++-22 clang++
+    requireAnyCommand "${toolPrefix}-clang" clang-23 clang
+    requireAnyCommand "${toolPrefix}-clang++" clang++-23 clang++
 else
-    # 非完整分发依赖 CI 固定的 Clang 22 可执行文件。
-    requireCommand clang-22
-    requireCommand clang++-22
+    # 非完整分发依赖 CI 固定的 Clang 23 可执行文件。
+    requireCommand clang-23
+    requireCommand clang++-23
 fi
 requireAnyCommand "${toolPrefix}-windres" llvm-windres
 # 二进制工具允许目标前缀包装器或 LLVM 通用命令。

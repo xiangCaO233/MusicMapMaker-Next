@@ -21,10 +21,10 @@ Options:
 
 Environment overrides:
   WINDOWS_CROSS_ROOT    Default: /mnt/cross/windows
-  MSVC_BASE             Default: ${WINDOWS_CROSS_ROOT}/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231
+  MSVC_BASE             Default: ${WINDOWS_CROSS_ROOT}/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.52.37025
   WINSDK_BASE           Default: ${WINDOWS_CROSS_ROOT}/Program Files (x86)/Windows Kits/10
   WINSDK_VER            Default: 10.0.26100.0
-  VULKAN_SDK            Default: ${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0
+  VULKAN_SDK            Default: ${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.363.1
 EOF
 }
 
@@ -76,12 +76,12 @@ fi
 # 路径默认值与交叉工具链文件保持同步，环境变量优先。
 WINDOWS_CROSS_ROOT="${WINDOWS_CROSS_ROOT:-/mnt/cross/windows}"
 # MSVC toolset 版本目录同时包含编译头、运行库和 ATL/MFC。
-MSVC_BASE="${MSVC_BASE:-${WINDOWS_CROSS_ROOT}/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231}"
+MSVC_BASE="${MSVC_BASE:-${WINDOWS_CROSS_ROOT}/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.52.37025}"
 # SDK 根与具体版本分离，便于列出挂载中可用的其他版本。
 WINSDK_BASE="${WINSDK_BASE:-${WINDOWS_CROSS_ROOT}/Program Files (x86)/Windows Kits/10}"
 WINSDK_VER="${WINSDK_VER:-10.0.26100.0}"
 # Vulkan SDK 单独挂载并同时提供 Include 与 Lib。
-VULKAN_SDK="${VULKAN_SDK:-${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0}"
+VULKAN_SDK="${VULKAN_SDK:-${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.363.1}"
 
 # 用统一视觉分隔打印每个诊断区域标题。
 printHeader() {

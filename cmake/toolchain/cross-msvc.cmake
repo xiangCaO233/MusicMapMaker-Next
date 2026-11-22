@@ -1,8 +1,8 @@
 # cross-msvc.cmake
 #
 # 本工具链在 Linux 主机上组合 clang-cl、lld-link、挂载的 MSVC 头库与 Windows SDK，产出使用 MSVC ABI 的
-# x86_64 Windows 二进制。 所有路径变量均保留 cache 覆盖点，便于 CI 挂载布局与本地布局共用。 工具版本固定为 LLVM 22，并与
-# prebuilts 的 msvc/2026 标签保持一致。
+# x86_64 Windows 二进制。所有路径变量均保留 cache 覆盖点，供 CI 挂载与本地布局共用。 默认使用 LLVM 23。切换 LLVM
+# 时，msvc/2026 预编译目录仍按 MSVC ABI 选择。
 
 # CMAKE_SYSTEM_NAME 必须在 project() 前确定，驱动 CMake 进入交叉编译模式。
 set(CMAKE_SYSTEM_NAME Windows)
@@ -28,9 +28,10 @@ if(DEFINED ENV{MSVC_BASE} AND NOT "$ENV{MSVC_BASE}" STREQUAL "")
 else()
   # 默认版本必须与 CI 获取脚本和 msvc/2026 预编译标签同步更新。
   set(MSVC_BASE_DEFAULT
-      "${WINDOWS_CROSS_ROOT}/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231"
+      "${WINDOWS_CROSS_ROOT}/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.52.37025"
   )
 endif()
+# 已配置的构建树保留 cache 中选定的工具集，普通重配置不会切换 CRT 头库。
 set(MSVC_BASE
     "${MSVC_BASE_DEFAULT}"
     CACHE PATH "MSVC toolset root directory.")
@@ -43,6 +44,7 @@ else()
   set(WINSDK_BASE_DEFAULT
       "${WINDOWS_CROSS_ROOT}/Program Files (x86)/Windows Kits/10")
 endif()
+# 保留 Windows Kits 安装根，头文件和导入库按该根下的同一版本解析。
 set(WINSDK_BASE
     "${WINSDK_BASE_DEFAULT}"
     CACHE PATH "Windows SDK root directory.")
@@ -54,57 +56,80 @@ else()
   # 版本号必须同时存在于 Include 与 Lib 子目录中。
   set(WINSDK_VER_DEFAULT "10.0.26100.0")
 endif()
+# SDK 根与版本独立保存，同一安装根下并存多个版本时仍保持选择明确。
 set(WINSDK_VER
     "${WINSDK_VER_DEFAULT}"
     CACHE STRING "Windows SDK version directory.")
 
-# 指定 LLVM 22 工具。MSVC 预编译库以 2026 标签发布，必须固定 clang-cl/lld-link/llvm-lib 的主版本，避免 CI
-# 机器上旧版 LLVM 被误选。
-find_program(MMM_CLANG_CL NAMES clang-cl-22)
+# 直接使用工具链文件时，版本化入口将默认工具限制在 LLVM 23。 交叉构建脚本可通过 cache 传入另一套已完整解析的 LLVM；msvc/2026
+# 仍表示目标 ABI。 资源编译器和归档器随编译器选择，以统一 Windows PE/COFF 工具版本。
+find_program(MMM_CLANG_CL NAMES clang-cl-23)
 # lld-link 负责最终 PE 链接。 链接器与归档器必须使用 MSVC 风格驱动，不能回退到 GNU ld/ar。
-find_program(MMM_LLD_LINK NAMES lld-link-22)
-find_program(MMM_LLVM_LIB NAMES llvm-lib-22)
+find_program(MMM_LLD_LINK NAMES lld-link-23)
+find_program(MMM_LLVM_LIB NAMES llvm-lib-23)
 # llvm-rc 编译 Windows 资源脚本。 资源和 manifest 工具负责生成 Windows PE 附属元数据。
-find_program(MMM_LLVM_RC NAMES llvm-rc-22)
-find_program(MMM_LLVM_MT NAMES llvm-mt-22)
+find_program(MMM_LLVM_RC NAMES llvm-rc-23)
+find_program(MMM_LLVM_MT NAMES llvm-mt-23)
 # ranlib 为 COFF 归档补齐索引。 二进制维护工具用于静态归档索引、符号检查、strip 与调试信息处理。
-find_program(MMM_LLVM_RANLIB NAMES llvm-ranlib-22)
-find_program(MMM_LLVM_STRIP NAMES llvm-strip-22)
+find_program(MMM_LLVM_RANLIB NAMES llvm-ranlib-23)
+find_program(MMM_LLVM_STRIP NAMES llvm-strip-23)
 find_program(
   MMM_LLVM_NM
-  NAMES llvm-nm-22 llvm-nm
-  PATHS /opt/llvm-22/bin)
+  NAMES llvm-nm-23 llvm-nm
+  PATHS /opt/llvm-23/bin)
 find_program(
   MMM_LLVM_OBJCOPY
-  NAMES llvm-objcopy-22 llvm-objcopy
-  PATHS /opt/llvm-22/bin)
+  NAMES llvm-objcopy-23 llvm-objcopy
+  PATHS /opt/llvm-23/bin)
 if(NOT MMM_CLANG_CL)
   # 禁止选择宿主默认 clang，防止编译器主版本与预编译库标签漂移。
-  message(FATAL_ERROR "找不到 clang-cl-22，请安装 LLVM 22 clang-cl。")
+  message(FATAL_ERROR "找不到 clang-cl-23，请安装 LLVM 23 clang-cl。")
 endif()
 if(NOT MMM_LLD_LINK)
   # clang-cl 交叉模式无法调用 Linux 宿主的系统链接器生成 PE。
-  message(FATAL_ERROR "找不到 lld-link-22，请安装 LLVM 22 lld。")
+  message(FATAL_ERROR "找不到 lld-link-23，请安装 LLVM 23 lld。")
 endif()
 if(NOT MMM_LLVM_LIB)
   # MSVC ABI 静态库需要 COFF archive 工具，GNU ar 不是受支持回退。
-  message(FATAL_ERROR "找不到 llvm-lib-22，请安装 LLVM 22 llvm-lib。")
+  message(FATAL_ERROR "找不到 llvm-lib-23，请安装 LLVM 23 llvm-lib。")
 endif()
 if(NOT MMM_LLVM_RC)
   # 缺少资源编译器会使图标与版本资源无法进入最终可执行文件。
-  message(FATAL_ERROR "找不到 llvm-rc-22，请安装 LLVM 22 resource compiler。")
+  message(FATAL_ERROR "找不到 llvm-rc-23，请安装 LLVM 23 resource compiler。")
 endif()
 if(NOT MMM_LLVM_MT)
   # manifest 工具缺失时无法稳定嵌入运行时权限与兼容性声明。
-  message(FATAL_ERROR "找不到 llvm-mt-22，请安装 LLVM 22 manifest tool。")
+  message(FATAL_ERROR "找不到 llvm-mt-23，请安装 LLVM 23 manifest tool。")
 endif()
 if(NOT MMM_LLVM_RANLIB
    OR NOT MMM_LLVM_STRIP
    OR NOT MMM_LLVM_NM
    OR NOT MMM_LLVM_OBJCOPY)
   # 这些工具共同构成预编译库校验和发布流程，必须成套存在。
-  message(FATAL_ERROR "找不到完整的 LLVM 22 归档与二进制检查工具。")
+  message(FATAL_ERROR "找不到完整的 LLVM 23 归档与二进制检查工具。")
 endif()
+
+# 编译器 ABI 探针会重新加载工具链。将显式指定的 LLVM 和 SDK 路径传入子配置， 使探针与主构建使用同一套工具和目标头库。显式路径可在 PATH
+# 缺少某个版本别名时使用， 因此探针不能依赖默认的版本化命令重新解析编译器。
+list(
+  APPEND
+  CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
+  WINDOWS_CROSS_ROOT
+  MSVC_BASE
+  WINSDK_BASE
+  WINSDK_VER
+  MMM_CLANG_CL
+  MMM_LLD_LINK
+  MMM_LLVM_LIB
+  MMM_LLVM_RC
+  MMM_LLVM_MT
+  MMM_LLVM_RANLIB
+  MMM_LLVM_STRIP
+  MMM_LLVM_NM
+  MMM_LLVM_OBJCOPY)
+# CMake 在一次配置内可能重复包含此文件，去重后每个变量只需传递一次。
+list(REMOVE_DUPLICATES CMAKE_TRY_COMPILE_PLATFORM_VARIABLES)
+
 # 强制写入缓存可覆盖 CMake 首次探测出的宿主编译器。
 set(CMAKE_C_COMPILER
     "${MMM_CLANG_CL}"
