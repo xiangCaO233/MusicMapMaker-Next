@@ -20,6 +20,7 @@ import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ConcurrentHashMap;
@@ -38,6 +39,10 @@ import org.json.JSONObject;
 final class DocumentStorage {
     /** 独立请求码不会抢占 SDL 已有的 Activity 返回处理。 */
     static final int REQUEST = 7341;
+    /** ZIP 只读导入请求，供旧版启动资源流程复用。 */
+    private static final int ASSET_PACKAGE = 3;
+    /** MSK 只读导入请求，保持和 C++ 文档选择器请求号一致。 */
+    private static final int SKIN_PACKAGE = 4;
     /** 项目分片目录名与 ProjectStorage 保持一致，不能匹配根目录下的 .mmm 谱面文件。 */
     private static final String PROJECT_METADATA_DIRECTORY = ".mmm";
     /** Activity 只用于系统选择器与 ContentResolver，不跨应用申请存储路径。 */
@@ -164,13 +169,14 @@ final class DocumentStorage {
                 : requestKind == 1 ? Intent.ACTION_CREATE_DOCUMENT : Intent.ACTION_OPEN_DOCUMENT);
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         // 资源包只读一次，授权和内容都不写入工程工作副本索引。
-        if (requestKind != 3)
+        if (requestKind != ASSET_PACKAGE && requestKind != SKIN_PACKAGE)
             intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         if (requestKind != 2) {
             // MMM 等自有扩展名未必有系统 MIME 类型，不能被错误过滤为不可选。
             intent.addCategory(Intent.CATEGORY_OPENABLE);
             intent.setType("*/*");
-            if (requestKind == 3)
+            // MSK 没有统一的 MIME 注册，由返回的文件名和包内容共同校验。
+            if (requestKind == ASSET_PACKAGE)
                 intent.putExtra(Intent.EXTRA_MIME_TYPES,
                         new String[] {"application/zip", "application/x-zip-compressed", "application/octet-stream"});
             if (requestKind == 1) intent.putExtra(Intent.EXTRA_TITLE, name);
@@ -194,10 +200,10 @@ final class DocumentStorage {
         Uri uri = data.getData();
         int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
         int selectedKind = kind;
-        if (selectedKind == 3) {
-            // 只使用这次选择授予的读权限。保留源 ZIP，由原生端负责清理缓存副本。
+        if (selectedKind == ASSET_PACKAGE || selectedKind == SKIN_PACKAGE) {
+            // 每次导入都读取源归档最新内容，由原生端在使用后清理独占缓存。
             worker.execute(() -> {
-                try { complete("OK\n" + copyStartupPackage(uri)); }
+                try { complete("OK\n" + copyReadOnlyPackage(uri, selectedKind == SKIN_PACKAGE)); }
                 catch (Exception error) { complete("ERROR\n" + error.getMessage()); }
             });
             return true;
@@ -213,13 +219,19 @@ final class DocumentStorage {
     }
 
     /**
-     * @brief 将授权 ZIP 流式复制到本次请求独占的缓存文件。
+     * @brief 将授权归档流式复制到本次请求独占的缓存文件。
      * @param uri 系统提供的临时只读文档授权。
+     * @param skinPackage 是否校验 MSK 文件名并使用皮肤包缓存后缀。
      * @return 已经完整关闭的文件路径；不持久化该授权或路径。
+     * @throws Exception 文件名不合法或提供器无法读取归档。
      * @warning 由文件线程调用；云端提供器可能需要等待内容下载。
      */
-    private String copyStartupPackage(Uri uri) throws IOException {
-        File temporary = File.createTempFile("startup-assets-", ".zip", activity.getCacheDir());
+    private String copyReadOnlyPackage(Uri uri, boolean skinPackage) throws Exception {
+        // 保留归档类型，避免错误扩展名进入原生服务。内容完整性仍由导入服务校验。
+        if (skinPackage && !nameOf(uri).toLowerCase(Locale.ROOT).endsWith(".msk"))
+            throw new IOException("所选文件必须使用 .msk 扩展名");
+        File temporary = File.createTempFile(skinPackage ? "skin-import-" : "startup-assets-",
+                skinPackage ? ".msk" : ".zip", activity.getCacheDir());
         boolean copied = false;
         try {
             try (InputStream input = activity.getContentResolver().openInputStream(uri)) {

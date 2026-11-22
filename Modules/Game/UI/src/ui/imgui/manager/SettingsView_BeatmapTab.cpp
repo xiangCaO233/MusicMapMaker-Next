@@ -135,6 +135,9 @@ void drawTrackCountStepper(Clay_BoundingBox bounds, std::int32_t trackCount,
 /// 草稿轨和 BGM 轨数量使用各自的专用命令，不写入元数据草稿。这些命令可能需要
 /// 调整持久化轨道结构，因此由 EditorEngine 队列串行处理。
 ///
+/// 活动会话可能先于谱面出现，此时没有可供搜索导航定位的设置行。
+/// 独立谱面也能打开表单，因此空状态以活动谱面为判断条件，工程可缺省。
+///
 /// 页面持有 session
 /// 递归互斥锁直到布局回调执行完成，确保活动谱面、SessionContext
 /// 和元数据引用在本帧内稳定。不得把这些引用保存到函数之外。
@@ -182,6 +185,13 @@ void SettingsView::drawBeatmapSettings()
 
     if ( !session || !session->getContext().currentBeatmap ) {
         // 没有活动谱面时只显示明确提示，不登记任何捕获空上下文的回调。
+        // 空状态跳过表单布局，单独补齐表单的左侧和顶部留白。
+        // 内容子窗口紧邻分类分隔线，基准坐标取自当前光标。
+        // 局部坐标会随子窗口滚动与停靠变化，不依赖屏幕位置。
+        // 偏移使用窗口像素，与下方 Clay 根容器的内边距单位一致。
+        const ImVec2 start = ImGui::GetCursorPos();
+        ImGui::SetCursorPos({ start.x + 8.0f, start.y + 8.0f });
+        // 提示仍作为 ImGui 文本项登记，让滚动区计入文字实际占用的高度。
         ImVec4 dangerCol = Utils::UIThemeUtils::getDangerColor();
         ImGui::TextColored(
             dangerCol, "%s", TR("ui.settings.beatmap.no_beatmap").data());

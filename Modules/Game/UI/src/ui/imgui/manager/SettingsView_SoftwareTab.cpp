@@ -3,6 +3,7 @@
 #ifdef __ANDROID__
 // Android 的资源目录由文档授权管理，不按桌面本地目录处理。
 #    include "common/platform/DocumentStorage.h"
+#    include "font/AsciiFontRasterizer.h"
 #endif
 #include "config/AppConfig.h"
 #include "config/AppPaths.h"
@@ -33,6 +34,8 @@
 #include "ui/workspace/IWorkspacePresentation.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <filesystem>
 #include <nfd.h>
 #include <optional>
@@ -48,6 +51,203 @@ namespace
 ///
 /// 该名称同时用于候选排序、无加载路径时的回退和恢复默认皮肤入口。
 constexpr const char* kDefaultSkinDirectoryName = "mmm-default";
+
+/// @brief 区分 ASCII 与 CJK 偏好，跨文件选择回调只传递成员身份。
+using FontPreference = std::string Config::EditorSettings::*;
+
+/// @brief 共享两类字体行的排版，只保留各控件独立的配置字段和标识。
+/// @details 控件标识用于 ImGui
+/// 焦点、文件选择器及个性化引导，不能由翻译文本推导。
+/// 角色通过字段身份重新访问当前配置，不保存设置对象的跨帧引用。
+struct FontSettingRow {
+    const char*    m_label;        ///< 本帧的行标题，参与设置搜索。
+    const char*    m_comboId;      ///< 保持现有组合框 ID，避免状态串行。
+    const char*    m_browseLabel;  ///< 桌面按钮的可见文本和隐藏 ID。
+    const char*    m_dialogId;     ///< 分离两种字体的内置模态状态。
+    const char*    m_guideId;      ///< 引导按字体类型分别报告位置。
+    FontPreference m_preference;   ///< 选择结果写入的字段。
+};
+
+/// @brief 提交一种字体的选择，图集更新留给图形上下文的安全阶段。
+/// @param preference 当前配置中负责此文字集的字段。
+/// @param value 皮肤字体名称、Default 或已选择的外部文件路径。
+/// @warning 点击或选择文件完成时调用，不在原绘制回调中上传图集。
+void selectFont(std::string& preference, const std::string& value)
+{
+    preference = value;
+    // 选择写入配置独立于图形上下文，关闭阶段也可正常提交。
+    if ( auto context = Graphic::VKContext::get() )
+        context->get().requestFontRebuild();
+}
+
+/// @brief 以指定起始目录打开内置字体选择器，允许选择 TTF 或 OTF。
+/// @param dialogId 两种字体选择器各自的稳定 ID。
+/// @param directory 已由调用方按平台选择的浏览起点。
+/// @warning 点击时调用，取消结果在独立模态的后续帧处理。
+void openFontFileDialog(const char* dialogId, const char* directory)
+{
+    // 选择从现有列表得到，不使用可编辑文件名栏来创建目标文件。
+    IGFD::FileDialogConfig config;
+    config.path  = directory;
+    config.flags = ImGuiFileDialogFlags_Modal |
+                   ImGuiFileDialogFlags_HideColumnType |
+                   ImGuiFileDialogFlags_ReadOnlyFileNameField;
+    auto* dialog = ImGuiFileDialog::Instance();
+    // 已打开实例仍由模态驱动，避免重复播放打开音效。
+    const bool wasOpen = dialog->IsOpened(dialogId);
+    dialog->OpenDialog(dialogId,
+                       TR_CACHE("ui.settings.software.font.browse").data(),
+                       ".ttf,.otf",
+                       config);
+    if ( !wasOpen && dialog->IsOpened(dialogId) ) PlayPopupOpenFeedback();
+}
+
+#ifdef __ANDROID__
+/// @brief 显示文件选择或字体格式失败，保留用户当前的字体。
+/// @details 取消属于正常返回，调用方只在真实错误时显示通知。
+/// @warning 仅在选择结果失败时调用，不参与逐帧布局。
+void showAndroidFontPickerError()
+{
+    if ( auto context = Graphic::VKContext::get() ) {
+        // 系统未限制文件类型时，提示可选择的实际字体格式。
+        const auto& settings =
+            Config::AppConfig::instance().getEditorSettings();
+        context->get().showCenterNotification(
+            settings.language == "zh_cn"
+                ? "无法加载字体，请选择有效的 TTF 或 OTF 文件。"
+                : "Could not load the font. Choose a valid TTF or OTF file.");
+    }
+}
+
+/// @brief 验证并持久化 Android 的字体选择，在安全阶段重建图集。
+/// @param path 文件选择器回传的 UTF-8 本地路径，系统授权已转换为持久工作文件。
+/// @param preference 仅修改点击的字体行。
+/// @details 拒绝后缀合法但损坏的文件，也拒绝可解析但与编辑器图集不兼容的字体。
+/// 三项验证均通过后才替换偏好，避免下次启动持续尝试加载坏文件。
+/// @warning 用户确认后的低频路径，会读字体文件，不得用于布局或逐帧检查。
+void commitAndroidFontFile(const std::string& path, FontPreference preference)
+{
+    const auto fontPath  = Config::utf8ToPath(path);
+    auto       extension = Config::pathToUtf8(fontPath.extension());
+    // 后缀以 ASCII 比较，文件名其余部分仍按原 UTF-8 保存。
+    std::ranges::transform(extension, extension.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    // Android 系统选择器可能回传其他类型，先检查扩展名再解析字体文件。
+    // 空码点集合只验证 FreeType 能加载 face，不为 CJK
+    // 偏好强制要求某个固定字形。
+    if ( (extension != ".ttf" && extension != ".otf") ||
+         !Graphic::AsciiFontRasterizer::rasterizeUnicode(fontPath, {}) ) {
+        showAndroidFontPickerError();
+        return;
+    }
+    // 临时图集与编辑器采用相同加载后端，试载失败不会改动正在显示的字体。
+    ImFontAtlas  probeAtlas;
+    ImFontConfig probeConfig;
+    // 不可信的外部文件读取失败时走提示路径，不能触发调试断言。
+    probeConfig.Flags |= ImFontFlags_NoLoadError;
+    if ( !probeAtlas.AddFontFromFileTTF(path.c_str(), 16.0f, &probeConfig) ) {
+        showAndroidFontPickerError();
+        return;
+    }
+
+    auto& app = Config::AppConfig::instance();
+    // 系统工作文件随应用数据保留，下一次启动仍使用同一实际路径。
+    selectFont(app.getEditorSettings().*preference, path);
+    // 系统和兼容选择器共用提交过程，结果不依赖设置页的帧内聚合状态。
+    // 先写出已经验证的偏好，随后才向其他编辑器会话广播当前配置。
+    // 持久化诊断只记录文件名，完整的系统授权工作路径留在偏好内部。
+    if ( !app.save() )
+        XWARN("Could not save the Android font preference");
+    else
+        XINFO("Saved Android font preference: {}",
+              Config::pathToUtf8(fontPath.filename()));
+    Interaction::dispatchCommand(Event::LogicCommandEvent(
+        Logic::CmdUpdateEditorConfig{ app.getEditorConfig() }));
+}
+
+/// @brief 按移动端文件访问方式打开字体选择器。
+/// @param dialogId 内置选择器的独立身份，与另一种字体的模态隔离。
+/// @param preference 回调结束后要更新的字段，不借用当前帧设置引用。
+/// @details 系统路径使用 Android 持久文档授权，源文件仍由提供器持有。
+/// 本机兼容模式仅在已有共享存储授权时使用，控件不会隐式改变权限。
+/// @warning 用户触发后调用，只由系统或内置选择器的结果路径访问选定文件。
+void openAndroidFontPicker(const char* dialogId, FontPreference preference)
+{
+    if ( NativeFileDialog::requiresSystemPicker() ) {
+        PlayPopupOpenFeedback();
+        // 系统选择器允许返回 MIME 不明确的字体，由 commitAndroidFontFile
+        // 统一验证。
+        NativeFileDialog::openFileAsync(
+            nullptr,
+            0,
+            nullptr,
+            [preference](nfdresult_t result, const std::string& path) {
+                // 返回时设置页可能已经关闭，所以不捕获视图或帧内 changed。
+                if ( result == NFD_CANCEL ) return;
+                if ( result != NFD_OKAY ) {
+                    showAndroidFontPickerError();
+                    return;
+                }
+                commitAndroidFontFile(path, preference);
+            });
+        return;
+    }
+
+    // 已授权本机访问时，从共享存储或上次位置打开内置选择器。
+    // requiresSystemPicker 已处理无法从内置选择器打开的私有工作路径。
+    openFontFileDialog(dialogId,
+                       Config::AppConfig::instance()
+                           .getEditorSettings()
+                           .lastFilePickerPath.c_str());
+}
+
+/// @brief 保存字体行在设置内容区中的组合框与触控按钮几何。
+struct AndroidFontRowLayout {
+    float  m_comboWidth;    ///< 值列在预留按钮和间距后的宽度。
+    float  m_buttonWidth;   ///< 使用实际剩余空间限制按钮宽度。
+    ImVec2 m_buttonOrigin;  ///< 按钮左上角的屏幕坐标。
+};
+
+/// @brief 在较高的触控行中居中标准组合框，并为文件夹按钮留出位置。
+/// @param row Clay 分配的值列矩形，已扣除名称列和设置行边距。
+/// @return 本帧几何，不能跨窗口缩放或停靠变化复用。
+/// @warning UI 热路径：只读布局和样式，不查询存储权限。
+AndroidFontRowLayout alignAndroidFontCombo(Clay_BoundingBox row)
+{
+    // 可用宽度允许时给出方形按钮，极窄分区保留组合框宽度。
+    // 间距也从同一矩形扣除，保证两个触控区域彼此独立。
+    const float gap =
+        std::min(ImGui::GetStyle().ItemSpacing.x, row.width * 0.1f);
+    const float buttonWidth =
+        std::max(1.0f, std::min(row.height, row.width * 0.45f));
+    const float comboWidth = std::max(1.0f, row.width - buttonWidth - gap);
+    ImGui::SetCursorScreenPos(
+        { row.x, row.y + (row.height - ImGui::GetFrameHeight()) * 0.5f });
+    // 组合框仍使用主题帧高，按钮独占额外的触控高度。
+    return { comboWidth, buttonWidth, { row.x + comboWidth + gap, row.y } };
+}
+
+/// @brief 绘制独立命中区的 Android 文件夹按钮，点击才解析文件选择策略。
+/// @param layout 与组合框共享计算的行内布局。
+/// @param height 已由 Clay 预留的按钮高度。
+/// @param dialogId 区分两种外观相同的浏览按钮与选择器。
+/// @param preference 选定文件只写入这一行的字体偏好。
+/// @warning UI 热路径：无点击时只提交按钮和提示。
+void drawAndroidFontBrowseButton(const AndroidFontRowLayout& layout,
+                                 float height, const char* dialogId,
+                                 FontPreference preference)
+{
+    ImGui::SetCursorScreenPos(layout.m_buttonOrigin);
+    // 两个按钮共用完整图标，稳定 ID 防止焦点与反馈状态串扰。
+    ImGui::PushID(dialogId);
+    if ( FeedbackButton(ICON_MMM_FOLDER_OPEN,
+                        { layout.m_buttonWidth, height }) )
+        openAndroidFontPicker(dialogId, preference);
+    Utils::renderTooltip(TR_CACHE("ui.settings.software.font.browse").data());
+    ImGui::PopID();
+}
+#endif
 
 /// @brief 获取指定皮肤目录的入口脚本路径。
 /// @param skinDirectoryName skins 根目录下的皮肤目录名。
@@ -1055,7 +1255,7 @@ void SettingsView::drawSoftwareSettings()
             }
         }
 
-        // 皮肤行由一个候选组合框和打开目录、导入、导出三个动作按钮组成。
+        // 桌面皮肤行内联三个动作，Android 将可用操作放进独立触控行。
         // 候选缓存只保存合法入口目录名；高成本选择流程由 applySkinSelection
         // 封装。
         if ( m_availableSkinDirectoriesDirty ) {
@@ -1071,6 +1271,10 @@ void SettingsView::drawSoftwareSettings()
             TR_CACHE("ui.settings.software.skin").data(),
             maxLabelW,
             [this, &changed, activeSkinDirectory](Clay_BoundingBox r, bool) {
+#ifdef __ANDROID__
+                // 皮肤名称和下拉箭头共用完整值列，避免被相邻触控目标挤压。
+                ImGui::SetNextItemWidth(std::max(1.0f, r.width));
+#else
                 // 三个动作按钮固定宽度，剩余空间全部分给皮肤组合框。
                 const ImGuiStyle& style         = ImGui::GetStyle();
                 constexpr float   actionButtonW = 35.0f;
@@ -1080,6 +1284,7 @@ void SettingsView::drawSoftwareSettings()
                                  style.ItemSpacing.x * 3.0f);
                 // std::max 保证极窄窗口下组合框仍有合法正宽度。
                 ImGui::SetNextItemWidth(comboWidth);
+#endif
                 if ( m_availableSkinDirectories.empty() ) {
                     // 没有合法入口时展示禁用组合框，而不是空弹窗。
                     ImGui::BeginDisabled();
@@ -1116,7 +1321,8 @@ void SettingsView::drawSoftwareSettings()
                     ::MMM::UI::FeedbackEndCombo();
                 }
 
-                // 动作按钮与组合框保持同一行，并使用紧凑横向 padding。
+#ifndef __ANDROID__
+                // 桌面动作按钮与组合框同排，并使用紧凑横向 padding。
                 ImGui::SameLine();
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
                                     ImVec2(0.0f, style.FramePadding.y));
@@ -1158,7 +1364,51 @@ void SettingsView::drawSoftwareSettings()
 
                 // 恢复三个动作按钮共享的 padding 与文字对齐样式。
                 ImGui::PopStyleVar(2);
+#endif
             });
+
+#ifdef __ANDROID__
+        // 私有皮肤目录对外部文件管理器不可见，Android 只提供包导入和导出。
+        // 触控行跨过名称列，窄面板也能为两个动作腾出空间。
+        // 动作行参加分组布局和内容滚动，避免和下一项 UI 主题重叠。
+        // 搜索结果仍定位皮肤选择框，相关动作始终跟在其后。
+        // 即使安装目录没有合法皮肤，导入也必须保留可用入口。
+        // 触屏无需悬浮提示即可知道用途，直接沿用已有的本地化选择器标题。
+        // 取当前窗口的倍率，与其他移动布局使用的触控坐标一致。
+        const float skinActionScale =
+            Config::AppConfig::instance().getWindowContentScale();
+        sec->addElement(
+            "AndroidSkinPackageActions",
+            Sizing::Grow(),
+            Sizing::Fixed(
+                std::max(ImGui::GetFrameHeight(), 48.0f * skinActionScale)),
+            [this, &changed, skinActionScale](Clay_BoundingBox r, bool) {
+                // 布局与按钮共用同一高度，间隔不计入任何按钮的点击范围。
+                // 宽度取分组分配的行矩形，避免动作进入右侧时间线或滚动条。
+                // 行太窄时压缩间隔，并保证传给按钮的宽度是正数。
+                const float gap   = std::min(8.0f * skinActionScale, r.width);
+                const float width = std::max(1.0f, (r.width - gap) * 0.5f);
+                ImGui::SetCursorScreenPos({ r.x, r.y });
+                if ( FeedbackButton(
+                         TR_CACHE(
+                             "ui.settings.software.skin.import_dialog_title")
+                             .data(),
+                         { width, r.height }) ) {
+                    // 只有同步完成的配置修改能并入这一帧，系统选择结果随后处理。
+                    // 与原皮肤选择框共用保存状态，避免同一帧各自写盘。
+                    changed |= openSkinImportFilePicker();
+                }
+                ImGui::SameLine(0.0f, gap);
+                if ( FeedbackButton(
+                         TR_CACHE(
+                             "ui.settings.software.skin.export_dialog_title")
+                             .data(),
+                         { width, r.height }) ) {
+                    // 文件发布由导出事务负责，按钮不改变当前皮肤配置。
+                    openSkinExportFilePicker();
+                }
+            });
+#endif
 
         // 主题选择契约：
         // - Auto 始终作为第一个固定候选；
@@ -1243,292 +1493,131 @@ void SettingsView::drawSoftwareSettings()
             true,
             "personalization.settings.theme");
 
-        // 字体选择契约：
-        // - ASCII 与 CJK 各自维护独立偏好和文件选择器 key；
-        // - Default 是稳定保留值，不依赖皮肤资源列表；
-        // - 皮肤字体保存 name，path 只用于消除 ImGui ID 冲突；
-        // - 外部字体保存文件选择器返回的完整路径；
-        // - 任一确认选择都只请求异步字体重建；
-        // - 取消文件对话框不修改偏好；
-        // - 文件选择器错误写日志但不抛出异常。
-        //
-        // ASCII 字体组合框生命周期：
-        // - 每帧从 EditorSettings 解析当前可见选择；
-        // - 空字符串兼容映射为 Default；
-        // - 固定 Default 项始终位于皮肤候选之前；
-        // - 皮肤候选来自 SkinManager 当前 SkinData；
-        // - 选择候选只保存 name，不复制或打开字体文件；
-        // - 浏览按钮依据 FilePickerStyle 打开一种对话框；
-        // - 原生结果立即保存并释放 NFD 缓冲；
-        // - 内置结果由布局后模态处理块消费；
-        // - 确认后仅请求字体图集重建。
-        // ASCII 字体负责拉丁字符与符号，可选择皮肤字体或外部文件。
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.software.font.ascii").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                // 字体清单由当前皮肤提供，引用只在本帧使用。
-                auto& skinMgr    = Config::SkinManager::instance();
-                auto& asciiFonts = skinMgr.getAsciiFonts();
-                // 空偏好兼容为 Default，可见标签使用本地化文本。
-                std::string currentAscii = settings.preferredAsciiFont.empty()
-                                               ? "Default"
-                                               : settings.preferredAsciiFont;
-
-                std::string label =
-                    (currentAscii == "Default")
-                        ? TR_CACHE("ui.settings.software.font.default").data()
-                        : currentAscii;
-
-                // 右侧浏览按钮固定宽度，其余区域留给字体组合框。
-                const ImGuiStyle& style         = ImGui::GetStyle();
-                const float       browseButtonW = 35.0f;
-                const float       comboW        = std::max(
-                    1.0f, r.width - browseButtonW - style.ItemSpacing.x);
-                ImGui::SetNextItemWidth(comboW);
-                if ( ::MMM::UI::FeedbackBeginCombo("##AsciiFontCombo",
-                                                   label.c_str()) ) {
-                    // 固定默认选项不依赖皮肤字体清单。
-                    {
-                        bool isSelected = (currentAscii == "Default");
-                        if ( ::MMM::UI::FeedbackSelectable(
-                                 TR_CACHE("ui.settings.software.font.default")
-                                     .data(),
-                                 isSelected) ) {
-                            settings.preferredAsciiFont = "Default";
-                            // 字体选择只发出安全帧边界重建请求。
-                            if ( auto ctx = Graphic::VKContext::get() )
-                                ctx->get().requestFontRebuild();
+        // 两个角色仍用原来的下拉框、文件选择器和引导 ID，只共享排版与提交逻辑。
+        // Default 选项由运行时皮肤提供，外部字体则保存选择器返回的可加载路径。
+        // 每帧持有名称和值的短引用，皮肤切换后重新取候选而不保留旧资源引用。
+        // 布局阶段只固定角色，真正绘制时才读取可能随前置皮肤回调变化的候选列表。
+        // 描述按值传入回调，不借用分组构造函数执行时的局部数组。
+        const std::array<FontSettingRow, 2> fontRows{
+            { { TR_CACHE("ui.settings.software.font.ascii").data(),
+                "##AsciiFontCombo",
+                "...##BrowseAscii",
+                "AsciiFontPicker",
+                "personalization.settings.font-ascii",
+                &Config::EditorSettings::preferredAsciiFont },
+              { TR_CACHE("ui.settings.software.font.cjk").data(),
+                "##CjkFontCombo",
+                "...##BrowseCjk",
+                "CjkFontPicker",
+                "personalization.settings.font-cjk",
+                &Config::EditorSettings::preferredCjkFont } }
+        };
+#ifdef __ANDROID__
+        // 仅 Android
+        // 放大这两行，避免窄面板用桌面省略号按钮截断文字或缩小命中区。
+        const float fontControlHeight =
+            48.0f * Config::AppConfig::instance().getWindowContentScale();
+#else
+        constexpr float fontControlHeight = 0.0f;
+#endif
+        // 零值恢复桌面标准帧高，Android 使用与窗口内容一致的倍率。
+        for ( const auto& fontRow : fontRows ) {
+            addSettingItem(
+                *sec,
+                rowIndex,
+                fontRow.m_label,
+                maxLabelW,
+                [this, &settings, &changed, fontRow](Clay_BoundingBox r, bool) {
+                    auto&       preference = settings.*fontRow.m_preference;
+                    const auto& skin       = Config::SkinManager::instance();
+                    // 取当前皮肤的独立字体列表，切换皮肤和绘制字体行可发生在同一帧。
+                    const auto& fonts =
+                        fontRow.m_preference ==
+                                &Config::EditorSettings::preferredAsciiFont
+                            ? skin.getAsciiFonts()
+                            : skin.getCjkFonts();
+                    const auto* defaultLabel =
+                        TR_CACHE("ui.settings.software.font.default").data();
+                    const bool usingDefault =
+                        preference.empty() || preference == "Default";
+                    const char* preview =
+                        usingDefault ? defaultLabel : preference.c_str();
+#ifdef __ANDROID__
+                    // 真实路径留在配置，安卓私有工作目录名不占用组合框预览空间。
+                    if ( !usingDefault && preference.starts_with('/') )
+                        preview += preference.rfind('/') + 1;
+                    const auto fontLayout = alignAndroidFontCombo(r);
+                    ImGui::SetNextItemWidth(fontLayout.m_comboWidth);
+#else
+                    const auto&     style             = ImGui::GetStyle();
+                    constexpr float browseButtonWidth = 35.0f;
+                    ImGui::SetNextItemWidth(std::max(
+                        1.0f,
+                        r.width - browseButtonWidth - style.ItemSpacing.x));
+#endif
+                    if ( FeedbackBeginCombo(fontRow.m_comboId, preview) ) {
+                        if ( FeedbackSelectable(defaultLabel, usingDefault) ) {
+                            selectFont(preference, "Default");
                             changed = true;
                         }
-                        if ( isSelected ) ImGui::SetItemDefaultFocus();
-                    }
-
-                    // 皮肤字体按名称显示，并把资源路径附在隐藏 ID
-                    // 中消除重名冲突。
-                    for ( const auto& [name, path] : asciiFonts ) {
-                        bool        isSelected = (currentAscii == name);
-                        std::string lbl =
-                            name + "##" + Config::pathToUtf8(path);
-                        if ( ::MMM::UI::FeedbackSelectable(lbl.c_str(),
-                                                           isSelected) ) {
-                            settings.preferredAsciiFont = name;
-                            // 只保存皮肤内稳定名称，不保存展开后的资源路径。
-                            if ( auto ctx = Graphic::VKContext::get() )
-                                ctx->get().requestFontRebuild();
-                            changed = true;
+                        if ( usingDefault ) ImGui::SetItemDefaultFocus();
+                        for ( const auto& [name, path] : fonts ) {
+                            // 皮肤字体按名称持久化，路径仅用于区分同名选项的交互状态。
+                            const bool        selected = preference == name;
+                            const std::string label =
+                                name + "##" + Config::pathToUtf8(path);
+                            if ( FeedbackSelectable(label.c_str(), selected) ) {
+                                selectFont(preference, name);
+                                changed = true;
+                            }
+                            if ( selected ) ImGui::SetItemDefaultFocus();
                         }
+                        if ( m_sourceManager )
+                            m_sourceManager->walkthroughSpotlight()
+                                .reportCurrentPopup(fontRow.m_guideId);
+                        FeedbackEndCombo();
                     }
-                    // 字体列表超出设置行时按本帧窗口边界扩展引导亮区。
-                    // 字体重建可能改变文本尺寸，因此不能缓存上次弹窗矩形。
-                    if ( m_sourceManager )
-                        m_sourceManager->walkthroughSpotlight()
-                            .reportCurrentPopup(
-                                "personalization.settings.font-ascii");
-                    ::MMM::UI::FeedbackEndCombo();
-                }
-                // 浏览按钮与组合框同排，使用紧凑样式避免省略号被裁剪。
-                ImGui::SameLine();
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-                                    ImVec2(0.0f, style.FramePadding.y));
-                ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign,
-                                    ImVec2(0.5f, 0.5f));
-                const bool browseAsciiClicked = ::MMM::UI::FeedbackButton(
-                    "...##BrowseAscii", { browseButtonW, 0 });
-                ImGui::PopStyleVar(2);
-                if ( browseAsciiClicked ) {
-                    // 文件选择器实现由软件偏好决定，两个分支使用相同扩展名白名单。
-                    if ( settings.filePickerStyle ==
+#ifdef __ANDROID__
+                    drawAndroidFontBrowseButton(fontLayout,
+                                                r.height,
+                                                fontRow.m_dialogId,
+                                                fontRow.m_preference);
+#else
+                    // 桌面浏览按钮沿用原来的间距、对齐和固定宽度。
+                    ImGui::SameLine();
+                    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                        { 0.0f, style.FramePadding.y });
+                    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign,
+                                        { 0.5f, 0.5f });
+                    const bool browseClicked = FeedbackButton(
+                        fontRow.m_browseLabel, { browseButtonWidth, 0 });
+                    ImGui::PopStyleVar(2);
+                    if ( !browseClicked ) return;
+                    if ( settings.filePickerStyle !=
                          Config::FilePickerStyle::Native ) {
-                        // 原生对话框打开前播放统一弹窗反馈。
-                        ::MMM::UI::PlayPopupOpenFeedback();
-                        nfdu8char_t*      outPath    = nullptr;
-                        nfdu8filteritem_t filters[1] = { { "Font Files",
-                                                           "ttf,otf" } };
-                        nfdresult_t       result = NativeFileDialog::openFile(
-                            &outPath, filters, 1, nullptr);
-
-                        if ( result == NFD_OKAY ) {
-                            // 外部字体按用户选择路径保存，并请求字体图集重建。
-                            settings.preferredAsciiFont = outPath;
-                            if ( auto ctx = Graphic::VKContext::get() )
-                                ctx->get().requestFontRebuild();
-                            changed = true;
-                            // NFD 返回缓冲由库分配，成功使用后必须释放。
-                            NFD_FreePathU8(outPath);
-                        } else if ( result == NFD_ERROR ) {
-                            // 错误只记录日志，取消选择不视为失败或修改。
-                            XERROR("NFD Error: {}", NFD_GetError());
-                        }
-                    } else {
-                        // 内置 ImGui 对话框使用只读文件名栏和字体扩展名过滤。
-                        IGFD::FileDialogConfig config;
-                        config.path     = ".";
-                        config.fileName = "";
-                        config.flags =
-                            ImGuiFileDialogFlags_Modal |
-                            ImGuiFileDialogFlags_HideColumnType |
-                            ImGuiFileDialogFlags_ReadOnlyFileNameField;
-                        // 只在从关闭变为打开时播放弹窗反馈，避免每帧重复声音。
-                        const bool wasOpen =
-                            ImGuiFileDialog::Instance()->IsOpened(
-                                "AsciiFontPicker");
-                        ImGuiFileDialog::Instance()->OpenDialog(
-                            "AsciiFontPicker",
-                            TR_CACHE("ui.settings.software.font.browse").data(),
-                            ".ttf,.otf",
-                            config);
-                        if ( !wasOpen && ImGuiFileDialog::Instance()->IsOpened(
-                                             "AsciiFontPicker") ) {
-                            ::MMM::UI::PlayPopupOpenFeedback();
-                        }
+                        openFontFileDialog(fontRow.m_dialogId, ".");
+                        return;
                     }
-                }
-            },
-            // 字体图集更新后布局可能变化，锚点不保存旧屏幕坐标。
-            false,
-            true,
-            "personalization.settings.font-ascii");
-
-        // CJK 字体组合框生命周期：
-        // - 使用独立 preferredCjkFont 字段；
-        // - 空字符串同样兼容映射为 Default；
-        // - 候选来自 SkinManager 的 CJK 字体清单；
-        // - 名称与路径共同构造唯一 ImGui 项；
-        // - 浏览按钮使用 CjkFontPicker 独立对话框 key；
-        // - 与 ASCII 选择器可以分别保持打开状态检查；
-        // - 成功选择不会覆盖 ASCII 字体偏好；
-        // - 字体重建请求由 VKContext 在安全阶段执行；
-        // - 取消对话框保持当前偏好不变。
-        // CJK 字体负责中日韩字形，流程与 ASCII 字体独立以支持字体回退组合。
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.software.font.cjk").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                // CJK 字体清单由当前皮肤提供，选择名称可与 ASCII 清单不同。
-                auto& skinMgr  = Config::SkinManager::instance();
-                auto& cjkFonts = skinMgr.getCjkFonts();
-                // 空偏好兼容为 Default，显示时使用本地化默认名称。
-                std::string currentCjk = settings.preferredCjkFont.empty()
-                                             ? "Default"
-                                             : settings.preferredCjkFont;
-                std::string label =
-                    (currentCjk == "Default")
-                        ? TR_CACHE("ui.settings.software.font.default").data()
-                        : currentCjk;
-
-                // 固定浏览按钮宽度后，把剩余值列交给组合框。
-                const ImGuiStyle& style         = ImGui::GetStyle();
-                const float       browseButtonW = 35.0f;
-                const float       comboW        = std::max(
-                    1.0f, r.width - browseButtonW - style.ItemSpacing.x);
-                ImGui::SetNextItemWidth(comboW);
-                if ( ::MMM::UI::FeedbackBeginCombo("##CjkFontCombo",
-                                                   label.c_str()) ) {
-                    // 默认选项交回字体系统自动选择 CJK 字体。
-                    {
-                        bool isSelected = (currentCjk == "Default");
-                        if ( ::MMM::UI::FeedbackSelectable(
-                                 TR_CACHE("ui.settings.software.font.default")
-                                     .data(),
-                                 isSelected) ) {
-                            settings.preferredCjkFont = "Default";
-                            // 重建请求延迟到图形安全点，不在回调中同步上传字体。
-                            if ( auto ctx = Graphic::VKContext::get() )
-                                ctx->get().requestFontRebuild();
-                            changed = true;
-                        }
-                        if ( isSelected ) ImGui::SetItemDefaultFocus();
+                    PlayPopupOpenFeedback();
+                    nfdu8char_t*            path = nullptr;
+                    const nfdu8filteritem_t filter{ "Font Files", "ttf,otf" };
+                    const auto              result =
+                        NativeFileDialog::openFile(&path, &filter, 1, nullptr);
+                    // NFD 路径只在同步调用成功时存在，保存到配置后立即释放。
+                    if ( result == NFD_OKAY && path ) {
+                        selectFont(preference, path);
+                        NFD_FreePathU8(path);
+                        changed = true;
+                    } else if ( result == NFD_ERROR ) {
+                        XERROR("NFD Error: {}", NFD_GetError());
                     }
-
-                    // 皮肤额外字体使用名称显示、路径参与隐藏 ID。
-                    for ( const auto& [name, path] : cjkFonts ) {
-                        bool        isSelected = (currentCjk == name);
-                        std::string lbl =
-                            name + "##" + Config::pathToUtf8(path);
-                        if ( ::MMM::UI::FeedbackSelectable(lbl.c_str(),
-                                                           isSelected) ) {
-                            settings.preferredCjkFont = name;
-                            // 保存稳定皮肤名称并请求字体图集重建。
-                            if ( auto ctx = Graphic::VKContext::get() )
-                                ctx->get().requestFontRebuild();
-                            changed = true;
-                        }
-                    }
-                    // CJK 候选收起后不再报告弹窗，遮罩随下帧恢复到设置行。
-                    // 即使皮肤字体数量变化，仍以实际弹窗边界确定可点区域。
-                    if ( m_sourceManager )
-                        m_sourceManager->walkthroughSpotlight()
-                            .reportCurrentPopup(
-                                "personalization.settings.font-cjk");
-                    ::MMM::UI::FeedbackEndCombo();
-                }
-                // 浏览按钮采用与 ASCII 行一致的紧凑省略号样式。
-                ImGui::SameLine();
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-                                    ImVec2(0.0f, style.FramePadding.y));
-                ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign,
-                                    ImVec2(0.5f, 0.5f));
-                const bool browseCjkClicked = ::MMM::UI::FeedbackButton(
-                    "...##BrowseCjk", { browseButtonW, 0 });
-                ImGui::PopStyleVar(2);
-                if ( browseCjkClicked ) {
-                    // 原生与内置文件选择器都只接受 ttf/otf 字体文件。
-                    if ( settings.filePickerStyle ==
-                         Config::FilePickerStyle::Native ) {
-                        // 原生对话框打开动作播放统一弹窗音效。
-                        ::MMM::UI::PlayPopupOpenFeedback();
-                        nfdu8char_t*      outPath    = nullptr;
-                        nfdu8filteritem_t filters[1] = { { "Font Files",
-                                                           "ttf,otf" } };
-                        nfdresult_t       result = NativeFileDialog::openFile(
-                            &outPath, filters, 1, nullptr);
-
-                        if ( result == NFD_OKAY ) {
-                            // 外部 CJK 字体保存选择路径，并安排字体图集重建。
-                            settings.preferredCjkFont = outPath;
-                            if ( auto ctx = Graphic::VKContext::get() )
-                                ctx->get().requestFontRebuild();
-                            changed = true;
-                            // 成功结果路径由 NFD 分配，使用后释放。
-                            NFD_FreePathU8(outPath);
-                        } else if ( result == NFD_ERROR ) {
-                            // 取消不记录错误，真正错误写入项目日志。
-                            XERROR("NFD Error: {}", NFD_GetError());
-                        }
-                    } else {
-                        // 内置对话框使用独立 key，避免与 ASCII 选择器状态冲突。
-                        IGFD::FileDialogConfig config;
-                        config.path     = ".";
-                        config.fileName = "";
-                        config.flags =
-                            ImGuiFileDialogFlags_Modal |
-                            ImGuiFileDialogFlags_HideColumnType |
-                            ImGuiFileDialogFlags_ReadOnlyFileNameField;
-                        // 记录打开前状态，使反馈音只在状态边沿播放一次。
-                        const bool wasOpen =
-                            ImGuiFileDialog::Instance()->IsOpened(
-                                "CjkFontPicker");
-                        ImGuiFileDialog::Instance()->OpenDialog(
-                            "CjkFontPicker",
-                            TR_CACHE("ui.settings.software.font.browse").data(),
-                            ".ttf,.otf",
-                            config);
-                        if ( !wasOpen && ImGuiFileDialog::Instance()->IsOpened(
-                                             "CjkFontPicker") ) {
-                            ::MMM::UI::PlayPopupOpenFeedback();
-                        }
-                    }
-                }
-            },
-            // 中日韩字体与 ASCII 字体分别引导，避免只检查其中一种文字。
-            false,
-            true,
-            "personalization.settings.font-cjk");
+#endif
+                },
+                false,
+                true,
+                fontRow.m_guideId,
+                fontControlHeight);
+        }
 
         // 界面全局缩放影响主题尺寸，拖动结束后再应用以避免每帧重算样式。
         addSettingItem(
@@ -1587,59 +1676,44 @@ void SettingsView::drawSoftwareSettings()
                 }
             });
 
-        // 内置 ASCII 文件选择器需要作为独立模态窗口在设置控件之后处理结果。
-        {
-            // 模态样式和居中位置按当前 DPI 统一管理。
-            const float dpiScale =
-                Config::AppConfig::instance().getWindowContentScale();
-            Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
-            if ( ImGuiFileDialog::Instance()->IsOpened("AsciiFontPicker") ) {
-                // 只在对话框已打开时准备固定居中尺寸。
-                Utils::prepareCenteredModalWindow({ 600, 400 });
-            }
-            if ( ImGuiFileDialog::Instance()->Display(
-                     "AsciiFontPicker",
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                         ImGuiWindowFlags_NoSavedSettings,
-                     { 600, 400 }) ) {
-                if ( ImGuiFileDialog::Instance()->IsOk() ) {
-                    // 确认后保存完整文件路径，并安排字体图集重建。
-                    settings.preferredAsciiFont =
-                        ImGuiFileDialog::Instance()->GetFilePathName();
-                    if ( auto ctx = Graphic::VKContext::get() )
-                        ctx->get().requestFontRebuild();
-                    changed = true;
-                }
-                // 确认和取消都关闭实例，避免下一帧重复处理结果。
-                ImGuiFileDialog::Instance()->Close();
-            }
-        }
+        // 两种内置选择器各自持有模态身份，记录选择结果时只改对应的字体偏好。
+        // 系统回调由 UIManager 在独立阶段处理，不会与这里重复应用字体。
+        // 字体组重绘不会重复打开已完成的选择器，用户可继续编辑同组其他设置。
+        for ( const auto& fontRow : fontRows ) {
+            auto* dialog = ImGuiFileDialog::Instance();
+            if ( !dialog->IsOpened(fontRow.m_dialogId) ) continue;
 
-        // CJK 对话框使用独立 key，但遵循相同模态结果生命周期。
-        {
+            // 复用工作区的文件选择尺寸，移动端的底部确认按钮需要随密度缩放。
+            // 只在模态已打开时申请尺寸与样式，普通设置帧不触及其他窗口。
+            // 无工作区时沿用桌面尺寸，保持设置视图独立预览的布局。
             const float dpiScale =
                 Config::AppConfig::instance().getWindowContentScale();
+            const ImVec2 dialogSize =
+                m_sourceManager
+                    ? m_sourceManager->workspacePresentation().fileDialogSize(
+                          dpiScale, ImGui::GetMainViewport()->WorkSize)
+                    : ImVec2{ 600, 400 };
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
-            if ( ImGuiFileDialog::Instance()->IsOpened("CjkFontPicker") ) {
-                // 仅在实际打开时覆盖下一窗口居中尺寸。
-                Utils::prepareCenteredModalWindow({ 600, 400 });
+            Utils::prepareCenteredModalWindow(dialogSize);
+            if ( !dialog->Display(fontRow.m_dialogId,
+                                  ImGuiWindowFlags_NoCollapse |
+                                      ImGuiWindowFlags_NoResize |
+                                      ImGuiWindowFlags_NoSavedSettings,
+                                  dialogSize) )
+                continue;
+            if ( dialog->IsOk() ) {
+#ifdef __ANDROID__
+                // 系统选择与本机兼容选择共享试载，坏字体不会破坏现用图集。
+                commitAndroidFontFile(dialog->GetFilePathName(),
+                                      fontRow.m_preference);
+#else
+                selectFont(settings.*fontRow.m_preference,
+                           dialog->GetFilePathName());
+                changed = true;
+#endif
             }
-            if ( ImGuiFileDialog::Instance()->Display(
-                     "CjkFontPicker",
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                         ImGuiWindowFlags_NoSavedSettings,
-                     { 600, 400 }) ) {
-                if ( ImGuiFileDialog::Instance()->IsOk() ) {
-                    // 确认路径写入 CJK 偏好，与 ASCII 字段完全分离。
-                    settings.preferredCjkFont =
-                        ImGuiFileDialog::Instance()->GetFilePathName();
-                    if ( auto ctx = Graphic::VKContext::get() )
-                        ctx->get().requestFontRebuild();
-                    changed = true;
-                }
-                // 消费本次结果后立即关闭模态实例。
-                ImGuiFileDialog::Instance()->Close();
-            }
+            // 结果完成后立即关闭，避免下一帧再次写入同一选择。
+            dialog->Close();
         }
     }
 

@@ -68,6 +68,9 @@ void SettingsView::drawProjectSettings()
 
     if ( !project ) {
         // 无工程时只显示明确提示，不构建指向空项目的 Clay Lambda。
+        // 空状态跳过表单布局，单独补齐表单的左侧和顶部留白。
+        const ImVec2 start = ImGui::GetCursorPos();
+        ImGui::SetCursorPos({ start.x + 8.0f, start.y + 8.0f });
         ImVec4 dangerCol = Utils::UIThemeUtils::getDangerColor();
         ImGui::TextColored(
             dangerCol, "%s", TR("ui.settings.project.no_project").data());

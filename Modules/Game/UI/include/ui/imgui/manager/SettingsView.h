@@ -431,15 +431,19 @@ private:
 
     /// @brief 从指定 MSK 文件导入并切换到新皮肤。
     /// @param packagePath 待导入的 MSK 文件。
+    /// @param rememberDirectory 是否更新浏览起点；临时缓存不应成为浏览目录。
     /// @return 导入及皮肤切换均成功时返回 true。
     /// @warning 低频资源路径：会解压文件、写入用户 skins
     /// 目录并触发皮肤资源热重载。
-    bool importSkinPackage(const std::filesystem::path& packagePath);
+    bool importSkinPackage(const std::filesystem::path& packagePath,
+                           bool rememberDirectory = true);
 
     /// @brief 将当前皮肤导出到指定 MSK 文件。
     /// @param outputPath 文件选择器返回的输出路径。
+    /// @param authorizedTarget 系统文档目标保留用户授权的原名，写完后再发布。
     /// @warning 低频资源路径：会遍历当前皮肤目录并压缩全部普通文件。
-    void exportCurrentSkinPackage(const std::filesystem::path& outputPath);
+    void exportCurrentSkinPackage(const std::filesystem::path& outputPath,
+                                  bool authorizedTarget = false);
 
     /// @brief 绘制软件设置页。
     void drawSoftwareSettings();
@@ -544,10 +548,12 @@ private:
     /// @param dangerLabel 是否使用危险色绘制标签。
     /// @param decorated 是否为该行单独绘制设置框。
     /// @param walkthroughTarget 可选的个性化引导目标；仅报告本帧真实控件矩形。
+    /// @param minimumWidgetHeight 需要额外触控空间时指定最小控件高度。
     void addSettingItem(CLayVBox& parent, size_t& rowIndex, const char* label,
                         float labelWidth, CLayBox::DrawFunc widget,
                         bool dangerLabel = false, bool decorated = true,
-                        const char* walkthroughTarget = nullptr);
+                        const char* walkthroughTarget   = nullptr,
+                        float       minimumWidgetHeight = 0.0f);
 
     /// @brief 添加一个带自动换行的 RadioButton 组。
     /// @param parent 接收设置行的父级布局。

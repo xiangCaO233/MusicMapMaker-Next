@@ -99,11 +99,13 @@ CLayVBox& SettingsView::addSettingGroup(CLayVBox& parent, size_t& sectionIndex,
 /// @param dangerLabel 是否使用危险色绘制标签。
 /// @param decorated 是否为整行绘制背景、边框和较大内边距。
 /// @param walkthroughTarget 可选引导目标；控件回调执行后报告真实值列矩形。
+/// @param minimumWidgetHeight 触控目标的最小高度，默认使用标准 ImGui 控件高度。
 /// @warning UI 热路径：设置页可见时每帧构造布局，回调不得阻塞或访问文件。
 void SettingsView::addSettingItem(CLayVBox& parent, size_t& rowIndex,
                                   const char* label, float labelWidth,
                                   CLayBox::DrawFunc widget, bool dangerLabel,
-                                  bool decorated, const char* walkthroughTarget)
+                                  bool decorated, const char* walkthroughTarget,
+                                  float minimumWidgetHeight)
 {
     // 布局构造时冻结行身份；绘制回调执行时当前分组已可能改变。
     const bool searchTarget = isSettingsSearchTarget(label);
@@ -157,16 +159,22 @@ void SettingsView::addSettingItem(CLayVBox& parent, size_t& rowIndex,
                   Sizing::Fixed(labelWidth),
                   Sizing::Grow());
 
-    // 右列占据剩余宽度，并在回调中按 ImGui 标准帧高垂直居中。
+    // 固定行尺寸与控件定位使用同一高度，放大触控目标时也不会覆盖后一行。
+    const float widgetHeight =
+        std::max(ImGui::GetFrameHeight(), minimumWidgetHeight);
+    // 右列占据剩余宽度，并按实际需要的控件高度垂直居中。
     row.addElement(
         labelId + "_wgt",
         Sizing::Grow(),
         Sizing::Grow(),
-        [this, widget, walkthroughTarget, searchTarget, labelWidth](
-            Clay_BoundingBox r, bool h) {
+        [this,
+         widget,
+         walkthroughTarget,
+         searchTarget,
+         labelWidth,
+         widgetHeight](Clay_BoundingBox r, bool h) {
             // 控件回调接收完整横向区域和 Clay 悬停状态。
-            float widgetH = ImGui::GetFrameHeight();
-            float offset  = (r.height - widgetH) * 0.5f;
+            const float offset = (r.height - widgetHeight) * 0.5f;
             ImGui::SetCursorScreenPos({ r.x, r.y + offset });
             widget(r, h);
             // 整行边界同时覆盖名称和控件，高亮不依赖翻译长度或屏幕行号。
@@ -187,7 +195,7 @@ void SettingsView::addSettingItem(CLayVBox& parent, size_t& rowIndex,
         });
 
     // 装饰行额外包含上下各六像素内边距，普通行仅保留轻量间隔。
-    float rowH = ImGui::GetFrameHeight() + (decorated ? 12.0f : 4.0f);
+    const float rowH = widgetHeight + (decorated ? 12.0f : 4.0f);
     // 主行宽度随父级增长，高度固定以稳定相邻设置项节奏。
     parent.addLayout(
         (labelId + "_row").c_str(), row, Sizing::Grow(), Sizing::Fixed(rowH));

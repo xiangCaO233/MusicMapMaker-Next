@@ -1,6 +1,12 @@
 #include "config/EditorSettings.h"
 #include "ui/imgui/manager/SettingsView.h"
 
+#include "common/platform/DocumentStorage.h"
+#ifdef __ANDROID__
+#    include "common/LogicCommands.h"
+#    include "event/logic/LogicCommandEvent.h"
+#    include "ui/interaction/EditorInteraction.h"
+#endif
 #include "config/AppConfig.h"
 #include "config/AppPaths.h"
 #include "config/Utf8Path.h"
@@ -119,11 +125,16 @@ std::filesystem::path normalizeSkinPackageOutputPath(
 }
 
 /// @brief 判断设置使用系统原生文件选择器。
-/// @return 当前偏好为 Native 时返回 true。
+/// @return 桌面按选择器偏好，Android 同时检查共享存储授权。
+/// @warning 用户点击时才判断，不在设置行的逐帧布局中查询权限。
 bool useNativeSkinFilePicker()
 {
+#ifdef __ANDROID__
+    return NativeFileDialog::requiresSystemPicker();
+#else
     return Config::AppConfig::instance().getEditorSettings().filePickerStyle ==
            Config::FilePickerStyle::Native;
+#endif
 }
 
 }  // namespace
@@ -152,16 +163,17 @@ void SettingsView::openSkinDirectory()
     }
 }
 
-/// @brief 打开皮肤包导入文件选择器，并处理 Native 模式即时结果。
-/// @return Native 模式成功导入并应用新皮肤时返回 true；其他情况返回 false。
+/// @brief 打开皮肤包导入文件选择器。
+/// @return 桌面原生选择同步导入并应用新皮肤时返回 true。
 ///
-/// Native 模式在本调用内完成选择和导入；Unified 模式仅打开命名 IGFD，实际
-/// 结果由 renderSkinPackageFileDialogs 在后续帧处理。
+/// 桌面原生模式在本调用内完成；内置模式由 renderSkinPackageFileDialogs
+/// 在后续帧处理。Android 系统选择器只借用一次读权限并回传独占缓存，
+/// 重新选择同一文档也会重新读取源内容。
 ///
 /// 导入选择约束：
 /// - 起始目录优先使用最近文件选择路径；
 /// - 没有历史路径时回退应用皮肤根目录；
-/// - 原生和统一模式都只展示 `.msk` 包；
+/// - 桌面和内置模式过滤 `.msk`，Android 系统选择后校验文件名与内容；
 /// - 一次最多选择一个包；
 /// - 取消不显示失败提示；
 /// - NFD 错误不进入 SkinPackageService；
@@ -169,14 +181,47 @@ void SettingsView::openSkinDirectory()
 /// @warning 用户触发路径：Native 对话框可能阻塞 UI 直到用户关闭。
 bool SettingsView::openSkinImportFilePicker()
 {
-    // 两种选择器共享同一起始目录和仅允许 `.msk` 的过滤条件。
-    const std::string defaultPath = skinPickerDefaultPath();
-    if ( useNativeSkinFilePicker() ) {
+    // Android 兼容权限检查可能修正已有浏览目录，默认位置须在之后读取。
+    const bool        nativePicker = useNativeSkinFilePicker();
+    const std::string defaultPath  = skinPickerDefaultPath();
+    if ( nativePicker ) {
         // 原生对话框不经过 ImGui Popup，显式播放打开反馈。
         ::MMM::UI::PlayPopupOpenFeedback();
-        nfdu8char_t*      selectedPath = nullptr;
+#ifdef __ANDROID__
+        // 系统选择器返回后在 UI 线程处理，设置视图关闭时仍由 UIManager 持有。
+        // 不能把本次布局回调的 changed 引用交给后续帧。
+        NativeFileDialog::openSkinPackageAsync([this](nfdresult_t        result,
+                                                      const std::string& path) {
+            if ( result == NFD_OKAY && !path.empty() ) {
+                // 平台只负责交回完整归档，不加载皮肤内容。
+                // 目录和脚本验证仍交给皮肤服务，沿用普通文件的安装规则。
+                const auto packagePath = Config::utf8ToPath(path);
+                const bool applied     = importSkinPackage(packagePath, false);
+                // 选择器只返回这次导入独占的缓存，源文档始终由 provider 管理。
+                std::error_code cleanupError;
+                std::filesystem::remove(packagePath, cleanupError);
+                if ( cleanupError )
+                    XWARN("Failed to remove imported skin cache: {}",
+                          cleanupError.message());
+                if ( applied ) {
+                    // 异步完成时独立提交，与内置选择器成功后的配置更新一致。
+                    auto& app = Config::AppConfig::instance();
+                    Interaction::dispatchCommand(Event::LogicCommandEvent(
+                        Logic::CmdUpdateEditorConfig{ app.getEditorConfig() }));
+                    // 在皮肤切换真正完成后保存目录名，下次启动才能恢复选择。
+                    app.save();
+                }
+            } else if ( result != NFD_CANCEL ) {
+                // 平台失败时没有可用缓存，原皮肤和目录列表都无需重新加载。
+                showSkinNotification(std::string(
+                    TR_CACHE("ui.settings.software.skin.import_failed")
+                        .data()));
+            }
+        });
+#else
         nfdu8filteritem_t filters[1]   = { { "MusicMapMaker Skin Package",
                                              "msk" } };
+        nfdu8char_t*      selectedPath = nullptr;
         const nfdresult_t result       = NativeFileDialog::openFile(
             &selectedPath, filters, 1, defaultPath.c_str());
         if ( result == NFD_OKAY && selectedPath != nullptr ) {
@@ -194,6 +239,7 @@ bool SettingsView::openSkinImportFilePicker()
             showSkinNotification(std::string(
                 TR_CACHE("ui.settings.software.skin.import_failed").data()));
         }
+#endif
         return false;
     }
 
@@ -223,25 +269,48 @@ bool SettingsView::openSkinImportFilePicker()
 ///
 /// Native 模式即时执行导出；Unified 模式预填安全文件名并延迟到逐帧渲染函数
 /// 处理确认结果。取消不产生通知或文件写入。
+/// Android 系统选择回调只接收工作文件路径。写入完成前，外部文档仍是系统创建的
+/// 占位文件。原生端沿用系统选定的名称，之后才把完整 MSK 发布到原目标。
 ///
 /// 导出选择约束：
 /// - 建议文件名来自当前皮肤目录名；
 /// - 控制字符和跨平台非法字符替换为下划线；
 /// - 尾随空格或句点会移除；
 /// - 空名及目录导航名回退为 `skin.msk`；
-/// - 最终路径无论输入后缀为何都替换为 `.msk`；
-/// - 只有实际打包成功才更新最近浏览目录。
+/// - 普通路径自动补齐 `.msk`，授权目标校验后缀并保留原名；
+/// - 只有向普通路径成功打包才更新最近浏览目录。
 /// @warning 用户触发路径：Native 对话框及后续打包会执行阻塞文件操作。
 void SettingsView::openSkinExportFilePicker()
 {
     // 建议名来源于当前皮肤目录，并已按跨平台文件名规则清理。
+    const bool        nativePicker    = useNativeSkinFilePicker();
     const std::string defaultPath     = skinPickerDefaultPath();
     const std::string defaultFileName = currentSkinPackageFileName();
-    if ( useNativeSkinFilePicker() ) {
+    if ( nativePicker ) {
         ::MMM::UI::PlayPopupOpenFeedback();
+        nfdu8filteritem_t filters[1] = { { "MusicMapMaker Skin Package",
+                                           "msk" } };
+#ifdef __ANDROID__
+        // 系统返回的是工作文件，用原名写入才能映射回用户选定的目标。
+        // 默认后缀在打开选择器前生成，不能靠修改工作文件名重命名系统文档。
+        NativeFileDialog::saveFileAsync(
+            filters,
+            1,
+            defaultPath.c_str(),
+            defaultFileName.c_str(),
+            [this](nfdresult_t result, const std::string& path) {
+                if ( result == NFD_OKAY && !path.empty() ) {
+                    // 先在私有文件系统完成归档，再开始提供器 I/O。
+                    exportCurrentSkinPackage(Config::utf8ToPath(path), true);
+                } else if ( result != NFD_CANCEL ) {
+                    // 平台失败不尝试在最近浏览目录额外生成一份本地包。
+                    showSkinNotification(std::string(
+                        TR_CACHE("ui.settings.software.skin.export_failed")
+                            .data()));
+                }
+            });
+#else
         nfdu8char_t*      selectedPath = nullptr;
-        nfdu8filteritem_t filters[1]   = { { "MusicMapMaker Skin Package",
-                                             "msk" } };
         const nfdresult_t result =
             NativeFileDialog::saveFile(&selectedPath,
                                        filters,
@@ -260,6 +329,7 @@ void SettingsView::openSkinExportFilePicker()
             showSkinNotification(std::string(
                 TR_CACHE("ui.settings.software.skin.export_failed").data()));
         }
+#endif
         return;
     }
 
@@ -348,6 +418,7 @@ bool SettingsView::renderSkinPackageFileDialogs(float dpiScale)
 
 /// @brief 安装皮肤包、刷新目录列表并选择新皮肤。
 /// @param packagePath 已确认的 `.msk` 文件路径。
+/// @param rememberDirectory 仅普通文件选择结果可更新最近浏览目录。
 /// @return 安装成功且新皮肤被应用时返回 true。
 ///
 /// 最近目录在导入前记录；服务负责校验和安装到 skinsRoot。成功后强制刷新可用
@@ -361,10 +432,11 @@ bool SettingsView::renderSkinPackageFileDialogs(float dpiScale)
 /// - applySkinSelection 使用服务返回的目录名和 skin.lua；
 /// - 成功通知表达包已安装，返回值仍以皮肤应用结果为准。
 /// @warning 用户触发的低频路径：包含压缩包读取、目录写入和皮肤资源重载。
-bool SettingsView::importSkinPackage(const std::filesystem::path& packagePath)
+bool SettingsView::importSkinPackage(const std::filesystem::path& packagePath,
+                                     bool rememberDirectory)
 {
-    // 即使包校验失败也保留用户浏览目录，便于修正后重试。
-    rememberSkinPickerDirectory(packagePath);
+    // 普通选择保留浏览位置以便重试，系统只读缓存由外层用完即回收。
+    if ( rememberDirectory ) rememberSkinPickerDirectory(packagePath);
     const auto result = Config::SkinPackageService::importPackage(
         packagePath, Config::AppPaths::skinsRootPath());
     if ( !result.success ) {
@@ -393,31 +465,49 @@ bool SettingsView::importSkinPackage(const std::filesystem::path& packagePath)
 
 /// @brief 将当前皮肤目录打包到用户选择的 `.msk` 路径。
 /// @param outputPath 用户选择的目标路径。
+/// @param authorizedTarget true 时保留授权文件名，归档成功后发布给文档提供器。
 ///
 /// 输出扩展名统一规范化，SkinPackageService 负责实际打包和错误文本。成功后记住
 /// 目标父目录并显示完整路径，失败不更新最近目录。
+/// 系统授权目标跳过路径规范化和浏览历史更新。发布失败时保留完整归档供恢复，
+/// 只有归档未写成且平台确认外部文件仍为空时才清理占位。
 ///
 /// 导出结果约束：
 /// - 空输出路径直接进入失败分支；
 /// - 服务源目录取当前 SkinManager 已加载皮肤路径；
 /// - 错误详情为空时通知只显示通用失败文案；
 /// - 错误详情非空时追加到日志和中央通知；
-/// - 成功通知包含规范化后的完整目标路径；
+/// - 文件系统成功通知包含规范化路径，系统文档通知显示实际文件名；
 /// - 本函数不切换当前皮肤或刷新可用目录列表。
 /// @warning 用户触发的低频路径：包含皮肤目录扫描和压缩包写入。
 void SettingsView::exportCurrentSkinPackage(
-    const std::filesystem::path& outputPath)
+    const std::filesystem::path& outputPath, bool authorizedTarget)
 {
-    // 空目标在规范化后保持为空，并直接作为失败处理。
-    const auto  normalizedPath = normalizeSkinPackageOutputPath(outputPath);
+    // 文件系统选择允许补齐后缀；系统授权绑定原文件名，由服务校验该后缀。
+    const auto normalizedPath =
+        authorizedTarget ? outputPath
+                         : normalizeSkinPackageOutputPath(outputPath);
     std::string errorMessage;
-    const bool success = !normalizedPath.empty() &&
+    const bool written = !normalizedPath.empty() &&
                          Config::SkinPackageService::exportPackage(
                              Config::SkinManager::instance().getData().skinPath,
                              normalizedPath,
                              errorMessage);
+    // 只有 writer 完整关闭后才提交授权文档，发布失败时保留本地完整归档。
+    const bool success =
+        written && (!authorizedTarget ||
+                    Common::publishDocument(normalizedPath, errorMessage));
     if ( !success ) {
+        if ( authorizedTarget && !written ) {
+            // 仅平台确认仍为空的新建占位文件可以删除，已有内容留供恢复。
+            // 归档服务负责清理本地临时文件，这里只检查系统授权的占位目标。
+            std::string cleanupError;
+            if ( !Common::discardUnwrittenDocument(normalizedPath,
+                                                   cleanupError) )
+                XWARN("Failed to discard empty skin export: {}", cleanupError);
+        }
         // normalizedPath 用于日志，确保记录的是服务实际尝试的最终扩展名。
+        // 归档失败和发布失败共用通知，由实际失败的一层回传具体原因。
         XERROR("Failed to export skin package '{}': {}",
                Config::pathToUtf8(normalizedPath),
                errorMessage);
@@ -428,12 +518,15 @@ void SettingsView::exportCurrentSkinPackage(
         return;
     }
 
-    // 只有成功写出后才把目标目录设为下一次选择器起点。
-    rememberSkinPickerDirectory(normalizedPath);
+    // 系统授权工作副本位于私有目录，不作为下次文件浏览的起点。
+    // 用户在系统里只能按提供器名称定位，成功通知仅显示该名称。
+    if ( !authorizedTarget ) rememberSkinPickerDirectory(normalizedPath);
     showSkinNotification(
         std::string(
             TR_CACHE("ui.settings.software.skin.export_success").data()) +
-        ": " + Config::pathToUtf8(normalizedPath));
+        ": " +
+        Config::pathToUtf8(authorizedTarget ? normalizedPath.filename()
+                                            : normalizedPath));
 }
 
 }  // namespace MMM::UI
