@@ -3,9 +3,9 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
-    <!-- 母版保留原始路径，通过统一缩放与居中适配圆形和圆角矩形遮罩。 -->
-    <group android:scaleX="0.185625" android:scaleY="0.185625"
-        android:translateX="4.438125" android:translateY="6.10875">
+    <!-- 保留 SVG 路径和比例，在 66dp 圆形安全区内让两片标志的四角都有余量。 -->
+    <group android:scaleX="0.15" android:scaleY="0.15"
+        android:translateX="13.95" android:translateY="17.20">
         <path android:fillColor="#406F95"
             android:pathData="M128,104C114,94 96,101 96,121V365Q96,380 109,388L153,415Q164,422 164,407V245Q164,237 171,242L318,351Q328,359 328,346V275Q328,265 320,259Z" />
         <path android:fillColor="#A4C7DF"
