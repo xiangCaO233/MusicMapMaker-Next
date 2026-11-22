@@ -275,16 +275,16 @@ public:
                            uint32_t           frameIndex) override;
 
     /// @brief 获取当前帧可并行录制的离屏视图数量。
-    /// @return 当前可渲染视图序列的数量。
-    /// @warning 渲染热路径：每帧命令录制前调用，只读取稳定序列长度。
+    /// @return 当前帧需要录制离屏命令的视图数量。
+    /// @warning 渲染热路径：每帧派发前筛选一次，录制期间不修改任务序列。
     uint32_t getOffscreenRecordTaskCount() const override;
 
     /// @brief 录制指定可渲染视图的离屏命令。
     /// @param cmd 当前任务独占的命令缓冲。
     /// @param frameIndex 当前并发帧索引。
-    /// @param taskIndex 可渲染视图序列索引。
+    /// @param taskIndex 当前帧离屏任务序列索引。
     /// @warning 渲染热路径：可能在渲染线程池中执行，只能读取 UIManager
-    /// 的稳定视图表并录制对应视图。
+    /// 的稳定任务序列并录制对应视图。
     void onRecordOffscreenTask(vk::CommandBuffer& cmd, uint32_t frameIndex,
                                uint32_t taskIndex) override;
 
@@ -360,6 +360,9 @@ private:
 
     /// @brief 可再渲染ui接口注册顺序
     std::vector<std::string> m_renderableUiSequence;
+
+    /// @brief 主线程筛选的本帧离屏任务，工作线程完成前借用的视图保持有效。
+    mutable std::vector<IRenderableView*> m_frameOffscreenRecordViews;
 
     /// @brief 纹理加载器接口注册顺序
     std::vector<std::string> m_textureLoaderSequence;

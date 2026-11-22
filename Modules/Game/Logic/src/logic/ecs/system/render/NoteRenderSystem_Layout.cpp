@@ -2,6 +2,7 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 
 #include "common/render/CanvasCameraMath.h"
+#include "common/render/RenderSnapshot.h"
 #include "config/EditorConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/ecs/components/TimelineComponent.h"
@@ -15,7 +16,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <glm/glm.hpp>
 #include <limits>
 #include <numeric>
 #include <string_view>
@@ -28,6 +31,54 @@ namespace MMM::Logic::System
 
 namespace
 {
+
+/// @brief 底板平铺几何的全部输入，播放时间和投影矩阵不影响逻辑顶点。
+/// @details 同一谱面可同时拥有多个视口，不能以谱面路径或相机身份代替坐标比较。
+/// 窗口缩放、横向平移或切换皮肤后的首帧应按新输入重新生成。
+/// 逐项比较标量，不做近似量化。当前构建的 GLM 向量比较会漏掉变化的分量，
+/// 纵向拆分视图时即使左右边界相同，也必须让旧高度的底板失效。
+struct TrackBackgroundKey {
+    /// @brief 轨道数决定横向平铺次数。
+    int32_t trackCount{};
+    /// @brief 逻辑布局的左、上、下边界及单轨宽度。
+    std::array<float, 4> bounds{};
+    /// @brief 取自当前皮肤图集的纹理坐标与尺寸。
+    std::array<float, 4> uv{};
+    /// @brief 乘色包含各轨道区域各自的透明度。
+    std::array<float, 4> color{};
+    /// @brief 批处理器提交顶点前使用的纹理几何倍率。
+    float scale{};
+    /// @brief 批处理器按最终高度施加的垂直对齐偏移。
+    float offsetY{};
+
+    /// @brief 用实际几何输入判定能否原样复用顶点与索引。
+    bool operator==(const TrackBackgroundKey&) const = default;
+};
+
+/// @brief 保存底板的一段几何，独立于可被消费者回收的快照缓冲。
+/// @details 绘制命令由当前批处理器控制，因而同一段几何仍可使用不同的裁剪
+/// 区域和渲染状态。这样不会把旧快照中的命令区间带入新快照。
+/// 缓存保留图元顺序，以维持相邻半透明纹理块的叠加结果。
+struct TrackBackgroundMesh {
+    /// @brief 空几何表示该槽位还未使用。
+    TrackBackgroundKey key;
+    /// @brief 含原平铺接缝和部分纹理块的最终逻辑顶点。
+    std::vector<Common::Render::CanvasVertex> vertices;
+    /// @brief 保留生成时的快照索引，以便相同基址时整段复制。
+    std::vector<uint32_t> indices;
+    /// @brief 索引所属的快照顶点基址。
+    uint32_t vertexBase{};
+};
+
+/// @brief 每个生成线程复用最近的轨道布局，互不等待，也不持有会话资源。
+/// @details 兼容同线程交替生成多个相机，也支持截图等独立工作线程。
+/// 线程退出时释放容量；切换会话或关闭视图不需要额外清理协议。
+struct TrackBackgroundCache {
+    /// @brief 槽位覆盖主画布和常用对比视图各自的玩家、草稿和 BGM 区域。
+    std::array<TrackBackgroundMesh, 16> meshes;
+    /// @brief 布局或皮肤变化时循环替换旧槽，避免持续拖动造成缓存增长。
+    std::size_t next{};
+};
 
 /// @brief 计算自动显示模式下指定分拍线的附加不透明度。
 /// @param distanceToCursor 分拍线到光标中心的垂直像素距离。
@@ -211,7 +262,7 @@ void NoteRenderSystem::renderTrackLayout(
 /// @pre topY 不大于 bottomY，纹理 UV 对应当前固定规格图集。
 /// @note 函数不主动 flush，后续图元可继续由批处理器合并提交。
 /// @note 平铺相位固定在底边，不跟随谱面播放时间变化。
-/// @warning 渲染热路径只按可绘制区域平铺，不请求纹理或创建独立缓冲。
+/// @warning 快照生成热路径按布局复用底板几何，无锁；仅按需扩展有上限的缓存。
 void NoteRenderSystem::drawTrackBackground(Batcher& batcher, int32_t trackCount,
                                            float leftX, float topY,
                                            float bottomY, float singleTrackW,
@@ -237,6 +288,47 @@ void NoteRenderSystem::drawTrackBackground(Batcher& batcher, int32_t trackCount,
 
     // 亚像素高度会导致单轨生成过多图元；这里只画高度超过一像素的块。
     if ( drawH <= 1.0f ) return;
+
+    // 底板不使用相机厚度补偿。镜头投影和裁剪仍由该快照的绘制命令控制。
+    const auto&              uv = uvIt->second;
+    const TrackBackgroundKey key{ trackCount,
+                                  { leftX, topY, bottomY, singleTrackW },
+                                  { uv.x, uv.y, uv.z, uv.w },
+                                  { color.r, color.g, color.b, color.a },
+                                  batcher.m_textureScale,
+                                  batcher.m_noteTextureOffsetY };
+    static thread_local TrackBackgroundCache cache;
+    auto&      vertices    = batcher.snapshot->vertices;
+    auto&      indices     = batcher.snapshot->indices;
+    const auto vertexStart = vertices.size();
+    const auto indexStart  = indices.size();
+    const auto vertexBase  = static_cast<uint32_t>(vertexStart);
+    for ( const auto& mesh : cache.meshes ) {
+        if ( mesh.vertices.empty() || !(mesh.key == key) ) continue;
+
+        // 保留前面同批图元的区间起点；索引仍指向当前快照的顶点缓冲。
+        if ( batcher.currentCmd.indexCount == 0 ) {
+            batcher.currentCmd.indexOffset = static_cast<uint32_t>(indexStart);
+        }
+        vertices.insert(
+            vertices.end(), mesh.vertices.begin(), mesh.vertices.end());
+        if ( mesh.vertexBase == vertexBase ) {
+            indices.insert(
+                indices.end(), mesh.indices.begin(), mesh.indices.end());
+        } else {
+            // 同一布局前面的轨道区域可能不同，按当前快照基址整体重定位。
+            const uint32_t baseDelta = vertexBase - mesh.vertexBase;
+            indices.resize(indexStart + mesh.indices.size());
+            std::transform(
+                mesh.indices.begin(),
+                mesh.indices.end(),
+                indices.data() + indexStart,
+                [baseDelta](uint32_t index) { return index + baseDelta; });
+        }
+        batcher.currentCmd.indexCount +=
+            static_cast<uint32_t>(mesh.indices.size());
+        return;
+    }
 
     // UV 内缩半像素，防止线性采样混入相邻图集条目。
     const float halfPixelU = 0.5f / 2048.0f;
@@ -281,6 +373,20 @@ void NoteRenderSystem::drawTrackBackground(Batcher& batcher, int32_t trackCount,
             currentY -= drawH;
         }
     }
+
+    // 超大布局沿用原输出，但不在每个生成线程长期保留额外副本。
+    // 从输出缓冲只保存本次新增范围，其他区域和动态物件始终由各自阶段生成。
+    constexpr std::size_t MAX_CACHED_VERTICES = 16'384;
+    const auto            vertexCount         = vertices.size() - vertexStart;
+    if ( vertexCount == 0 || vertexCount > MAX_CACHED_VERTICES ) return;
+    auto& mesh      = cache.meshes[cache.next];
+    mesh.key        = key;
+    mesh.vertexBase = vertexBase;
+    mesh.vertices.assign(vertices.data() + vertexStart,
+                         vertices.data() + vertices.size());
+    mesh.indices.assign(indices.data() + indexStart,
+                        indices.data() + indices.size());
+    cache.next = (cache.next + 1) % cache.meshes.size();
 }
 
 /// @brief 在判定线位置绘制各轨判定区，缺少纹理时退回贯穿轨道的细线。

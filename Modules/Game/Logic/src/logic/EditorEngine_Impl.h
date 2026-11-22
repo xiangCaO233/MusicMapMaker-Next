@@ -111,10 +111,10 @@ struct EditorEngine::Impl {
     /// 与播放切换命令判断，使用原子是为了避开会话更新期间的长锁等待。
     std::atomic<bool> m_activePlaybackPlaying{ false };
 
-    /// @brief 活动会话的谱面存在状态，供逐帧菜单可用性判定。
-    /// @warning 逻辑线程每 update 写入、UI 每帧读取 relaxed；避免菜单读取
-    /// currentBeatmap 时等待逻辑线程整个 update 周期持有的注册表锁。
-    std::atomic<bool> m_activeHasBeatmap{ false };
+    /// @brief 活动谱面的玩家轨道数，零同时表示活动会话未载谱。
+    /// @warning 逻辑线程每 update 及会话切换时写入，UI 每帧 relaxed 读取；
+    /// 菜单和工具栏只需标量，不能为此等待会话注册表长锁。
+    std::atomic<int32_t> m_activeBeatmapTrackCount{ 0 };
 
     /// @brief 活动会话是否选中了 Note 或 Sample，供菜单显示可用状态。
     /// @warning 逻辑线程每 update 写入、UI 每帧读取 relaxed；选择只在
