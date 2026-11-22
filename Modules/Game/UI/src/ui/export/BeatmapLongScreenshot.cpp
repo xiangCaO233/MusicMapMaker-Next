@@ -4,6 +4,8 @@
 /// 同一张 RGBA 图集服务每个分列，编码线程不依赖可变会话或渲染资源。
 /// 每个列保留批次、裁剪范围和时间标记，底板及贴图颜色以同一顺序合成。
 /// 压缩器逐行消费图像，整个高度不参与像素缓冲分配。
+/// 预览沿用成品行的坐标，仅着色实际显示的采样点，避免先编码再解码整图。
+/// 时间倍率单独参与纵向映射；轨道宽度同时决定音符形状和网格的横向布局。
 /// 在暂存目录完整写出并关流后才提交；系统文档的发布是独立一步。
 #include "ui/export/BeatmapLongScreenshot.h"
 
@@ -36,6 +38,7 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -48,9 +51,7 @@ namespace MMM::UI
 namespace
 {
 
-/// @brief 固定时间比例，图片可直接对照编辑器从下往上读谱。
-// 每列采用同一纵向比例。比例大于常见密集分拍所需的最小间距，
-// 避免默认皮肤下把相邻短音符糊成同一色块。
+/// @brief 100% 时每秒占据的像素；所有列共用用户指定的时间比例。
 constexpr int PIXELS_PER_SECOND = 480;
 /// @brief 轨宽留出绘制长条、端点和箭头的横向间距。
 constexpr int LANE_WIDTH = 66;
@@ -68,7 +69,10 @@ constexpr int MIN_CARD_WIDTH = 286;
 constexpr int LABEL_HEIGHT = 40;
 /// @brief 保持通用查看器可处理的像素预算。
 constexpr double MAX_PIXELS = 160000000.0;
-using Color                 = std::array<unsigned char, 3>;
+/// @brief 预览纹理最长边，缩略采样只需要一行完整的成品缓冲。
+/// @note 宽高都适用同一上限，因此外接高 DPI 屏幕也不会触发原尺寸成品上传。
+constexpr int PREVIEW_EDGE = 1440;
+using Color                = std::array<unsigned char, 3>;
 using Common::Render::CanvasVertex;
 using Common::Render::TextureID;
 /// @brief 用于无轨道部分、页间距和署名空间的底色。
@@ -314,6 +318,7 @@ bool layoutWatermarks(const BeatmapScreenshotImage& chart, int width,
 
 /// @brief 将一个水印扫描行合成到底色，只读取当前行所需的字形像素。
 /// @param y 图像从顶部开始的扫描行号。
+/// @note 水印和时间标签共用页眉，写入顺序不依赖预览是否采样该部分。
 /// @param row 已铺好底色的像素缓冲区。
 /// @param glyphs 已解析的字形位置及对应 RGBA 位图。
 /// @note 这里只混合本行命中的字形，字体像素不另作屏幕纹理。
@@ -354,6 +359,23 @@ int cardWidth(int trackWidth)
     return std::max(MIN_CARD_WIDTH, trackWidth + MARGIN);
 }
 
+/// @brief 轨道高度包含上下各半轨空隙，保留边界音符的完整贴图。
+/// @param duration 只取当前列的实际时长，不将短末列补满。
+/// @param pixelsPerSecond 已验证的正比例，不受用户界面 DPI 影响。
+/// @return 含边距的整数像素高度，使用 double 保留尺寸预算校验的安全空间。
+double trackHeight(double duration, double pixelsPerSecond)
+{
+    return std::max(1.0, std::ceil(duration * pixelsPerSecond)) + LANE_WIDTH;
+}
+
+/// @brief 预览与保存使用同一页眉高度，每张图只为已开启的水印留位置。
+/// @param watermarkLines 开启且有内容的署名行数，空作者名不占空间。
+/// @return 轨道之前的像素高度，包含所有列共用的时间栏。
+int headerHeight(int watermarkLines)
+{
+    return LABEL_HEIGHT + WATERMARK_LINE * watermarkLines;
+}
+
 /// @brief 生成分秒标签并保留四位小数；负时间和超过 60 分钟的值也可读。
 /// @param seconds 相对于歌曲原点的秒数。
 /// @return 可带负号的累计分钟和四位小数秒。
@@ -372,15 +394,13 @@ std::string timeLabel(double seconds)
 
 /// @brief 固定当前皮肤的 RGBA 像素，批次和像素使用同一编号及 UV。
 /// @details 图集内预留间隔，插值采样不会把两个不相干的物件纹理混到一起。
-/// @param atlas 组装后的 RGBA8 皮肤像素。
-/// @param scene 使用其语义纹理到归一化 UV 的映射。
+/// @param atlas 组装后的 RGBA8 皮肤像素和归一化 UV。
 /// @return 音符所需的正式皮肤资源已准备完成时返回 true。
 /// @details 文件尺寸限制先于读取，像素尺寸限制先于解码。
 /// 图集与正常 Batcher 尺寸相同，UV 宽高比保留原皮肤的像素比例。
 /// 条目分配采用分行安放并留下采样间隙，避免双线性滤波混入邻图。
 /// 连接体和点贴图共用一张图集，避免不同列使用不同代际的皮肤。
-bool loadAtlas(std::vector<unsigned char>&     atlas,
-               Common::Render::RenderSnapshot& scene)
+bool fillAtlas(BeatmapScreenshotAtlas& atlas)
 {
     // 资产表须与 Basic2DCanvas 的同名纹理身份保持一致。
     // 两端箭头分别装载，避免在导出时自行镜像一张不对称贴图。
@@ -396,10 +416,10 @@ bool loadAtlas(std::vector<unsigned char>&     atlas,
         std::pair{ TextureID::FlickArrowRight, "note.arrowright" },
         std::pair{ TextureID::Track, "panel.track.background" },
     };
-    atlas.resize(ATLAS_SIZE * ATLAS_SIZE * 4);
+    atlas.m_pixels.resize(ATLAS_SIZE * ATLAS_SIZE * 4);
     // 无材质批次采样纯白，由顶点颜色决定最终显示色。
-    atlas[0] = atlas[1] = atlas[2] = atlas[3] = 255;
-    scene.uvMap.emplace(
+    std::fill_n(atlas.m_pixels.begin(), 4, 255);
+    atlas.m_uvMap.emplace(
         static_cast<unsigned>(TextureID::None),
         glm::vec4{ 0, 0, 1.0f / ATLAS_SIZE, 1.0f / ATLAS_SIZE });
     const auto& paths = Config::SkinManager::instance().getData().assetPaths;
@@ -444,10 +464,11 @@ bool loadAtlas(std::vector<unsigned char>&     atlas,
         // 只复制有效纹理像素，图集填充区保持透明。
         for ( int row = 0; row < height; ++row ) {
             const auto dst = ((y + row) * ATLAS_SIZE + x) * 4;
-            std::copy_n(
-                data.get() + row * width * 4, width * 4, atlas.begin() + dst);
+            std::copy_n(data.get() + row * width * 4,
+                        width * 4,
+                        atlas.m_pixels.begin() + dst);
         }
-        scene.uvMap.emplace(
+        atlas.m_uvMap.emplace(
             static_cast<unsigned>(id),
             glm::vec4{ static_cast<float>(x) / ATLAS_SIZE,
                        static_cast<float>(y) / ATLAS_SIZE,
@@ -581,6 +602,7 @@ public:
             }
         }
         // 索引排序只决定何时加入，绘制仍按照原始批次的顺序。
+        // 这个顺序对跳行的预览同样适用，可一次丢弃已结束的图元。
         std::stable_sort(
             m_order.begin(), m_order.end(), [this](auto a, auto b) {
                 return m_quads[a].m_top < m_quads[b].m_top;
@@ -588,14 +610,18 @@ public:
     }
 
     /// @brief 合成正式画布的一行，颜色乘色及 Alpha 与普通画布一致。
-    /// @param y 本列局部像素行号，必须连续递增。
+    /// @param y 本列局部像素行号，按递增顺序推进；预览允许跳行。
     /// @param pixels 此列占有的行内范围，不含左右页间距。
     /// @param atlas 只读皮肤图集，在本次导出所有列之间共用。
+    /// @param sampleXs 整图的预览采样点，按升序排列；为空时绘制全部像素。
+    /// @param left 轨道在整图中的起始横坐标，将预览采样点换算为局部坐标。
     /// @details 先重建活动索引再按顺序绘制，结束的长条立即退出集合。
     /// 像素中心反求纹理内的位置，透明像素按照顶点色叠在既有像素上。
     /// @note 上层可在同一行依次提交多列，列之间没有共享扫描状态。
+    /// @pre 稀疏采样点与成品列使用相同的横坐标系，并且只读当前行中所需位置。
     void draw(int y, std::span<Color> pixels,
-              std::span<const unsigned char> atlas)
+              std::span<const unsigned char> atlas,
+              std::span<const int> sampleXs, int left)
     {
         std::fill(pixels.begin(), pixels.end(), TRACK_BACKGROUND);
         std::erase_if(m_active,
@@ -603,6 +629,8 @@ public:
         while ( m_next < m_order.size() &&
                 m_quads[m_order[m_next]].m_top <= y ) {
             const auto index = m_order[m_next++];
+            // 预览跳过的行可能包含整个图元；不要把它加入本行活动集合。
+            if ( m_quads[index].m_bottom <= y ) continue;
             m_active.insert(
                 std::lower_bound(m_active.begin(), m_active.end(), index),
                 index);
@@ -613,15 +641,15 @@ public:
             // 列内同一行所有像素共享 Y 偏移，
             // 使用每个像素的 X 偏移反求两个纹理轴。
             const float dy = y + 0.5f - p.pos.y;
-            for ( int x = q.m_left;
-                  x < std::min(q.m_right, static_cast<int>(pixels.size()));
-                  ++x ) {
+            const int   right =
+                std::min(q.m_right, static_cast<int>(pixels.size()));
+            const auto shade = [&](int x) {
                 const float dx = x + 0.5f - p.pos.x;
                 const float s  = q.m_ax * dx + q.m_ay * dy;
                 const float t  = q.m_bx * dx + q.m_by * dy;
                 // 包围矩形可能含有斜接段之外的像素；用局部坐标确认实际覆盖。
                 // 这份裁剪与时间窗边界独立，避免移除斜边内部仍应绘制的区域。
-                if ( s < 0 || s > 1 || t < 0 || t > 1 ) continue;
+                if ( s < 0 || s > 1 || t < 0 || t > 1 ) return;
                 const auto tex =
                     sampleAtlas(atlas, p.uv.u + q.m_u * s, p.uv.v + q.m_v * t);
                 const auto alpha =
@@ -634,6 +662,17 @@ public:
                         std::lerp(pixels[x][k],
                                   tex[k] * std::clamp(tint[k], 0.0f, 1.0f),
                                   alpha)));
+            };
+            if ( sampleXs.empty() ) {
+                for ( int x = q.m_left; x < right; ++x ) shade(x);
+            } else {
+                // 跳过预览不会读取的列像素，同时沿用对应成品像素的中心和混色。
+                // 二分首个采样点，细轨道或小物件不必逐个测试整张缩略图的横坐标。
+                for ( auto it = std::lower_bound(
+                          sampleXs.begin(), sampleXs.end(), left + q.m_left);
+                      it != sampleXs.end() && *it < left + right;
+                      ++it )
+                    shade(*it - left);
             }
         }
     }
@@ -679,91 +718,124 @@ void labelGlyphs(const Graphic::RasterizedAsciiFont& font,
     }
 }
 
-/// @brief 逐行编码，末列不足设定时长时底部留空，不伸缩该列的物件或时间刻度。
+/// @brief 预览和 PNG 共用成品坐标及合成顺序，只持有一行 RGB 像素。
+/// @details 字体位图的生命周期覆盖全部行；同一列的扫描状态不参与其他列合成。
+/// 此对象一次性持有栅格阶段的可变状态，不能跨线程复用或反向重扫。
+/// 合成在成品坐标下完成，缩略图抽样不会改变部件的叠放顺序。
+class ScreenshotRasterizer
+{
+public:
+    /// @brief 输入内容已校验，首列决定画面高度，短末列保留整图底色。
+    /// @param image 调用方持有的固定几何，须覆盖准备和逐行合成的整个生命周期。
+    explicit ScreenshotRasterizer(const BeatmapScreenshotImage& image)
+        : m_image(image)
+        , m_spacing(cardWidth(image.m_columnWidth))
+        , m_top(headerHeight(image.m_showMmm + !image.m_author.empty()))
+        , m_size{ static_cast<int>(image.m_columns.size()) * m_spacing + MARGIN,
+                  m_top + image.m_columns.front().m_height + MARGIN,
+                  static_cast<int>(image.m_columns.size()) }
+    {
+    }
+
+    /// @brief 返回含水印和边距的实际尺寸。
+    /// @return 成品像素宽高和非零列数；预览只用它计算抽样坐标。
+    BeatmapScreenshotSize size() const { return m_size; }
+
+    /// @brief 加载字体和列批次；取消时尽快让出后台线程给更新的预览。
+    /// @param stop 所属任务的停止状态，用于形状较多的多列谱面。
+    /// @note 准备完成前字体对象必须稳定，因为标签布局保存了字形位图的地址。
+    /// @return 字体和全部列都可消费时返回 true，失败时不会开始写文件。
+    bool prepare(std::stop_token stop)
+    {
+        if ( !layoutWatermarks(
+                 m_image, m_size.m_width, m_ascii, m_unicode, m_glyphs) )
+            return false;
+        m_rasterizers.reserve(m_image.m_columns.size());
+        for ( std::size_t col = 0; col < m_image.m_columns.size(); ++col ) {
+            if ( stop.stop_requested() ) return false;
+            m_rasterizers.emplace_back(m_image.m_columns[col]);
+            labelGlyphs(m_ascii,
+                        m_image.m_columns[col].m_label,
+                        MARGIN + static_cast<int>(col) * m_spacing,
+                        m_top - 13,
+                        m_glyphs);
+        }
+        return true;
+    }
+
+    /// @brief 合成一行，调用方须按行号递增推进各列的扫描状态。
+    /// @param y 成品图片的绝对行号，水印和轨道使用同一坐标空间。
+    /// @param row 宽度与成品图一致的复用缓冲，不能跨行保留上一次结果。
+    /// @param sampleXs 指定预览所需的列像素，空值用于完整 PNG。
+    /// @details 缩略图的未采样位置只填底色。外框和页眉仍沿用完整扫描，
+    /// 因此它们不依赖轨道内的稀疏采样列表。
+    void drawRow(int y, std::span<Color> row,
+                 std::span<const int> sampleXs = {})
+    {
+        std::ranges::fill(row, BACKGROUND);
+        // 水印和时间栏在所有轨道上方，不会盖住选区边界的物件。
+        if ( y < m_top ) drawWatermarks(y, row, m_glyphs);
+        const int dy = y - m_top;
+        if ( dy < -COLUMN_BORDER_WIDTH ) return;
+        for ( std::size_t col = 0; col < m_rasterizers.size(); ++col ) {
+            const int height = m_image.m_columns[col].m_height;
+            if ( dy >= height + COLUMN_BORDER_WIDTH ) continue;
+            const int left = MARGIN + static_cast<int>(col) * m_spacing +
+                             (m_spacing - MARGIN - m_image.m_columnWidth) / 2;
+            // 向外描边以保留轨道宽度和靠边的物件；末列底边跟随实际时长。
+            auto frame =
+                row.subspan(left - COLUMN_BORDER_WIDTH,
+                            m_image.m_columnWidth + 2 * COLUMN_BORDER_WIDTH);
+            if ( dy < 0 || dy >= height ) {
+                // 只显示边框的行没有轨道内容，也不能推进轨道的活动图元。
+                std::ranges::fill(frame, COLUMN_BORDER);
+                continue;
+            }
+            std::ranges::fill(frame.first(COLUMN_BORDER_WIDTH), COLUMN_BORDER);
+            std::ranges::fill(frame.last(COLUMN_BORDER_WIDTH), COLUMN_BORDER);
+            m_rasterizers[col].draw(
+                dy,
+                frame.subspan(COLUMN_BORDER_WIDTH, m_image.m_columnWidth),
+                m_image.m_atlas->m_pixels,
+                sampleXs,
+                left);
+        }
+    }
+
+private:
+    const BeatmapScreenshotImage&  m_image;        ///< 任务拥有的不可变输入。
+    int                            m_spacing;      ///< 单列连同留白的步长。
+    int                            m_top;          ///< 所有轨道的起始行。
+    BeatmapScreenshotSize          m_size;         ///< 成品图布局。
+    Graphic::RasterizedAsciiFont   m_ascii;        ///< 时间栏和英文署名。
+    Graphic::RasterizedUnicodeFont m_unicode;      ///< 署名使用的稀疏字形。
+    std::vector<Glyph>             m_glyphs;       ///< 借用上述字形的排版。
+    std::vector<ColumnRasterizer>  m_rasterizers;  ///< 各列独立的行扫描状态。
+};
+
+/// @brief 逐行编码；完整 PNG 就绪后才由调用方发布。
 /// @param image 准备好的画布列表、皮肤和字体路径。
 /// @param temp 暂存目录中的 PNG。
 /// @param stop 由工作线程拥有者传递的取消状态。
-/// @return 关闭 PNG 后才返回 Saved；此时尚未写回系统文档。
-/// @details 首列决定输出高度，末列使用实际秒数和相同像素比例。
-/// 没有物件的余下图像区域继续使用整图底色。
-/// 每个绘制器只按该列的局部行号推进。
-/// 外框使用原有边距与时间栏余量，输出尺寸和像素预算沿用原布局。
-/// 整行合成后过滤再压缩，确保列顺序、边距和水印不会乱序。
+/// @return 关闭 PNG 流后才能返回 Saved；最终路径由上层单独提交。
+/// @details 行合成只读导出快照，整个编码过程不占用编辑会话锁。
+/// 写入失败由上层撤销暂存路径，因此扫描器不用知道成品是否覆盖已有文件。
 ScreenshotResult encode(const BeatmapScreenshotImage& image,
                         const std::filesystem::path& temp, std::stop_token stop)
 {
-    // 宽度包含所有列及相邻列间的空白；短列不补轨道底板。
-    // 高度使用首列，因为只有最右末列可能不足设定时长。
-    const int spacing = cardWidth(image.m_columnWidth);
-    // 以总列数计算宽度；只消耗本行的这段空间。
-    // 不需要按最终成品的尺寸创建一个 GPU 纹理。
-    const int width =
-        static_cast<int>(image.m_columns.size()) * spacing + MARGIN;
-    // 单独的时间栏始终存在，两个可选署名不挤占轨道高度。
-    // 无署名的图依然保留可读的起止时间。
-    const int top = LABEL_HEIGHT + WATERMARK_LINE * (image.m_showMmm +
-                                                     !image.m_author.empty());
-    const int height = top + image.m_columns.front().m_height + MARGIN;
-    Graphic::RasterizedAsciiFont   ascii;
-    Graphic::RasterizedUnicodeFont unicode;
-    std::vector<Glyph>             glyphs;
-    if ( !layoutWatermarks(image, width, ascii, unicode, glyphs) )
-        return ScreenshotResult::FontError;
-
-    // 每列批次独立排序并保留自己的活动集合。
-    // 这样相邻列即使同时含一个长条，也不会消费彼此的裁剪。
-    std::vector<ColumnRasterizer> rasterizers;
-    for ( std::size_t col = 0; col < image.m_columns.size(); ++col ) {
-        rasterizers.emplace_back(image.m_columns[col]);
-        labelGlyphs(ascii,
-                    image.m_columns[col].m_label,
-                    MARGIN + static_cast<int>(col) * spacing,
-                    top - 13,
-                    glyphs);
-    }
-
+    ScreenshotRasterizer rasterizer(image);
+    if ( !rasterizer.prepare(stop) )
+        return stop.stop_requested() ? ScreenshotResult::Cancelled
+                                     : ScreenshotResult::FontError;
+    const auto [width, height, columns] = rasterizer.size();
     PngWriter png(temp);
     if ( !png.begin(width, height) ) return ScreenshotResult::WriteError;
     std::vector<Color>         row(width);
     std::vector<unsigned char> bytes(1 + 3 * row.size());
     // 行缓冲和当前活跃图元独立于 PNG 高度，避免成图后才整体压缩。
     for ( int y = 0; y < height; ++y ) {
-        // 取消在写成品前检查。
-        // 终止过程中临时图由守卫清理，用户路径保留原文件。
         if ( stop.stop_requested() ) return ScreenshotResult::Cancelled;
-        std::fill(row.begin(), row.end(), BACKGROUND);
-        // 轨道从时间栏之后开始，防止长图裁切时标签落在节点上。
-        if ( y < top ) drawWatermarks(y, row, glyphs);
-
-        const int dy = y - top;
-        if ( dy >= -COLUMN_BORDER_WIDTH ) {
-            for ( std::size_t col = 0; col < image.m_columns.size(); ++col ) {
-                const int trackHeight = image.m_columns[col].m_height;
-                // 末列的底边跟随实际轨道高度，以下继续留空。
-                if ( dy >= trackHeight + COLUMN_BORDER_WIDTH ) continue;
-                const auto left = MARGIN + col * spacing +
-                                  (spacing - MARGIN - image.m_columnWidth) / 2;
-                // 在现有间距中向外描边，保留轨道范围和边缘物件。
-                auto frame = std::span(row).subspan(
-                    left - COLUMN_BORDER_WIDTH,
-                    image.m_columnWidth + 2 * COLUMN_BORDER_WIDTH);
-                if ( dy < 0 || dy >= trackHeight ) {
-                    // 顶边与底边不推进轨道栅格器，保留每列的局部扫描顺序。
-                    std::ranges::fill(frame, COLUMN_BORDER);
-                } else {
-                    // 中间行只填两侧，并将原尺寸的内部区间交回轨道栅格器。
-                    // 轨道本身保留皮肤的轨道线和分拍线配色。
-                    std::ranges::fill(frame.first(COLUMN_BORDER_WIDTH),
-                                      COLUMN_BORDER);
-                    std::ranges::fill(frame.last(COLUMN_BORDER_WIDTH),
-                                      COLUMN_BORDER);
-                    rasterizers[col].draw(
-                        dy,
-                        frame.subspan(COLUMN_BORDER_WIDTH, image.m_columnWidth),
-                        image.m_atlas);
-                }
-            }
-        }
+        rasterizer.drawRow(y, row);
 
         // Sub 过滤有利于压缩横向重复像素，保持 PNG 无损。
         // Sub 滤波按同一通道的相邻像素做差。
@@ -819,48 +891,83 @@ struct StagingDirectory {
 };
 }  // namespace
 
-/// @brief 校验输出范围，限制横向分列后的整体图片尺寸。
-/// @param lanes 可见正式轨道数量。
-/// @param begin 起始时间，以秒计。
-/// @param end 结束时间，必须晚于起点。
-/// @param columnSeconds 单列时长上限，参与宽度和高度的预算。
-/// @return 像素总数在上限内且输入为可用时间时返回 true。
-/// @note 为两个水印预留预算，单独开关不改变有效时段。
-bool validScreenshotRange(int lanes, double begin, double end,
-                          int columnSeconds)
+/// @brief 快速推导图像宽高，预览尺寸提示与保存前的预算使用同一公式。
+/// @param lanes 图内正式轨道数。
+/// @param begin 选区起点，单位秒。
+/// @param end 选区终点，单位秒。
+/// @param columnSeconds 一列最多包含的整数秒数。
+/// @param timelineZoomPercent 一秒的成品纵距相对于默认刻度的百分比。
+/// @param watermarkLines 参与最终排版的实际署名行数。
+/// @return 有效尺寸；不为超预算或无效输入分配内存。
+/// @warning 热路径可以连续更新数字，只做常量时间的标量运算。
+std::optional<BeatmapScreenshotSize> estimateBeatmapScreenshot(
+    int lanes, double begin, double end, int columnSeconds,
+    double timelineZoomPercent, int watermarkLines)
 {
     if ( lanes <= 0 || lanes > 64 || !std::isfinite(begin) ||
          !std::isfinite(end) || std::abs(begin) > 1e8 || std::abs(end) > 1e8 ||
-         end <= begin || columnSeconds <= 0 )
-        return false;
-    // 预算和生成使用同一列时长，较短的列会增加总宽度。
-    const auto width = std::ceil((end - begin) / columnSeconds) *
-                           cardWidth(lanes * LANE_WIDTH) +
-                       MARGIN;
-    const auto height =
-        std::ceil(std::min(end - begin, static_cast<double>(columnSeconds)) *
-                  PIXELS_PER_SECOND) +
-        LABEL_HEIGHT + 2 * WATERMARK_LINE + MARGIN + LANE_WIDTH;
-    // 水印和时间栏逐图绘制，不能按每列分别计算其垂直开销。
-    return width * height <= MAX_PIXELS;
+         end <= begin || columnSeconds <= 0 || watermarkLines < 0 ||
+         watermarkLines > 2 || !std::isfinite(timelineZoomPercent) ||
+         timelineZoomPercent <= 0.0 )
+        return std::nullopt;
+    // 不限制常用倍率范围；只排除画布浮点比例无法表达的值。
+    // 先用 double 验证乘积，避免将非有限或越界数值转换给画布。
+    // 改变时间尺度不会影响用于确定音符贴图大小的轨宽。
+    const double rate = timelineZoomPercent * (PIXELS_PER_SECOND / 100.0);
+    if ( rate > std::numeric_limits<float>::max() ||
+         static_cast<float>(rate) <= 0.0f )
+        return std::nullopt;
+    const double duration = end - begin;
+    // 可表示的最小时段仍需要一列；避免次正规浮点数除以整数后成为零。
+    const double columns = std::max(1.0, std::ceil(duration / columnSeconds));
+    const double width   = columns * cardWidth(lanes * LANE_WIDTH) + MARGIN;
+    const double height =
+        trackHeight(std::min(duration, static_cast<double>(columnSeconds)),
+                    rate) +
+        headerHeight(watermarkLines) + MARGIN;
+    // 在转为整数前检查预算；宽高均为正数，乘积也同时限制单边大小。
+    // 首列始终具有最大时长；末列实际时长只影响该列的内部下沿。
+    if ( width * height > MAX_PIXELS ) return std::nullopt;
+    return BeatmapScreenshotSize{ static_cast<int>(width),
+                                  static_cast<int>(height),
+                                  static_cast<int>(columns) };
+}
+
+/// @brief 显式打开导出时准备共用图集，后续参数变动继续借用同一批像素。
+/// @return 完整的只读图集；缺少必需的皮肤纹理时返回空。
+/// @warning 用户触发的低频入口，读取并解码当前皮肤素材。
+std::shared_ptr<const BeatmapScreenshotAtlas> loadBeatmapScreenshotAtlas()
+{
+    auto atlas = std::make_shared<BeatmapScreenshotAtlas>();
+    if ( !fillAtlas(*atlas) ) return {};
+    return atlas;
 }
 
 /// @brief 使用真实皮肤、普通画布渲染器及线性时间生成独立的导出批次。
 /// @param chart 从当前编辑会话取得、包含未保存修改的快照。
 /// @param config 提供普通画布的物件尺寸、乘色、对齐和分拍规则。
+/// @param atlas 对话框已经读取的皮肤，也可由调用方在首次准备时加载。
 /// @return 可以脱离会话独立渲染的全部分列，失败时返回空。
 /// @details 私有注册表用线性时间，保留 BPM 曲线而不应用滚速效果。
 /// 输出按时间向右排列，每列内仍从下向上读谱。
 /// 缩短的最后一列不改变时间比例，选区边界运用普通贴图裁剪。
-/// @note 会获取当前皮肤文件，只能由用户已经确认的导出入口调用。
+/// @note 复用已有图集时不访问磁盘，仍在 UI 线程查询皮肤几何规则。
+/// @warning 只在草稿提交或参数变化后的低频重建中排序，不在普通绘制时调用。
+/// @details 批次始终生成在成品坐标中，不读取桌面 DPI、预览面板尺寸或 GPU 状态。
 std::optional<BeatmapScreenshotImage> prepareBeatmapScreenshot(
-    const BeatmapScreenshot& chart, const Config::EditorConfig& config)
+    const BeatmapScreenshot& chart, const Config::EditorConfig& config,
+    std::shared_ptr<const BeatmapScreenshotAtlas> atlas)
 {
-    // 先限制尺寸再加载皮肤，非法范围不会读取任意图像数据。
-    // 选择太长的区间可以缩短，自定义样式和源谱面无需调整。
-    if ( !validScreenshotRange(
-             chart.m_lanes, chart.m_begin, chart.m_end, chart.m_columnSeconds) )
-        return std::nullopt;
+    const auto size =
+        estimateBeatmapScreenshot(chart.m_lanes,
+                                  chart.m_begin,
+                                  chart.m_end,
+                                  chart.m_columnSeconds,
+                                  chart.m_timelineZoomPercent,
+                                  chart.m_showMmm + !chart.m_author.empty());
+    if ( !size ) return std::nullopt;
+    if ( !atlas ) atlas = loadBeatmapScreenshotAtlas();
+    if ( !atlas ) return std::nullopt;
     BeatmapScreenshotImage image;
     image.m_columnWidth = chart.m_lanes * LANE_WIDTH;
     image.m_showMmm     = chart.m_showMmm;
@@ -868,8 +975,8 @@ std::optional<BeatmapScreenshotImage> prepareBeatmapScreenshot(
     image.m_asciiFont   = chart.m_asciiFont;
     image.m_cjkFont     = chart.m_cjkFont;
 
-    Common::Render::RenderSnapshot atlasScene;
-    if ( !loadAtlas(image.m_atlas, atlasScene) ) return std::nullopt;
+    image.m_atlas = std::move(atlas);
+    // 本轮所有列使用一致的 UV；批次不能与另一份皮肤图集分别刷新。
     // 使用一份会话样式的值副本。
     // 分拍显示、皮肤颜色、部件尺寸和对齐仍由原配置决定。
     // 线性映射只在这份私有导出参数里启用，每列时间刻度相同。
@@ -931,13 +1038,19 @@ std::optional<BeatmapScreenshotImage> prepareBeatmapScreenshot(
     }
     std::vector<entt::entity> visible;
     const double              columnSeconds = chart.m_columnSeconds;
-    const auto                count         = static_cast<int>(
-        std::ceil((chart.m_end - chart.m_begin) / columnSeconds));
+    const int                 count         = size->m_columns;
+    const double              duration      = chart.m_end - chart.m_begin;
+    const double              rate =
+        chart.m_timelineZoomPercent * (PIXELS_PER_SECOND / 100.0);
     // 列时间范围根据起始时间逐列推导，而不是累计上一次舍入后的像素。
     // 导致像素长度不足一行的选区也保留一行可见轨道。
     for ( int index = 0; index < count; ++index ) {
-        const auto first = chart.m_begin + index * columnSeconds;
-        const auto last  = std::min(chart.m_end, first + columnSeconds);
+        const double offset = index * columnSeconds;
+        // 标签来自选区的秒域，轨道上下用于保留贴图的空隙不计入时间。
+        const double first = chart.m_begin + offset;
+        const double last  = index + 1 == count
+                                 ? chart.m_end
+                                 : chart.m_begin + offset + columnSeconds;
         visible.clear();
         for ( const auto& [entity, range] : objects ) {
             const auto [start, end] = range;
@@ -947,14 +1060,19 @@ std::optional<BeatmapScreenshotImage> prepareBeatmapScreenshot(
                 visible.push_back(entity);
         }
         BeatmapScreenshotColumn column;
-        column.m_label  = timeLabel(first) + " - " + timeLabel(last);
-        column.m_height = std::max(1,
-                                   static_cast<int>(std::ceil(
-                                       (last - first) * PIXELS_PER_SECOND))) +
-                          LANE_WIDTH;
+        column.m_label = timeLabel(first) + " - " + timeLabel(last);
+        // 用相对时长计算行数，与尺寸估算一致，避免大时间戳相减造成一行误差。
+        const double visibleSeconds =
+            std::min(duration - offset, columnSeconds);
+        column.m_height = static_cast<int>(trackHeight(visibleSeconds, rate));
+        // 批次裁剪本身向外取整。位置映射先用未取整的高度，
+        // 避免缩得很小时把补足的一像素反解为选区之外的分拍时间。
+        // 成品行数仍向上取整，以保留落在像素边缘的贴图。
+        const float geometryHeight =
+            static_cast<float>(visibleSeconds * rate + LANE_WIDTH);
         // 几何和像素分离：各列只持有自己的绘制范围与命令，
         // 贴图数据在整张图片只保留一份。
-        column.m_scene.uvMap = atlasScene.uvMap;
+        column.m_scene.uvMap = image.m_atlas->m_uvMap;
         Logic::System::NoteRenderSystem::generateLongScreenshotColumn(
             notes,
             visible,
@@ -964,9 +1082,9 @@ std::optional<BeatmapScreenshotImage> prepareBeatmapScreenshot(
             linear,
             first,
             image.m_columnWidth,
-            column.m_height,
+            geometryHeight,
             chart.m_lanes,
-            PIXELS_PER_SECOND,
+            static_cast<float>(rate),
             chart.m_drawBeatLines);
         image.m_columns.push_back(std::move(column));
     }
@@ -974,6 +1092,91 @@ std::optional<BeatmapScreenshotImage> prepareBeatmapScreenshot(
     // 后台线程在这些对象销毁后仍可以独立编码每一列。
     // 视野和播放锚点也不需要在完成后恢复。
     return image;
+}
+
+/// @brief 由同一成品行生成等比例缩略图。
+/// @param image 摄入的几何、图集和字体输入，全部由后台任务稳定持有。
+/// @param stop 从用户操作线程传来的停止状态，每个采样行前检查。
+/// @return 尺寸与 RGBA8 像素，可交给普通 ImGui 纹理流程。
+/// @details 像素中心映射单调递增，栅格器可以跳过中间行而保留活动图元。
+/// 原图不超过边长预算时采用一比一采样，预览与真实 PNG 的 RGB 相同。
+/// 超长或超宽的输出等比缩小，极窄的边仍保留至少一个纹理像素。
+/// 最终 PNG 不受缩略图边长限制，也不需要分配对应尺寸的 GPU 纹理。
+/// @warning 后台执行字体读取与像素合成，不能从 UI 更新函数直接调用。
+std::optional<BeatmapScreenshotPreview> previewBeatmapScreenshot(
+    const BeatmapScreenshotImage& image, std::stop_token stop)
+{
+    if ( image.m_columns.empty() || !image.m_atlas || stop.stop_requested() )
+        return std::nullopt;
+    const auto size = ScreenshotRasterizer(image).size();
+    return previewBeatmapScreenshotRegion(
+        image, { 0, 0, size.m_width, size.m_height }, PREVIEW_EDGE, stop);
+}
+
+/// @brief 在成品坐标中绘制查看器可见区，共用 PNG 的逐行合成。
+/// @param image 已排好次序的成品批次，包含共享图集和字体路径。
+/// @param region 按原图像素表示的完整有效矩形。
+/// @param maxEdge 输出纹理最长边上限，不改变原图的局部位置。
+/// @param stop 取样任务停止状态，逐行检查。
+/// @return 完整的缩略或局部位图，越界和停止均不发布部分结果。
+/// @details 在申请像素前核对边界。原始区域可以远大于 GPU 纹理上限，
+/// 内存始终由缩略纹理的最大边长和一行成品像素决定。
+std::optional<ImagePixels> previewBeatmapScreenshotRegion(
+    const BeatmapScreenshotImage& image, ImageRegion region, int maxEdge,
+    std::stop_token stop)
+{
+    if ( image.m_columns.empty() || !image.m_atlas || maxEdge <= 0 ||
+         maxEdge > 4096 || stop.stop_requested() )
+        return std::nullopt;
+    ScreenshotRasterizer rasterizer(image);
+    const auto           size = rasterizer.size();
+    if ( region.m_x < 0 || region.m_y < 0 || region.m_width <= 0 ||
+         // 用减法比较右、下边界，避免起点与尺寸相加溢出。
+         region.m_height <= 0 || region.m_x > size.m_width - region.m_width ||
+         region.m_y > size.m_height - region.m_height )
+        return std::nullopt;
+    if ( !rasterizer.prepare(stop) ) return std::nullopt;
+    const double ratio =
+        std::min(1.0,
+                 static_cast<double>(maxEdge) /
+                     std::max(region.m_width, region.m_height));
+    ImagePixels preview{
+        std::max(1, static_cast<int>(std::lround(region.m_width * ratio))),
+        std::max(1, static_cast<int>(std::lround(region.m_height * ratio))),
+        {}
+    };
+    preview.m_pixels.reserve(static_cast<std::size_t>(preview.m_width) *
+                             preview.m_height * 4);
+    // 仍用成品宽度的行缓冲，外框、标签和跨列的裁剪不会随查看器平移。
+    // 将采样点映射回目标区域，放大时可按原图像素取样，不放大缩略图。
+    std::vector<Color> row(size.m_width);
+    const auto sample = [](int pixel, int previewExtent, int fullExtent) {
+        return static_cast<int>((2LL * pixel + 1) * fullExtent /
+                                (2LL * previewExtent));
+    };
+    std::vector<int> sampleXs(preview.m_width);
+    // 各行共享 X 坐标的映射；预排序坐标还能直接查询图元中的有效采样点。
+    for ( int x = 0; x < preview.m_width; ++x )
+        sampleXs[x] = region.m_x + sample(x, preview.m_width, region.m_width);
+    // 只有覆盖整个成品宽度时才使用连续扫描，其他情况跳过可见区之外的像素。
+    const auto sparseXs = preview.m_width == size.m_width
+                              ? std::span<const int>{}
+                              : std::span<const int>{ sampleXs };
+    for ( int y = 0; y < preview.m_height; ++y ) {
+        // 停止时丢弃整个预览，不允许把部分扫描行上传成最新成品图。
+        if ( stop.stop_requested() ) return std::nullopt;
+        const int sourceY =
+            region.m_y + sample(y, preview.m_height, region.m_height);
+        rasterizer.drawRow(sourceY, row, sparseXs);
+        for ( int x : sampleXs ) {
+            const auto& color = row[x];
+            preview.m_pixels.insert(
+                preview.m_pixels.end(), color.begin(), color.end());
+            preview.m_pixels.push_back(255);
+            // RGB 已混合到成品底色，显示时由不透明的纹理完整覆盖面板背景。
+        }
+    }
+    return preview;
 }
 
 /// @brief 完整编码后提交结果；通过 SAF 保存时还要确认文档写回成功。
@@ -987,7 +1190,8 @@ ScreenshotResult writeBeatmapScreenshot(const BeatmapScreenshotImage& image,
                                         const std::filesystem::path&  path,
                                         std::stop_token               stop)
 {
-    if ( image.m_columns.empty() ) return ScreenshotResult::InvalidRange;
+    if ( image.m_columns.empty() || !image.m_atlas )
+        return ScreenshotResult::InvalidRange;
     if ( stop.stop_requested() ) return ScreenshotResult::Cancelled;
     if ( path.empty() ) return ScreenshotResult::WriteError;
 
@@ -1010,6 +1214,7 @@ ScreenshotResult writeBeatmapScreenshot(const BeatmapScreenshotImage& image,
     if ( error ) return ScreenshotResult::WriteError;
     std::string publishError;
     // 普通路径已经在上一步完成。
+    // 预览未创建文档；只有保存路径会执行系统发布与失败回收。
     // 系统选中的文档还需把本地完整文件写回其提供器，不能提前提示成功。
     if ( !Common::publishDocument(path, publishError) ) {
         XERROR("Beatmap PNG publication failed: {}", publishError);

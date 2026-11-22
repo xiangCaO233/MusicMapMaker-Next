@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <optional>
 
 namespace MMM::UI::Utils
 {
@@ -509,10 +510,12 @@ ImVec2 centeredModalWindowMaxSize()
     };
 }
 
-/// @brief 将下一个弹出式窗口固定到主视口中心。
+/// @brief 为下一个弹出式窗口设置主视口和安全区内的几何。
 /// @param desiredSize 期望尺寸，任意轴为 0 时不强制该轴尺寸。
+/// @param minimumResizeSize 手动缩放窗口的最小尺寸；固定模态不传。
 /// @warning UI 热路径：只写入 ImGui 下一窗口状态。
-void prepareCenteredModalWindow(ImVec2 desiredSize)
+void prepareCenteredModalWindow(ImVec2                desiredSize,
+                                std::optional<ImVec2> minimumResizeSize)
 {
     // 模态始终绑定主视口，避免多视口环境下出现在无关窗口。
     ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -524,22 +527,31 @@ void prepareCenteredModalWindow(ImVec2 desiredSize)
                               ? ImVec2(area.m_origin.x + area.m_size.x * .5f,
                                        area.m_origin.y + area.m_size.y * .5f)
                               : viewport->GetCenter();
-    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    // 手动缩放由窗口边角修改位置及尺寸；只给首次出现的帧设置初值。
+    const ImGuiCond condition =
+        minimumResizeSize ? ImGuiCond_Appearing : ImGuiCond_Always;
+    ImGui::SetNextWindowPos(center, condition, ImVec2(0.5f, 0.5f));
 
     const ImVec2 maxWindowSize = centeredModalWindowMaxSize();
-    ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), maxWindowSize);
+    // 小视口不能容纳理想的最小尺寸时，优先遵守实际安全区。
+    const auto   minimum = minimumResizeSize.value_or(ImVec2(0.0f, 0.0f));
+    const ImVec2 minWindowSize{ std::clamp(minimum.x, 0.0f, maxWindowSize.x),
+                                std::clamp(minimum.y, 0.0f, maxWindowSize.y) };
+    ImGui::SetNextWindowSizeConstraints(minWindowSize, maxWindowSize);
 
     if ( desiredSize.x > 0.0f || desiredSize.y > 0.0f ) {
         // 零或负轴表示调用方不强制该方向尺寸。
         if ( desiredSize.x > 0.0f ) {
             // 期望宽度不能超过前面计算的视口安全上限。
-            desiredSize.x = std::min(desiredSize.x, maxWindowSize.x);
+            desiredSize.x =
+                std::clamp(desiredSize.x, minWindowSize.x, maxWindowSize.x);
         }
         if ( desiredSize.y > 0.0f ) {
             // 高度采用相同钳制规则。
-            desiredSize.y = std::min(desiredSize.y, maxWindowSize.y);
+            desiredSize.y =
+                std::clamp(desiredSize.y, minWindowSize.y, maxWindowSize.y);
         }
-        ImGui::SetNextWindowSize(desiredSize, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(desiredSize, condition);
     }
 }
 
@@ -613,23 +625,27 @@ CenteredModalPopupScope::~CenteredModalPopupScope()
 /// @param pOpen 可选打开状态指针。
 /// @param flags 额外窗口标志。
 /// @param desiredSize 期望尺寸，任意轴为 0 时交给内容自适应。
-/// @param autoResize 是否按内容自动调整尺寸。
+/// @param autoResize 固定模态是否按内容自动调整尺寸。
+/// @param minimumResizeSize 手动缩放时只设置打开初值和最小约束。
 /// @return 弹窗本帧成功开始时返回 true。
 /// @warning UI 热路径：每帧只设置下一窗口状态，不执行阻塞操作。
 bool CenteredModalPopupScope::begin(const char* name, bool* pOpen,
                                     ImGuiWindowFlags flags, ImVec2 desiredSize,
-                                    bool autoResize)
+                                    bool                  autoResize,
+                                    std::optional<ImVec2> minimumResizeSize)
 {
-    prepareCenteredModalWindow(desiredSize);
+    prepareCenteredModalWindow(desiredSize, minimumResizeSize);
 
-    flags |= ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize;
+    flags |= ImGuiWindowFlags_NoSavedSettings;
+    // 只给明确设置缩放范围的窗口交还原生尺寸控制。
+    if ( !minimumResizeSize ) flags |= ImGuiWindowFlags_NoResize;
     // 高 DPI 横屏键盘可能只留下不到一半高度，标题栏不能挤占活动字段。
     // 仅键盘可见的移动模态临时省略原生标题；业务正文和确认／取消仍保留。
     if ( !workspaceAllowsHoverFeedback() &&
          workspaceTextInputWindowArea().m_size.y + 1 <
              workspaceFloatingWindowArea().m_size.y )
         flags |= ImGuiWindowFlags_NoTitleBar;
-    if ( autoResize ) {
+    if ( autoResize && !minimumResizeSize ) {
         flags |= ImGuiWindowFlags_AlwaysAutoResize;
     }
 

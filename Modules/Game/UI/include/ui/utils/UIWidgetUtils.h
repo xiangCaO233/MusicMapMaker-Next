@@ -2,6 +2,7 @@
 
 #include "imgui.h"
 
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -438,10 +439,14 @@ enum class TooltipDir { Left, Right };
 /// @warning UI 热路径：项目切换期间每帧只执行一次文本测量和绘制。
 void renderProjectTransitionPlaceholder();
 
-/// @brief 将下一个弹出式窗口固定到主视口中心。
+/// @brief 为下一个弹出式窗口设置主视口、初始大小及安全区边界。
 /// @param desiredSize 期望尺寸，任意轴为 0 时不强制该轴尺寸。
+/// @param minimumResizeSize
+/// 指定时只在打开时设置位置及大小，并约束手动缩放范围。
 /// @warning UI 热路径：只写入 ImGui 下一窗口状态。
-void prepareCenteredModalWindow(ImVec2 desiredSize = ImVec2(0.0f, 0.0f));
+void prepareCenteredModalWindow(
+    ImVec2                desiredSize       = ImVec2(0.0f, 0.0f),
+    std::optional<ImVec2> minimumResizeSize = std::nullopt);
 /// @brief 返回含留白和小屏夹取的模态尺寸上限，正文与父窗口共用同一口径。
 /// @warning 每帧固定几何运算，不访问系统输入法或业务锁。
 ImVec2 centeredModalWindowMaxSize();
@@ -506,12 +511,14 @@ public:
     /// @param pOpen 可选打开状态指针。
     /// @param flags 额外窗口标志。
     /// @param desiredSize 期望尺寸，任意轴为 0 时交给内容自适应。
-    /// @param autoResize 是否按内容自动调整尺寸。
+    /// @param autoResize 固定模态是否按内容自动调整尺寸。
+    /// @param minimumResizeSize 指定后启用原生手动缩放，覆盖内容自动调整。
     /// @return 弹窗本帧成功开始时返回 true。
     /// @warning UI 热路径：每帧只设置下一窗口状态，不执行阻塞操作。
     bool begin(const char* name, bool* pOpen = nullptr,
                ImGuiWindowFlags flags = ImGuiWindowFlags_None,
-               ImVec2 desiredSize = ImVec2(0.0f, 0.0f), bool autoResize = true);
+               ImVec2 desiredSize = ImVec2(0.0f, 0.0f), bool autoResize = true,
+               std::optional<ImVec2> minimumResizeSize = std::nullopt);
 
     /// @brief 开始一个使用模态样式的普通弹出窗口。
     /// @param name 窗口标题和 ImGui ID。

@@ -18,6 +18,7 @@
 // 层级视图直接读取项目资源与工作区，完整模型依赖归属于此实现文件。
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
+#include "ui/image/ImageViewer.h"
 #include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "ui/imgui/manager/FileManagerView.h"
@@ -1557,7 +1558,8 @@ void FileManagerView::renderFileEntryContextMenu(
         entry.isDirectory ? entry.path : entry.path.parent_path();
 
     if ( !entry.isDirectory && (isBeatmapExtension(entry.extension) ||
-                                isAudioExtension(entry.extension)) ) {
+                                isAudioExtension(entry.extension) ||
+                                isImageViewerExtension(entry.extension)) ) {
         // 只有已知可激活文件类型显示打开入口。
         if ( ::MMM::UI::FeedbackMenuItem(
                  TR("ui.file_manager.context.open").data()) ) {
@@ -2181,7 +2183,7 @@ void FileManagerView::renderFileOperationPopups(float dpiScale)
     }
 }
 
-/// @brief 激活谱面或音频文件树条目。
+/// @brief 激活谱面、音频或图片文件树条目。
 /// @param entry 当前目录快照中的文件条目。
 /// @param sourceManager 用于切换侧栏并打开音轨控制器。
 ///
@@ -2193,6 +2195,12 @@ void FileManagerView::activateFileEntry(const DirectoryEntryInfo& entry,
 {
     if ( entry.isDirectory ) {
         // 目录展开由 TreeNode open 状态处理，不创建编辑会话。
+        return;
+    }
+    // 图片无需解析项目清单或改变侧栏，中央查看页在后台读取文件。
+    if ( isImageViewerExtension(entry.extension) ) {
+        if ( sourceManager )
+            ImageViewer::fileTab(*sourceManager).openFile(entry.path);
         return;
     }
 

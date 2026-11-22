@@ -146,6 +146,8 @@ add_library(
   src/ui/imgui/menu/MainMenuRegistry.cpp
   src/ui/imgui/markdown/MarkdownRenderer.cpp
   src/ui/imgui/markdown/MarkdownImageCache.cpp
+  # 导出与项目文件共用的图片查看器。
+  src/ui/image/ImageViewer.cpp
   # 编辑菜单动作：模式切换、剪贴板、元数据和撤销重做。
   src/ui/imgui/menu/actions/edit/BmsEditingToggleAction.cpp
   src/ui/imgui/menu/actions/edit/AddSelectedObjectAnnotationAction.cpp

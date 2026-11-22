@@ -5,6 +5,9 @@
 /// 裁剪测试含一个横跨两端的 Hold 和带水平节点的折线。
 /// 整谱测试跨过默认十五秒列界，检查长条在相邻列的位置。
 /// 自定义列宽通过时间标签及末列高度验证，网格开关直接比对 PNG 像素。
+/// 纵向倍率覆盖压缩和放大两种情况，PNG 宽度须保持原轨道和列间布局。
+/// 预览对照独立解码的数据，既覆盖原尺寸，也覆盖有跳行的缩略图。
+/// 两种尺寸的比较都读取真实 PNG，避免只比对两个依赖同一布局的内部结构。
 /// 字体测试分别开启两个水印以及组合状态，不只验证输出尺寸。
 /// 这些用例同时保护中文输出名、取消语义和覆盖前保留已有文件。
 #include "ui/export/BeatmapLongScreenshot.h"
@@ -21,7 +24,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <memory>
+#include <span>
 #include <stop_token>
 #include <string>
 #include <system_error>
@@ -77,6 +82,43 @@ Image readPng(const std::filesystem::path& path)
                                                  &channels,
                                                  STBI_rgb));
     return decoded;
+}
+
+/// @brief 把预览像素与解码后的成品逐点对照，验证缩图仍来自同一个坐标系。
+/// @param png 已成功解码的实际成品，测试从文件读取。
+/// @param preview 生产预览入口返回的 RGBA8 缓冲。
+/// @param region 预览对应的成品原始区域，覆盖整图或放大后的局部。
+/// @return 所有采样点与对应的成品像素一致时返回 true。
+/// @pre 调用方已经确认 PNG 可解码且对应同一组导出选项。
+/// @details 用缩略图像素中心反查成品，不假定一比一映射。
+/// 同一段断言也覆盖小于缩略图边长上限的成品，此时每个像素都会被验证。
+/// 透明通道用于经由 UI 纹理呈现，即使原文件只有 RGB 也必须完全不透明。
+bool matchesPreview(const Image& png, const BeatmapScreenshotPreview& preview,
+                    ImageRegion region)
+{
+    // 先验证纹理尺寸和缓冲长度，回归时避免越界访问测试数据。
+    if ( preview.m_width <= 0 || preview.m_width > region.m_width ||
+         preview.m_height <= 0 || preview.m_height > region.m_height ||
+         preview.m_pixels.size() !=
+             static_cast<std::size_t>(preview.m_width) * preview.m_height * 4 )
+        return false;
+    for ( int y = 0; y < preview.m_height; ++y ) {
+        const int sourceY =
+            region.m_y + (2 * y + 1) * region.m_height / (2 * preview.m_height);
+        for ( int x = 0; x < preview.m_width; ++x ) {
+            // 纵向跳行时仍必须保留跨行的长条及之后的图元。
+            // 横向跳点也应与输出对齐，尤其是列底和窄外框。
+            const int  sourceX = region.m_x + (2 * x + 1) * region.m_width /
+                                                  (2 * preview.m_width);
+            const auto index   = (y * preview.m_width + x) * 4;
+            if ( !std::ranges::equal(
+                     png.pixel(sourceX, sourceY),
+                     std::span(preview.m_pixels).subspan(index, 3)) ||
+                 preview.m_pixels[index + 3] != 255 )
+                return false;
+        }
+    }
+    return true;
 }
 
 /// @brief 取第一个时间栏前的水印区域，独立开关时与组合状态逐像素比较。
@@ -168,6 +210,36 @@ int run(const std::filesystem::path& directory)
     // 测试同时依赖生产皮肤正确的连接位置。
     if ( !isBright(png.pixel(123, 313)) || isBright(png.pixel(113, 303)) )
         return 6;
+
+    // 小数倍率只改变纵向间距；节点的轨道和在时间窗中的相对位置保持一致。
+    // 节点离选区末端半秒，在原图占 240 个像素；压缩后距边缘只有 150 像素。
+    // 检查实际图元位置可以排除只减少空白或改变 PNG 声明尺寸的错误。
+    chart.m_timelineZoomPercent = 62.5;
+    const auto scaledSize = estimateBeatmapScreenshot(4, 1.0, 2.0, 15, 62.5, 0);
+    const auto scaled     = prepareBeatmapScreenshot(chart, config);
+    const auto scaledPath = directory / "zoom-62.5-percent.png";
+    if ( !scaledSize || !scaled || scaledSize->m_columns != 1 ||
+         writeBeatmapScreenshot(*scaled, scaledPath) !=
+             ScreenshotResult::Saved )
+        return 25;
+    const auto compressed = readPng(scaledPath);
+    const auto preview    = previewBeatmapScreenshot(*scaled);
+    if ( !compressed.m_pixels || !preview ||
+         compressed.m_width != scaledSize->m_width ||
+         compressed.m_width != png.m_width ||
+         compressed.m_height != scaledSize->m_height ||
+         compressed.m_height != 430 || preview->m_width != compressed.m_width ||
+         preview->m_height != compressed.m_height ||
+         !isBright(compressed.pixel(123, 223)) )
+        return 26;
+    // 小成品使用完整图像大小，逐点比对可检测背景与分拍的细微差别。
+    // 原尺寸的透明通道也应填满，避免将缩略图交给 ImGui 后背景透出。
+    // 该对照不同于大图端点抽样，任何扫描行的遗漏都会被检出。
+    if ( !matchesPreview(compressed,
+                         *preview,
+                         { 0, 0, compressed.m_width, compressed.m_height }) )
+        return 27;
+    chart.m_timelineZoomPercent = 100.0;
 
     // 两次导出使用同一时段，独立开关只应影响拍线所在的像素。
     // 第四轨的空白位置跨过整拍线，下一行提供没有网格的参考底色。
@@ -264,9 +336,25 @@ int run(const std::filesystem::path& directory)
     // 用同一谱面改成 7 秒，确认列数、时标和高度都以新参数为准。
     // 前三列分别覆盖 7 秒，最后一列只剩 1 秒，绘制比例保持一致。
     // 先独立检查非正时长，防止除零和意外生成空批次。
-    if ( validScreenshotRange(chart.m_lanes, chart.m_begin, chart.m_end, 0) ||
-         validScreenshotRange(chart.m_lanes, chart.m_begin, chart.m_end, -1) )
+    if ( estimateBeatmapScreenshot(4, 0.0, 17.0, 0, 100.0, 0) ||
+         estimateBeatmapScreenshot(4, 0.0, 17.0, -1, 100.0, 0) )
         return 19;
+    // 拒绝非正、非有限及超出 PNG 像素预算的倍率。
+    // 低于常用面板范围的正倍率依然可用，结束时间与分列保持独立。
+    // 这里单独查尺寸边界，避免依赖极密网格在同一像素行上的叠加结果。
+    const auto verySmall = estimateBeatmapScreenshot(4, 0.0, 17.0, 15, 0.05, 0);
+    // 预期纵距 3.6 像素上取整到 4，另有 66 像素轨边和 64 像素页眉边距。
+    if ( !verySmall || verySmall->m_columns != 2 || verySmall->m_height != 134 )
+        return 33;
+    for ( const double invalid :
+          { 0.0,
+            -25.0,
+            1e8,
+            std::numeric_limits<double>::infinity(),
+            std::numeric_limits<double>::quiet_NaN() } ) {
+        if ( estimateBeatmapScreenshot(4, 0.0, 17.0, 15, invalid, 0) )
+            return 28;
+    }
     // 取与默认值不同且不能整除总时长的参数，覆盖短末列的布局。
     chart.m_end           = 22.0;
     chart.m_columnSeconds = 7;
@@ -291,17 +379,78 @@ int run(const std::filesystem::path& directory)
          customPng.pixel(900, 900) != customPng.pixel(0, 900) )
         return 22;
 
+    // 放大后列的时间边界不动；末列和水印只增加各自的像素高度。
+    // 同时开启两种署名，以便大图预览也经过字体布局与长列扫描。
+    // 该倍率让整列超过缩略边长预算，能同时确认两个轴按相同比例抽样。
+    chart.m_timelineZoomPercent = 137.5;
+    chart.m_showMmm             = true;
+    chart.m_author              = "谱师测试";
+    const auto tallerSize =
+        estimateBeatmapScreenshot(4, 0.0, 22.0, 7, 137.5, 2);
+    const auto taller     = prepareBeatmapScreenshot(chart, config);
+    const auto tallerPath = directory / "zoom-137.5-percent.png";
+    if ( !tallerSize || !taller || tallerSize->m_columns != 4 ||
+         taller->m_columns.back().m_label != custom->m_columns.back().m_label ||
+         taller->m_columns.back().m_height != 726 ||
+         writeBeatmapScreenshot(*taller, tallerPath) !=
+             ScreenshotResult::Saved )
+        return 29;
+    const auto enlarged = readPng(tallerPath);
+    // 用固定高度在估算和编码之间建立外部基准；同时验证宽度沿用分栏布局。
+    if ( !enlarged.m_pixels || enlarged.m_width != customPng.m_width ||
+         enlarged.m_width != tallerSize->m_width ||
+         enlarged.m_height != tallerSize->m_height ||
+         enlarged.m_height != 4810 )
+        return 30;
+    const auto thumbnail = previewBeatmapScreenshot(*taller);
+    if ( !thumbnail || thumbnail->m_height >= enlarged.m_height ||
+         thumbnail->m_width >= enlarged.m_width )
+        return 31;
+    // 按固定坐标逐点对照，补足单看尺寸无法发现的跨列裁剪和叠放错误。
+    // 同时读取较短末列下方的成品底色，缩图不应把这一列拉伸到统一高度。
+    if ( !matchesPreview(enlarged,
+                         *thumbnail,
+                         { 0, 0, enlarged.m_width, enlarged.m_height }) )
+        return 32;
+
+    // 模拟拖动到图中下部再放大，区域从非零行列开始且横跨列缝。
+    // 跨首两列的长条应与原尺寸 PNG 一致，不能放大先前的整图缩略。
+    // 起始行跳过了页眉与大量已结束的图元，采样仍须恢复准确的活动集合。
+    // 从成品独立读回的像素同时覆盖真实皮肤、分拍线和底色。
+    const ImageRegion crop{ 75, 3660, 510, 750 };
+    // 用非整倍数偏移覆盖横向稀疏选点与 1:1 像素中心的共用路径。
+    const auto detail = previewBeatmapScreenshotRegion(*taller, crop, 1024);
+    if ( !detail || detail->m_width != crop.m_width ||
+         detail->m_height != crop.m_height ||
+         !matchesPreview(enlarged, *detail, crop) )
+        return 36;
+    // 靠近右下角的局部低清请求同样保留正确偏移，越界矩形则直接拒绝。
+    // 边长预算只控制纹理大小，区域仍以成品坐标表达。
+    // 此矩形右下边缘贴合成品边缘，增加一像素时必须失败。
+    const ImageRegion bottomRight{ 860, 4500, 316, 310 };
+    const auto        reduced =
+        previewBeatmapScreenshotRegion(*taller, bottomRight, 150);
+    if ( !reduced || reduced->m_width != 150 ||
+         !matchesPreview(enlarged, *reduced, bottomRight) ||
+         previewBeatmapScreenshotRegion(*taller, { 860, 4500, 317, 310 }, 150) )
+        return 37;
+
     // 失败应在暂存阶段退出；已存在的 PNG 仍能读且原像素与尺寸一致。
+    // 使用已成功的样本路径回测覆盖；缩略图失败同样没有理由生成或删改文件。
     chart.m_end = chart.m_begin;
     if ( prepareBeatmapScreenshot(chart, config) ) return 13;
     // 取消必须在分配待提交内容之前返回。
     // 复用已存在文件可以检测取消后错删目标的回归。
     std::stop_source stop;
     stop.request_stop();
+    // 停止标记在处理开始前设置。编码和预览都应直接退出，后者不会返回部分像素。
+    if ( previewBeatmapScreenshot(*prepared, stop.get_token()) ) return 34;
     if ( writeBeatmapScreenshot(*prepared, output, stop.get_token()) !=
          ScreenshotResult::Cancelled )
         return 14;
     prepared->m_asciiFont.clear();
+    // ASCII 用于每列时标，即使简化图形也不能悄悄丢掉这些标签。
+    if ( previewBeatmapScreenshot(*prepared) ) return 35;
     if ( writeBeatmapScreenshot(*prepared, output) !=
          ScreenshotResult::FontError )
         return 15;
@@ -309,6 +458,7 @@ int run(const std::filesystem::path& directory)
     // 正常图片的尺寸、端点位置和非空 RGB 缺一不可。
     // 字体错误发生在提交前，所以后续可使用同一选择结果重试。
     const auto preserved = readPng(output);
+    // 先前的输出保持可用；不能因为后台预览或后续编码失败而先清除成品。
     return preserved.m_pixels && preserved.m_height == png.m_height &&
                    preserved.pixel(57, 73) == png.pixel(57, 73)
                ? 0
@@ -328,6 +478,7 @@ int main(int argc, char** argv)
              argv[1], MMM::Config::utf8ToPath(argv[2])) )
         return 2;
     const auto directory =
+        // 允许测试目录存在，让失败时保留先前成功生成的 PNG 供独立读回。
         MMM::Config::utf8ToPath(argv[3]) / "beatmap-screenshot";
     std::error_code error;
     std::filesystem::create_directories(directory, error);
