@@ -926,6 +926,7 @@ return {
 	["ui.resource_table.reset_sort"] = "Reset Sort",
 
 	["ui.search.no_results"] = "No search results",
+	["ui.search.global_unavailable"] = "Global search is not available yet.",
 
 	["title.audio_manager"] = "Audio Manager",
 	["title.project_audio_tool"] = "Project Audio Tool",

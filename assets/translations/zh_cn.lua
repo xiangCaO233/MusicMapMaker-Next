@@ -925,6 +925,7 @@ return {
 	["ui.resource_table.reset_sort"] = "重置排序",
 
 	["ui.search.no_results"] = "无搜索结果",
+	["ui.search.global_unavailable"] = "全局搜索暂未开放。",
 
 	["title.audio_manager"] = "音频管理",
 	["title.project_audio_tool"] = "项目音频工具",
