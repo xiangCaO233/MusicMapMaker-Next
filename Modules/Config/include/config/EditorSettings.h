@@ -1,9 +1,8 @@
 #pragma once
 #include "config/AudioPlaybackConfig.h"
-#include "config/BeatLinePalette.h"
+#include "config/ColorPaletteScheme.h"
 #include "config/EditorPlatformDefaults.h"
 #include "config/FrameLimitPreference.h"
-#include "config/NotePalette.h"
 #include "config/ObjectPlacementSnap.h"
 #include "config/SfxConfig.h"
 #include "config/ShortcutConfig.h"
@@ -95,23 +94,6 @@ void from_json(const nlohmann::json& json, UIAestheticsConfig& config);
 /// @brief 使用当前皮肤完整默认配色的调色盘方案标识。
 inline constexpr const char* COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID =
     "__skin_default__";
-
-/// @brief 用户保存的调色盘方案。
-struct ColorPaletteScheme {
-    /// @brief 方案显示名称。
-    std::string name{ "Palette" };
-
-    /// @brief 完整物件颜色，顺序与工具栏物件颜色槽位一致。
-    NoteColorPalette noteColors{};
-
-    /// @brief 完整分拍线颜色。
-    BeatLineColorPalette beatLineColors{};
-};
-
-/// @brief 将调色盘方案序列化为 JSON。
-void to_json(nlohmann::json& json, const ColorPaletteScheme& scheme);
-/// @brief 从 JSON 读取调色盘方案。
-void from_json(const nlohmann::json& json, ColorPaletteScheme& scheme);
 
 /// @brief 调色盘持久化配置。
 struct ColorPaletteConfig {

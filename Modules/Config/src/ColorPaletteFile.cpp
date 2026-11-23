@@ -65,6 +65,27 @@ bool readColorArray(const nlohmann::json&                         value,
 namespace MMM::Config
 {
 
+/// @brief 将调色方案文件序列化为 JSON。
+/// @param j 输出 JSON。
+/// @param file 待序列化文件。
+void to_json(nlohmann::json& j, const ColorPaletteFile& file)
+{
+    // 使用方案类型自己的 ADL 转换，让分享文件与编辑器配置沿用相同槽位顺序。
+    j = nlohmann::json{ { "format", COLOR_PALETTE_FILE_FORMAT },
+                        { "version", file.version },
+                        { "scheme", file.scheme } };
+}
+
+/// @brief 从 JSON 读取调色方案文件。
+/// @param j 输入 JSON。
+/// @param file 输出文件结构。
+void from_json(const nlohmann::json& j, ColorPaletteFile& file)
+{
+    // 保留结构转换的缺省值；外部文件导入仍通过独立入口拒绝缺项和错误类型。
+    file.version = j.value("version", COLOR_PALETTE_FILE_VERSION);
+    file.scheme  = j.value("scheme", ColorPaletteScheme());
+}
+
 /// @brief 将完整调色方案以带格式头的 JSON 文件安全写入目标路径。
 /// @param path 最终 `.mmpalette` 文件路径。
 /// @param scheme 需要导出的方案名称、物件色和分拍线色。
