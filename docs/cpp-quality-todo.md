@@ -202,13 +202,17 @@
   - 整改：先定义离线总 PCM 预算与失败信息；对不需要 EQ/stretch 的路径探索流式资源（`AudioTimelineMixerNode.cpp:159-164` 已有 STREAMING 包装），处理资源可考虑有界磁盘暂存或分阶段释放，不能破坏实时混音缓存生命周期。
   - 验收：分别测中性、EQ、变速、多资源多配置的峰值 RSS 和输出 PCM 正确性；首拍裁头/补静音长度保持；避免只是把完整缓存从一个 map 移到另一个对象。
 
-- [ ] **FMT-06（P3）协作文档限额检查发生在完整 CBOR 编码之后，并无条件先复制正文**
+- [x] **FMT-06（P3）协作文档限额检查发生在完整 CBOR 编码之后，并无条件先复制正文**
 
   - 位置：`Modules/Network/Collaboration/src/BeatmapDocumentCodec.cpp:140-181`，快照 :1599-1612。
   - 调用链：`CollaborationRoom.cpp:880` 本地 mutation 编码 → `BeatmapDocumentCodec::encode` → `makeDocument`/`makeMutationDocument` → `encodeDocumentPayload`。快照还复制 current 为 payload，并在成功后保留 baseline。
   - 当前行为：`Json::to_cbor(document)` 已创建完整 raw，随后才比较 64 MiB 上限；`body = raw` 又复制一份，压缩 candidate 与最终 output 可再同时存在。接收端在分配前检查 rawSize 的保护是真实有效的，不能把这里说成“没有任何协议限额”；缺口在本地发送侧的限额时机与峰值复制。
   - 整改：编码前做对象/字段预算或使用可在达到限额时停止的输出 sink；避免未压缩 body 无条件复制，未压缩时直接从 raw 构造输出。先处理局部复制，再决定是否值得重构整个编码器。
   - 验收：超限本地文档在超过预算前终止编码；压缩/不压缩快照、增量、基线成功提交与 EmptyPayload 语义不变；记录临界 64 MiB 附近峰值 RSS。
+
+  - CBOR 直接写入预留协议头的有界缓冲。流达到 64 MiB 后停止保存字节，JSON 库仍可走访余下节点。压缩仅采用更短的结果，未压缩分支直接返回原缓冲。主发送入口的快照成功后移动到基线，拒绝超限时旧基线仍有效。
+  - Linux RelWithDebInfo 全量构建，5 项协作回归通过。回归覆盖 64 MiB 整、超出一字节、失败后 EmptyPayload，以及压缩快照与增量往返。独立进程探针的小快照和临界压缩快照线格式哈希一致。临界成功样本峰值 RSS 为 400.6 → 264.6 MiB，超出一字节样本为 328.4 → 264.2 MiB。
+  - 注释／代码行数：`BeatmapDocumentCodec.cpp` 706/1647，`BeatmapDocumentCodecTest.cpp` 364/849，均达到 30%。
 
 ## 音频引擎
 

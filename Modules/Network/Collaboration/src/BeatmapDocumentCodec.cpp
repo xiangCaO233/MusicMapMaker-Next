@@ -23,6 +23,8 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <ostream>
+#include <streambuf>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -100,17 +102,87 @@ constexpr std::size_t DOCUMENT_COMPRESSION_THRESHOLD_BYTES = 1024U;
 /// @note 当前仅定义最低位，解码器拒绝任何未知标志位。
 constexpr std::uint8_t DOCUMENT_PAYLOAD_COMPRESSED = 1U;
 
-/// @brief 向负载头写入小端 32 位整数。
-/// @param output 接收四个字节的连续缓冲。
-/// @param value 要编码的无符号值。
-///
-/// @details 显式逐字节写入使负载格式不依赖主机字节序或结构体对齐。
-void appendUint32(ByteBuffer& output, std::uint32_t value)
+/// @brief 把负载头写入提前预留的连续缓冲，正文已在头部之后。
+/// @param output 至少含 DOCUMENT_PAYLOAD_HEADER_BYTES 字节的缓冲。
+/// @param rawSize 未压缩 CBOR 字节数，已通过协议上限校验。
+/// @param compressed 正文是否采用 DEFLATE。
+void writeDocumentPayloadHeader(ByteBuffer& output, std::uint32_t rawSize,
+                                bool compressed)
 {
-    for ( std::uint32_t shift = 0; shift < 32U; shift += 8U ) {
-        output.push_back(static_cast<std::uint8_t>((value >> shift) & 0xFFU));
+    std::ranges::copy(DOCUMENT_PAYLOAD_MAGIC, output.begin());
+    output[4] = DOCUMENT_PAYLOAD_VERSION;
+    output[5] = compressed ? DOCUMENT_PAYLOAD_COMPRESSED : 0U;
+    // 保留位赋零，避免未来复用编解码缓冲时混入上一条消息的状态。
+    output[6] = 0U;
+    output[7] = 0U;
+    // 显式逐字节写入避免依赖主机字节序和结构体对齐。
+    for ( std::uint32_t index = 0; index < 4U; ++index ) {
+        output[8U + index] =
+            static_cast<std::uint8_t>((rawSize >> (index * 8U)) & 0xFFU);
     }
 }
+
+/// @brief 从写入端约束 CBOR 字节数，直接写到预留协议头之后。
+/// @details 输出失败使 ostream 进入错误状态，后续写入不会再分配或保存字节。
+/// JSON 库仍可能走访余下节点，调用方必须丢弃部分结果。
+class DocumentCborBuffer final : public std::streambuf
+{
+public:
+    /// @brief 借用已有协议头空间的缓冲，直到 CBOR 编码完成。
+    /// @param bytes 已预留固定头部，现有大小须在协议允许的范围内。
+    explicit DocumentCborBuffer(ByteBuffer& bytes) : m_bytes(bytes) {}
+
+protected:
+    /// @brief 写入连续 CBOR 字节，整个块超限时以短写通知 ostream。
+    /// @param data 编码器提供的字节区间，由调用方保持有效。
+    /// @param count 当前区间的字节数。
+    /// @return 成功时接受完整区间，超限时返回零。
+    std::streamsize xsputn(const char* data, std::streamsize count) override
+    {
+        const auto size = static_cast<std::size_t>(count);
+        // 一次接收整个块或拒绝，避免大字符串先复制一部分才发现超限。
+        if ( !reserveBytes(size) ) return 0;
+        const auto* first = reinterpret_cast<const std::uint8_t*>(data);
+        m_bytes.insert(m_bytes.end(), first, first + size);
+        return count;
+    }
+
+    /// @brief 写入 CBOR 的单字节标记，使用与批量写入相同的总量限制。
+    /// @param value 当前标记或流结束哨兵。
+    /// @return 已接受标记或非 EOF 状态，达到上限则返回 EOF。
+    int_type overflow(int_type value) override
+    {
+        // EOF 在 streambuf 中表示没有实际字节可写。
+        if ( traits_type::eq_int_type(value, traits_type::eof()) )
+            return traits_type::not_eof(value);
+        if ( !reserveBytes(1) ) return traits_type::eof();
+        m_bytes.push_back(static_cast<std::uint8_t>(value));
+        return value;
+    }
+
+private:
+    /// @brief 为下一块安排空间，连 vector 的几何增长也限制在协议上限内。
+    /// @param size 待追加的字节数，含 CBOR 标记和字段文本。
+    /// @return 区间可以完整追加时返回真。
+    bool reserveBytes(std::size_t size)
+    {
+        constexpr auto MAX_PAYLOAD_BYTES =
+            DOCUMENT_PAYLOAD_HEADER_BYTES + MAX_UNCOMPRESSED_DOCUMENT_BYTES;
+        // 使用剩余容量比较，先拒绝超限，避免加法溢出或提前分配。
+        if ( size > MAX_PAYLOAD_BYTES - m_bytes.size() ) return false;
+        const auto required = m_bytes.size() + size;
+        if ( required > m_bytes.capacity() ) {
+            // 维持几何增长，最终一次扩容至多到协议允许的容量。
+            m_bytes.reserve(
+                std::max(required,
+                         std::min(MAX_PAYLOAD_BYTES, m_bytes.capacity() * 2U)));
+        }
+        return true;
+    }
+
+    /// @brief 调用方拥有的线格式缓冲，streambuf 不管理其生命周期。
+    ByteBuffer& m_bytes;
+};
 
 /// @brief 从负载头读取小端 32 位整数。
 /// @param input 已通过头长度检查的负载。
@@ -132,53 +204,47 @@ std::uint32_t readUint32(std::span<const std::uint8_t> input,
 /// @return 带固定头的二进制负载，或明确的文档错误。
 ///
 /// @details
-/// 文档先编码为 CBOR，再在超过阈值时尝试 MZ_BEST_SPEED 压缩。只有压缩结果
-/// 真正更小时才设置 compressed 标志，否则保留原始 CBOR。外层头包含魔数、
-/// 版本、标志、两个保留字节和未压缩长度，接收端可在分配前执行边界检查。
-///
-/// @note 压缩失败不是文档失败，编码器会安全回退到未压缩正文。
+/// 文档写入有界 CBOR 缓冲，超过阈值时尝试 MZ_BEST_SPEED 压缩。只有压缩
+/// 结果真正更小时才采用压缩正文。未压缩时直接返回含头部的原缓冲。
+/// @note 压缩失败时保留原始正文，编码失败时从不提交部分负载。
 std::expected<ByteBuffer, BeatmapDocumentError> encodeDocumentPayload(
     const Json& document)
 {
-    // 未压缩尺寸既限制内存，也必须能放入线格式的 32 位长度字段。
-    const ByteBuffer raw = Json::to_cbor(document);
-    if ( raw.empty() || raw.size() > MAX_UNCOMPRESSED_DOCUMENT_BYTES ||
-         raw.size() > std::numeric_limits<std::uint32_t>::max() ) {
-        return std::unexpected(BeatmapDocumentError::InvalidDocument);
-    }
-
-    ByteBuffer body       = raw;
-    bool       compressed = false;
-    // 小负载跳过压缩，避免 zlib 头和 CPU 开销大于节省空间。
-    if ( raw.size() >= DOCUMENT_COMPRESSION_THRESHOLD_BYTES ) {
-        mz_ulong compressedSize =
-            mz_compressBound(static_cast<mz_ulong>(raw.size()));
-        ByteBuffer candidate(compressedSize);
-        // 只有成功且严格变小才采用候选，保证压缩永不扩大线上负载。
-        if ( mz_compress2(candidate.data(),
-                          &compressedSize,
-                          raw.data(),
-                          static_cast<mz_ulong>(raw.size()),
-                          MZ_BEST_SPEED) == MZ_OK &&
-             compressedSize < raw.size() ) {
-            candidate.resize(static_cast<std::size_t>(compressedSize));
-            body       = std::move(candidate);
-            compressed = true;
+    static_assert(MAX_UNCOMPRESSED_DOCUMENT_BYTES <=
+                  std::numeric_limits<std::uint32_t>::max());
+    ByteBuffer output(DOCUMENT_PAYLOAD_HEADER_BYTES);
+    {
+        DocumentCborBuffer buffer(output);
+        std::ostream       stream(&buffer);
+        // 使用流状态传递上限失败，沿用标准的 CBOR 编码规则和字段顺序。
+        Json::to_cbor(document, stream);
+        // 一旦短写，序列化得到的前缀不再是完整文档。
+        if ( !stream || output.size() == DOCUMENT_PAYLOAD_HEADER_BYTES ) {
+            return std::unexpected(BeatmapDocumentError::InvalidDocument);
         }
     }
 
-    // 预留精确上界，避免写入固定头和正文时多次扩容。
-    ByteBuffer output;
-    output.reserve(DOCUMENT_PAYLOAD_HEADER_BYTES + body.size());
-    output.insert(output.end(),
-                  DOCUMENT_PAYLOAD_MAGIC.begin(),
-                  DOCUMENT_PAYLOAD_MAGIC.end());
-    output.push_back(DOCUMENT_PAYLOAD_VERSION);
-    output.push_back(compressed ? DOCUMENT_PAYLOAD_COMPRESSED : 0U);
-    output.push_back(0U);
-    output.push_back(0U);
-    appendUint32(output, static_cast<std::uint32_t>(raw.size()));
-    output.insert(output.end(), body.begin(), body.end());
+    const auto rawSize = static_cast<std::uint32_t>(
+        output.size() - DOCUMENT_PAYLOAD_HEADER_BYTES);
+    // 候选缓冲只需容纳比原文短的结果。目的空间不足时保留原文。
+    if ( rawSize >= DOCUMENT_COMPRESSION_THRESHOLD_BYTES ) {
+        mz_ulong   compressedSize = rawSize - 1U;
+        ByteBuffer candidate(DOCUMENT_PAYLOAD_HEADER_BYTES + compressedSize);
+        if ( mz_compress2(candidate.data() + DOCUMENT_PAYLOAD_HEADER_BYTES,
+                          &compressedSize,
+                          output.data() + DOCUMENT_PAYLOAD_HEADER_BYTES,
+                          rawSize,
+                          MZ_BEST_SPEED) == MZ_OK ) {
+            candidate.resize(DOCUMENT_PAYLOAD_HEADER_BYTES + compressedSize);
+            // 先归还大块原文，再压紧结果，避免小负载长期持有大块候选容量。
+            ByteBuffer{}.swap(output);
+            candidate.shrink_to_fit();
+            writeDocumentPayloadHeader(candidate, rawSize, true);
+            return candidate;
+        }
+    }
+
+    writeDocumentPayloadHeader(output, rawSize, false);
     return output;
 }
 
@@ -1576,7 +1642,7 @@ BeatmapDocumentCodec::~BeatmapDocumentCodec() = default;
 /// @warning 该对象由单一逻辑线程使用，内部状态不提供并发同步。
 ///
 /// @par 快照路径
-/// snapshot=true 时无论 flags 为何都编码五分类，并在 payload 副本加入版本字段。
+/// snapshot=true 时无论 flags 为何都编码五分类，并在发送前加入协议字段。
 /// 成功后 encodingBaseline 更新为不含协议头字段的 current；对象 ID 完整时一并
 /// 建立快速缓存，否则仅禁用优化，快照本身仍然有效。
 ///
@@ -1600,14 +1666,15 @@ std::expected<ByteBuffer, BeatmapDocumentError> BeatmapDocumentCodec::encode(
     Json current =
         snapshot ? makeDocument(beatmap) : makeMutationDocument(beatmap, flags);
     if ( snapshot ) {
-        // 协议字段只加入发送 payload，不污染五分类 encodingBaseline。
-        Json payload        = current;
-        payload["version"]  = DOCUMENT_FORMAT_VERSION;
-        payload["snapshot"] = true;
-        auto encoded        = encodeDocumentPayload(payload);
-        // 发送负载成功后才把当前状态确认为下一次增量基线。
+        // 在临时快照上写协议字段，编码成功后移交五分类内容供后续增量比较。
+        current["version"]  = DOCUMENT_FORMAT_VERSION;
+        current["snapshot"] = true;
+        auto encoded        = encodeDocumentPayload(current);
         if ( encoded.has_value() ) {
-            m_impl->encodingBaseline    = current;
+            // 去除外层字段后转移所有权，失败路径不会改变已有发送基线。
+            current.erase("version");
+            current.erase("snapshot");
+            m_impl->encodingBaseline    = std::move(current);
             m_impl->hasEncodingBaseline = true;
             auto cache                  = makeObjectEncodingCache(beatmap);
             if ( cache ) {
