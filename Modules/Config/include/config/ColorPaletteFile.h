@@ -1,10 +1,10 @@
 #pragma once
 
-#include "config/EditorSettings.h"
+#include "config/ColorPaletteScheme.h"
 
 #include <cstdint>
 #include <filesystem>
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 
 namespace MMM::Config
 {
@@ -29,23 +29,13 @@ struct ColorPaletteFile {
 };
 
 /// @brief 将调色方案文件序列化为 JSON。
-/// @param j 输出 JSON。
-/// @param file 待序列化文件。
-inline void to_json(nlohmann::json& j, const ColorPaletteFile& file)
-{
-    j = nlohmann::json{ { "format", COLOR_PALETTE_FILE_FORMAT },
-                        { "version", file.version },
-                        { "scheme", file.scheme } };
-}
+/// @param j 输出 JSON，包含稳定格式头、版本与配色方案。
+/// @param file 待共享的配色文件结构。
+void to_json(nlohmann::json& j, const ColorPaletteFile& file);
 
-/// @brief 从 JSON 读取调色方案文件。
-/// @param j 输入 JSON。
-/// @param file 输出文件结构。
-inline void from_json(const nlohmann::json& j, ColorPaletteFile& file)
-{
-    file.version = j.value("version", COLOR_PALETTE_FILE_VERSION);
-    file.scheme  = j.value("scheme", ColorPaletteScheme());
-}
+/// @brief 从已知类型的 JSON 读取调色方案文件。
+/// @note 磁盘外部输入应通过 importColorPaletteFile 执行完整结构和范围校验。
+void from_json(const nlohmann::json& j, ColorPaletteFile& file);
 
 /// @brief 将调色方案导出为可独立分享的 JSON 文件。
 /// @param path 目标文件路径。

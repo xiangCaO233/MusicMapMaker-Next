@@ -1,6 +1,7 @@
 #include "config/ColorPaletteFile.h"
 
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -175,6 +176,60 @@ bool testIvmExamplePalette(const std::filesystem::path& palettePath)
            wholeBeatColor[1] < 0.2f;
 }
 
+/// @brief 验证磁盘导入保持严格校验，失败时不会替换现有配色。
+/// @param outputDirectory 已由导出用例创建的构建输出目录。
+/// @return 不支持的版本、缺失的通道及范围外的颜色均被拒绝时返回真。
+/// @details 默认色具有确定的数组长度和 RGBA 值，适合建立三种只改一处的样例。
+/// 区分可信 JSON 的 ADL 结构转换与对外文件导入的校验入口，两条路径分别断言。
+bool testInvalidPalette(const std::filesystem::path& outputDirectory)
+{
+    using MMM::Config::ColorPaletteFile;
+    using MMM::Config::ColorPaletteScheme;
+    // 通过类型的 ADL 生成合法基线，另用正式文件导入验证变更后的错误分支。
+    const ColorPaletteFile file;
+    const nlohmann::json   valid = file;
+    // 直接测试已知类型上的 from_json，覆盖声明搬出头文件后的链接与往返。
+    const auto restored = valid.get<ColorPaletteFile>();
+    // 同时检查两类数组，避免转换漏接某段字段而仍能保留默认方案名。
+    if ( restored.version != file.version ||
+         restored.scheme.name != file.scheme.name ||
+         restored.scheme.noteColors != file.scheme.noteColors ||
+         restored.scheme.beatLineColors != file.scheme.beatLineColors )
+        return false;
+
+    // 每个无效样例独立复制完整基线，只改变本次要验证的单项契约。
+    std::array invalid{ valid, valid, valid };
+    // 新版本的字段含义尚未确认，即使现有字段完全可读也不能当成版本 1。
+    invalid[0]["version"] = MMM::Config::COLOR_PALETTE_FILE_VERSION + 1U;
+    // 短 RGBA 缺少 Alpha，超范围值测试则保持结构及通道数量合法。
+    invalid[1]["scheme"]["noteColors"][0]        = { 0, 0, 0 };
+    invalid[2]["scheme"]["beatLineColors"][0][1] = 1.25;
+    const auto         path = outputDirectory / "invalid_palette.mmpalette";
+    ColorPaletteScheme existing;
+    // 源对象完成验证前不得赋值给调用方；名称哨兵区分默认值与现有设置。
+    existing.name = "Existing";
+    // 在同一路径连续覆盖，测试失败后被调用方的方案仍可在下一轮继续使用。
+    for ( const auto& document : invalid ) {
+        // 关闭写入流后再打开导入器，避免未刷盘状态把合法结构误判为解析错误。
+        {
+            std::ofstream output(path, std::ios::binary | std::ios::trunc);
+            output << document;
+            output.close();
+            if ( !output ) return false;
+        }
+        // 无论失败发生在头字段还是颜色数组内部，导入器都必须保留此前方案。
+        if ( MMM::Config::importColorPaletteFile(path, existing) ||
+             // 源对象完成验证前不得赋值给调用方；名称哨兵区分默认值与现有设置。
+             existing.name != "Existing" ||
+             existing.noteColors != file.scheme.noteColors ||
+             existing.beatLineColors != file.scheme.beatLineColors ) {
+            // 候选结构的部分字段可能已读入，但拒绝时不能覆盖原对象。
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 覆盖完整调色方案文件的序列化、写入和覆盖流程。
@@ -191,6 +246,7 @@ int main(int argc, char** argv)
     }
     // 先验证可写输出链路，再读取只读示例资源，失败阶段由返回值区分范围。
     return testExportAndOverwrite(std::filesystem::path(argv[1])) &&
+                   testInvalidPalette(std::filesystem::path(argv[1])) &&
                    testIvmExamplePalette(std::filesystem::path(argv[2]))
                ? 0
                : 1;
