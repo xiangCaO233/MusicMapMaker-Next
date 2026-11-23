@@ -1,11 +1,8 @@
 #include "logic/ProjectDirectoryWatcher.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
-#include "runtime/AppThreadPool.h"
 
 #include <chrono>
-#include <future>
-#include <ice/thread/ThreadPool.hpp>
 #include <mutex>
 #include <stop_token>
 #include <thread>
@@ -20,11 +17,11 @@ namespace MMM::Logic
 {
 
 /// @brief 控制侧和后台任务共享的私有状态；不向包含监听器的控制器传播线程实现。
-/// 任务仍由应用线程池调度，状态只在监听器构造时分配一次。
+/// 独立监听线程可以阻塞于平台事件，状态只在监听器构造时分配一次。
 struct ProjectDirectoryWatcher::State {
     /// @brief 文件夹监听线程的主循环。
     /// @param watchPath 需要递归监听的项目目录路径。
-    /// @param stopToken 共享线程池任务的停止令牌。
+    /// @param stopToken 独立监听线程的停止令牌。
     /// @param changePending 借用外层对象的原子门闩，stop
     /// 等待任务退出后才可销毁。
     /// @warning 后台阻塞监听路径；Win32 等待退出/变更事件，其他平台每 500ms
@@ -33,11 +30,8 @@ struct ProjectDirectoryWatcher::State {
                            std::stop_token       stopToken,
                            std::atomic<bool>&    changePending);
 
-    /// @brief 发布到 Runtime 共享线程池的监听任务。
-    std::future<void> m_workerFuture;
-
-    /// @brief 监听任务的协作式停止源。
-    std::stop_source m_stopSource;
+    /// @brief 负责平台目录监听的独立线程。
+    std::jthread m_worker;
 
     /// @brief 监听线程运行标志。
     /// @warning 文件监听线程原子：启动/停止线程时写入，监听循环轮询读取；
@@ -163,14 +157,6 @@ void ProjectDirectoryWatcher::start(const std::filesystem::path& path)
     stop();
     // 不让两个项目的监听任务共用此实例，新任务只能在旧任务退出后建立。
 
-    auto* appThreadPool = Runtime::AppThreadPool::instance().get();
-    // 共享线程池由应用生命周期管理，此处只借用任务提交入口。
-    if ( !appThreadPool ) {
-        // 未初始化 Runtime 时保持未启动，不另建独立线程绕开应用退出管理。
-        XERROR("Directory Watcher: Runtime thread pool is not initialized.");
-        return;
-    }
-
     {
         /// @brief 保护监听状态切换和平台退出事件创建的互斥锁。
         std::lock_guard<std::mutex> lock(m_state->m_mutex);
@@ -189,21 +175,16 @@ void ProjectDirectoryWatcher::start(const std::filesystem::path& path)
 #endif
     }
 
-    m_state->m_stopSource = std::stop_source{};
-    // stop_source 不能沿用已请求停止的旧状态，每次监听使用新令牌。
-    const auto token        = m_state->m_stopSource.get_token();
-    m_state->m_workerFuture = appThreadPool->enqueue(
-        // 路径按值捕获，调用者离开启动函数后不依赖其参数对象继续存活。
-        [this, path, token]() {
-            m_state->watcherThreadLoop(path, token, m_changePending);
-        });
-    // 日志表示任务已提交，平台目录打开可能稍后在工作线程内失败。
+    // 平台文件监听可长期等待，独立线程避免占住共享计算池。
+    m_state->m_worker = std::jthread([this, path](std::stop_token token) {
+        m_state->watcherThreadLoop(path, token, m_changePending);
+    });
     XINFO("Directory Watcher: Started monitoring directory: {}",
           Config::pathToUtf8(path));
 }
 
 /// @brief 停止文件夹监听器。
-/// @warning 控制侧等待后台任务退出；不能从监听任务内部等待自己的 future。
+/// @warning 控制侧等待后台任务退出；不能从监听任务内部等待自己的线程。
 void ProjectDirectoryWatcher::stop()
 {
     // 清理不消费 m_changePending，新一次 start 会清零旧项目的挂起状态。
@@ -217,8 +198,8 @@ void ProjectDirectoryWatcher::stop()
         std::lock_guard<std::mutex> lock(m_state->m_mutex);
         wasRunning =
             m_state->m_running.exchange(false, std::memory_order_acq_rel);
-        // 运行位负责循环退出，future 是否有效决定是否仍需等待任务收尾。
-        hadWorker = m_state->m_workerFuture.valid();
+        // 运行位负责循环退出，线程是否可 join决定是否仍需等待任务收尾。
+        hadWorker = m_state->m_worker.joinable();
 #ifdef _WIN32
         if ( wasRunning && m_state->m_exitEvent &&
              m_state->m_exitEvent != INVALID_HANDLE_VALUE ) {
@@ -228,12 +209,11 @@ void ProjectDirectoryWatcher::stop()
 #endif
     }
 
-    m_state->m_stopSource.request_stop();
+    m_state->m_worker.request_stop();
     // 令牌与运行标志同时用于循环退出；Win32 还依靠退出事件唤醒系统等待。
     // 等待放在互斥锁之外，后台任务仍可能需要该锁发布平台句柄。
-    if ( m_state->m_workerFuture.valid() ) {
-        m_state->m_workerFuture.wait();
-        m_state->m_workerFuture = std::future<void>{};
+    if ( m_state->m_worker.joinable() ) {
+        m_state->m_worker.join();
         // 消费掉本轮任务句柄，使重复 stop 不再次等待已结束的任务。
     }
 
@@ -293,7 +273,7 @@ bool ProjectDirectoryWatcher::isRelevantProjectPathChange(
 
 /// @brief 文件夹监听线程的主循环。
 /// @param watchPath 需要递归监听的项目目录路径。
-/// @param stopToken 共享线程池任务的停止令牌。
+/// @param stopToken 独立监听线程的停止令牌。
 /// @warning 仅在线程池后台任务运行；系统事件等待及轮询休眠不阻塞逻辑更新。
 void ProjectDirectoryWatcher::State::watcherThreadLoop(
     std::filesystem::path watchPath, std::stop_token stopToken,
@@ -326,7 +306,7 @@ void ProjectDirectoryWatcher::State::watcherThreadLoop(
         /// @brief 保护目录监听句柄发布的互斥锁。
         std::lock_guard<std::mutex> lock(m_mutex);
         m_directoryHandle = directoryHandle;
-        // 向 stop 公开已打开句柄，退出清理在 future 完成后才执行。
+        // 向 stop 公开已打开句柄，退出清理在线程退出后才执行。
     }
 
     // 创建重叠 I/O 事件
@@ -463,7 +443,7 @@ void ProjectDirectoryWatcher::State::watcherThreadLoop(
         }
     }
 #endif
-    // 控制侧通过 future 确认函数已结束，之后才可以销毁捕获的 this。
+    // 控制侧通过 join 确认函数已结束，之后才可以销毁捕获的 this。
 }
 
 }  // namespace MMM::Logic

@@ -4,10 +4,10 @@
 #include <condition_variable>
 #include <cstdint>
 #include <filesystem>
-#include <future>
 #include <mutex>
 #include <optional>
 #include <stop_token>
+#include <thread>
 
 namespace MMM::Canvas
 {
@@ -28,7 +28,7 @@ struct BackgroundVideoFrame {
 class BackgroundVideoPlayer
 {
 public:
-    /// @brief 创建视频解码工作线程。
+    /// @brief 构造空播放器；首次设置视频资源时才启动工作线程。
     BackgroundVideoPlayer();
 
     /// @brief 停止工作线程并释放解码器。
@@ -76,7 +76,7 @@ private:
     std::mutex m_mutex;
 
     /// @brief 唤醒解码工作线程的条件变量。
-    std::condition_variable m_condition;
+    std::condition_variable_any m_condition;
 
     /// @brief 当前请求的视频资源路径。
     std::filesystem::path m_requestedSource;
@@ -96,11 +96,8 @@ private:
     /// @brief 最新完成且尚未被 UI 消费的帧。
     std::optional<BackgroundVideoFrame> m_readyFrame;
 
-    /// @brief 发布到 Runtime 共享线程池的视频解码任务。
-    std::future<void> m_workerFuture;
-
-    /// @brief 视频解码任务的协作式停止源。
-    std::stop_source m_stopSource;
+    /// @brief 独立解码线程；空白画布不会占用工作线程。
+    std::jthread m_worker;
 };
 
 }  // namespace MMM::Canvas

@@ -1,46 +1,18 @@
 #include "canvas/BackgroundVideoPlayer.h"
 #include "log/colorful-log.h"
-#include "runtime/AppThreadPool.h"
 
 #include <cmath>
-#include <ice/thread/ThreadPool.hpp>
 #include <utility>
 
 namespace MMM::Canvas
 {
 
-/// @brief 在应用共享线程池中启动单一视频解码循环。
-///
-/// 工作任务捕获 this，因此类禁止移动；对象销毁前会请求停止并等待任务退出。
-/// 若线程池尚未初始化，播放器保持可调用但不会产生解码帧。
-BackgroundVideoPlayer::BackgroundVideoPlayer()
-{
-    // 复用 Runtime 线程池，避免每个画布额外创建和管理原生线程。
-    auto* appThreadPool = Runtime::AppThreadPool::instance().get();
-    if ( !appThreadPool ) {
-        XERROR("Background video: Runtime thread pool is not initialized.");
-        return;
-    }
-    // stop_token 与条件变量共同唤醒阻塞任务，确保析构无需等待新请求到来。
-    const auto token = m_stopSource.get_token();
-    m_workerFuture =
-        appThreadPool->enqueue([this, token]() { workerLoop(token); });
-}
+/// @brief 初始无视频，等待资源设置时再创建解码线程。
+BackgroundVideoPlayer::BackgroundVideoPlayer() = default;
 
-/// @brief 协作式停止工作循环，并等待解码器在所属线程释放。
-/// @warning 低频析构路径：若 FFmpeg 正在读取本地视频，wait 会等待该次调用返回。
-BackgroundVideoPlayer::~BackgroundVideoPlayer()
-{
-    // 先发停止信号再通知条件变量，覆盖线程正在等待请求的常见状态。
-    m_stopSource.request_stop();
-    m_condition.notify_all();
-    if ( m_workerFuture.valid() ) {
-        // 解码器由 workerLoop 栈持有，必须等它 close 后才能销毁本对象成员。
-        m_workerFuture.wait();
-        // 显式清空 future，避免保留已经完成任务的共享状态。
-        m_workerFuture = std::future<void>{};
-    }
-}
+/// @brief 先停止解码线程，再按成员逆序释放请求状态。
+/// @warning 低频析构路径：jthread 可能等待正在执行的本地读取返回。
+BackgroundVideoPlayer::~BackgroundVideoPlayer() = default;
 
 /// @brief 切换背景视频资源并使此前所有完成帧失效。
 /// @param path 新视频路径；空路径表示停用背景视频。
@@ -61,6 +33,12 @@ std::uint64_t BackgroundVideoPlayer::setSource(
     // generation 隔离资源或非连续 Seek，阻止旧解码结果跨代际发布。
     ++m_requestGeneration;
     ++m_requestRevision;
+    // 空白和静态图片画布始终不需要解码工作者。解码器在专用线程内构造，
+    // 让打开视频或等待后续请求都无法占用帧任务池。
+    if ( !path.empty() && !m_worker.joinable() ) {
+        m_worker =
+            std::jthread([this](std::stop_token token) { workerLoop(token); });
+    }
     // revision 是条件变量谓词使用的每请求唤醒序列。
     m_condition.notify_one();
     return m_requestGeneration;
@@ -141,9 +119,8 @@ void BackgroundVideoPlayer::workerLoop(std::stop_token stopToken)
         {
             std::unique_lock lock(m_mutex);
             // 谓词防止虚假唤醒；停止请求与新修订号都能结束等待。
-            m_condition.wait(lock, [this, &stopToken, &handledRevision]() {
-                return stopToken.stop_requested() ||
-                       m_requestRevision != handledRevision;
+            m_condition.wait(lock, stopToken, [this, &handledRevision]() {
+                return m_requestRevision != handledRevision;
             });
             if ( stopToken.stop_requested() ) {
                 break;
