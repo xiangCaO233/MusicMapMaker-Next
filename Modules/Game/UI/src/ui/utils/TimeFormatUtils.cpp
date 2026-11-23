@@ -214,7 +214,8 @@ std::string formatTimeWithPreference(
     double timeSeconds, Config::TimeFormatPreference preference,
     const Common::Render::RenderSnapshot* snapshot)
 {
-    // 显式枚举分派确保未知值安全回退为三位秒数。
+    // 显式枚举分派使未知偏好回退为带四位小数的秒数。
+    // 状态栏和各画布可逐帧调用；Beat 分支借用快照索引，只二分定位当前 BPM。
     switch ( preference ) {
     case Config::TimeFormatPreference::Clock: return formatClock(timeSeconds);
     case Config::TimeFormatPreference::Milliseconds:

@@ -138,7 +138,11 @@ inline int safeStoi(const std::string& s, int defaultVal = 0)
 }
 
 /// @brief 安全解析浮点数，失败时返回默认值。
-/// @details 兼容旧 `std::stod` 行为：允许前导空白和数字后的非数字尾巴。
+/// @details 跳过前导 ASCII 空白，再接受至少消费一个字符的浮点前缀。
+/// 起始正号不受支持，指数中的正号由底层十进制语法处理。
+/// 前缀按平台实现解释，Apple 的 strtod_l 可完整读取十六进制浮点，
+/// 其他平台使用 from_chars 的默认格式；因此该入口不能替代协议的十进制校验。
+/// @note 不检查数值是否有限，也不要求消费整个字段；调用方按自身契约检查。
 /// @param s 待解析字符串。
 /// @param defaultVal 解析失败时的默认值。
 /// @return 解析得到的浮点数或默认值。
@@ -149,7 +153,8 @@ inline double safeStod(const std::string& s, double defaultVal = 0.0)
     auto text = trimLeadingAsciiSpaces(s);
     if ( text.empty() ) return defaultVal;
 
-    // 只要求存在合法前缀，尾随格式文本按旧 stod 兼容语义忽略。
+    // 历史文件字段允许附带尾部格式文本，因此只有未消费和解析错误触发默认值。
+    // 实际消费长度及平台错误码由 parseFloatingPrefix 提供。
     const auto result = parseFloatingPrefix(text);
     if ( result.error == std::errc{} && result.parsedLength != 0 ) {
         return result.value;
