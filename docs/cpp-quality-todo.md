@@ -192,7 +192,7 @@
 - [ ] **UI-02 · P2 · 仅在编辑发生时解析字段 JSON。** 同文件第 1316、1373 行，弹窗打开且可见时，未编辑的一帧也解析同一个缓冲两次。用文本修订标记让编辑、格式化、重建和子字段操作都使缓存失效；完成按钮必须看到最后一次输入。验收静置时解析次数为零，每次修改后的错误提示与提交值一致。
 - [ ] **UI-03 · P3 · 明确全局搜索面板的产品状态。** `Modules/Game/UI/src/ui/imgui/manager/SearchView.cpp:51–62` 输入事件处理为空，所有查询均显示无结果。接入索引时区分未搜索、搜索中和无结果，覆盖过期结果丢弃及跳转；若功能暂缓，应在入口说明可用性。项目配置中的未来扩展备注未发现当前行为缺口。
 - [ ] **STD-01 · P2 · 梳理四个原子发布位置的所有权。** 12 处共享指针 atomic 自由函数调用位于 `Modules/Game/Logic/src/logic/SessionRegistry.cpp:266`（含两种快照）、`RenderSyncRegistry.cpp:215`、`session/BeatmapSession.cpp:578` 和 `session/BeatmapSession_Commands.cpp:2598`。分别登记写者、读者、持有时长与最后释放线程；会话/图集读者优先每轮取得一次句柄，内部传引用。观察者回调后第 2613 行重新获取用于确认身份，不能拿回调前缓存替代。验收旧快照跨关闭仍可用、图集替换、观察者回调中替换及目标工具链弃用告警；仅替换为 atomic<shared_ptr> 仍有所有权和潜在内部同步成本。
-- [ ] **STD-02 · P2 · 导出路径检查显式处理文件系统错误。** `Modules/Game/UI/src/ui/imgui/menu/actions/file/SaveBeatmapAsAction.cpp:213` 使用可能抛出的 exists(path)。改用 error_code 重载，访问失败保留待导出内容并报告原因；分别验证路径不存在、已有文件及父目录无访问权限。
+- [x] **STD-02 · P2 · 导出路径检查显式处理文件系统错误。** `Modules/Game/UI/src/ui/imgui/menu/actions/file/SaveBeatmapAsAction.cpp:213` 使用可能抛出的 exists(path)。改用 error_code 重载，访问失败保留待导出内容并报告原因；分别验证路径不存在、已有文件及父目录无访问权限。 已使用 error_code 重载，查询失败走统一导出失败反馈并中止当次导出，现有目标仍进入覆盖确认。Linux 全量构建、SaveResultFeedbackTest 和 BpmBeatmapImportTest 通过；同编译器文件系统探针验证缺失、已存在及父目录权限拒绝的三种结果。SaveBeatmapAsAction.cpp 注释 246 行、代码 570 行，30.15%。
 - [ ] **STD-03 · P3 · 明确分配诊断与禁异常规范的边界。** `3rdpty/sources/IonCachyEngine/src/diagnostics/AllocationTracker.cpp:25–32、86` 在测试诊断替换的普通 operator new 中抛 bad_alloc，并使用 cout 输出。核对构建隔离并明确诊断目标例外，或迁移到可表达失败的专用测试钩子；不能简单让普通抛出型 new 在失败时返回空指针。验收生产库未链接替换符号，计数测试仍能观测分配。
 
 ## 头文件与注释
