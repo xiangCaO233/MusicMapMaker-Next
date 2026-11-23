@@ -4,6 +4,7 @@
 #include "ui/interaction/EditorInteraction.h"
 
 #include "audio/AudioManager.h"
+#include "common/EditorTrackLayout.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/AudioPresets.h"
@@ -15,11 +16,8 @@
 #include "config/skin/translation/Translation.h"
 #include "config/visual/NoteTexturePosition.h"
 #include "log/colorful-log.h"
-#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/PlaybackController.h"
-#include "logic/session/context/SessionContext.h"
-#include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
 #include "ui/ICanvasView.h"
 #include "ui/IEditorApplicationService.h"
@@ -48,7 +46,6 @@
 #include <imgui_internal.h>
 #include <iterator>
 #include <limits>
-#include <mutex>
 #include <nfd.h>
 #include <optional>
 #include <string>
@@ -1861,36 +1858,14 @@ void ToolbarView::update(UIManager* sourceManager)
                              .enableToolbarValueWheelAdjustment ) {
                         const float wheel = Interaction::mouseWheel();
                         if ( std::abs(wheel) > 0.1F ) {
-                            bool changed = false;
-                            {
-                                // 只有实际滚轮编辑才捕获元数据，保留既有尾随保存入口。
-                                // 锁内复核活动条目，从最新轨道数累加这一格的变化。
-                                std::lock_guard<std::recursive_mutex> lock(
-                                    engine.getSessionMutex());
-                                const auto* entry = engine.getSessionEntry(
-                                    engine.getActiveSessionIndex());
-                                if ( entry && entry->session &&
-                                     entry->session->getContext()
-                                         .currentBeatmap ) {
-                                    auto metadata =
-                                        entry->session->getContext()
-                                            .currentBeatmap->m_baseMapMetadata;
-                                    const int newTracks =
-                                        std::clamp(metadata.track_count +
-                                                       (wheel > 0.0F ? 1 : -1),
-                                                   1,
-                                                   32);
-                                    if ( newTracks != metadata.track_count ) {
-                                        metadata.track_count = newTracks;
-                                        engine.pushCommand(
-                                            Logic::CmdUpdateBeatmapMetadata{
-                                                std::move(metadata) });
-                                        changed = true;
-                                    }
-                                }
-                            }
-                            // 音效播放与谱面快照生命周期无关，离开锁后再执行。
-                            if ( changed )
+                            // 逐次投递滚轮方向，由逻辑累加最新键数，不拿旧元数据重写整个谱面。
+                            const Logic::ToolbarTrackCountEdit edit{
+                                wheel > 0.0F ? 1 : -1, true
+                            };
+                            engine.pushCommand(Logic::CmdUpdateBeatmapMetadata{
+                                .trackCountEdit = edit });
+                            // 边界反馈仍使用本帧显示的键数，不为了获取反馈确认而等待会话。
+                            if ( edit.target(currentTracks) != currentTracks )
                                 ::MMM::UI::PlayInteractionMouseUpFeedback();
                         }
                     }
@@ -2537,7 +2512,7 @@ void ToolbarView::update(UIManager* sourceManager)
 
     // --- 绘制Key数量设置悬浮窗 ---
     //
-    // 轨道数属于谱面元数据，修改时复制完整 BaseMapMetadata 并投递更新命令。
+    // 轨道数属于谱面元数据，变更在逻辑侧应用到最新模型。
     // 弹层不保留元数据引用，活动谱面在帧间关闭时会自动收起。滑条覆盖全部
     // 合法范围，快捷按钮只提供常见键数，不限制其他值。
     //
@@ -2579,18 +2554,11 @@ void ToolbarView::update(UIManager* sourceManager)
                             ImVec2(itemSpacing, itemSpacing));
 
         if ( ImGui::Begin("##KeyCountPopup", nullptr, popupFlags) ) {
-            // 元数据副本在控件确认后通过命令替换，UI 不直接改谱面实体。
-            auto& engine = Logic::EditorEngine::instance();
-            std::lock_guard<std::recursive_mutex> sessionLock(
-                engine.getSessionMutex());
-            auto session = engine.getActiveSession();
-
-            if ( session && session->getContext().currentBeatmap ) {
-                // 保留除 track_count 之外的全部谱面基础元数据。
-                auto meta =
-                    session->getContext().currentBeatmap->m_baseMapMetadata;
-                int currentTracks = meta.track_count;
-
+            // 键数显示使用工具栏的标量发布。只有控件变化才投递字段级意图，
+            // 即使保持弹层打开也不会触及 SessionContext 或等待更新。
+            auto& engine        = Logic::EditorEngine::instance();
+            int   currentTracks = engine.activeBeatmapTrackCount();
+            if ( currentTracks > 0 ) {
                 ImGui::TextUnformatted(TR("ui.settings.beatmap.tracks").data());
                 ImGui::Separator();
 
@@ -2598,8 +2566,9 @@ void ToolbarView::update(UIManager* sourceManager)
                 if ( ::MMM::UI::FeedbackSliderInt(
                          "##TracksSlider", &currentTracks, 1, 32) ) {
                     // 滑条与工具栏滚轮共享 1..32 边界。
-                    meta.track_count = currentTracks;
-                    engine.pushCommand(Logic::CmdUpdateBeatmapMetadata{ meta });
+                    engine.pushCommand(Logic::CmdUpdateBeatmapMetadata{
+                        .trackCountEdit =
+                            Logic::ToolbarTrackCountEdit{ currentTracks } });
                 }
 
                 // 常用 Key 数快速设置按钮
@@ -2621,9 +2590,9 @@ void ToolbarView::update(UIManager* sourceManager)
                              ImVec2(std::floor(28.0f * dpiScale),
                                     std::floor(24.0f * dpiScale))) ) {
                         // 预设只覆盖轨道数字段，保留标题、作者和 BGM 轨道信息。
-                        meta.track_count = commonKeys[i];
-                        engine.pushCommand(
-                            Logic::CmdUpdateBeatmapMetadata{ meta });
+                        engine.pushCommand(Logic::CmdUpdateBeatmapMetadata{
+                            .trackCountEdit = Logic::ToolbarTrackCountEdit{
+                                commonKeys[i] } });
                     }
                 }
                 Utils::popFixedButtonStyleVars();
@@ -2677,66 +2646,11 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
         m_mobileTools ? "###MobileWorkbench" : " ###Toolbar");
     if ( !toolbarWindow ) return;
 
-    // 轨道数只决定弹层行布局；逻辑线程持有会话锁更新时沿用上次布局，
-    // 不能让每帧 UI 等待完整的 BeatmapSession::update。
+    // 三个区域属于同一次活动会话发布，切换后不会继续借用旧谱面的布局。
+    // 绘制只复制小型值快照，背景逻辑更新不会持有这把独立的发布锁。
     auto& engine = Logic::EditorEngine::instance();
-    // 活动索引是原子快照；先处理标签切换，避免抢锁失败时继续显示
-    // 上一张谱面的轨道控制行。
-    const int activeSessionIndex = engine.getActiveSessionIndex();
-    if ( activeSessionIndex != m_soundEffectTrackSessionIndex ) {
-        // 新标签不能短暂显示前一个谱面的混音轨道。
-        m_soundEffectTrackSessionIndex = activeSessionIndex;
-        m_soundEffectHasBeatmap        = false;
-        m_soundEffectPlayerTrackCount  = 0;
-        m_soundEffectDraftTrackCount   = 0;
-        m_soundEffectBgmTrackCount     = 0;
-    }
-    {
-        // try_lock 失败仅延后一帧刷新，不阻塞主线程；成功后借用 SessionEntry，
-        // 避免每帧复制 BeatmapSession 的共享所有权。
-        // 高 UPS 时也不重试抢锁，否则会变相等待整个会话更新。
-        std::unique_lock<std::recursive_mutex> sessionLock(
-            engine.getSessionMutex(), std::try_to_lock);
-        if ( sessionLock.owns_lock() ) {
-            // 活动标签可能恰好在 try_lock 前切换；锁内复核并清空旧布局。
-            const int lockedActiveIndex = engine.getActiveSessionIndex();
-            if ( lockedActiveIndex != m_soundEffectTrackSessionIndex ) {
-                m_soundEffectTrackSessionIndex = lockedActiveIndex;
-                m_soundEffectHasBeatmap        = false;
-                m_soundEffectPlayerTrackCount  = 0;
-                m_soundEffectDraftTrackCount   = 0;
-                m_soundEffectBgmTrackCount     = 0;
-            }
-            // getSessionEntry 的内部递归加锁在当前线程立即成功；外层锁
-            // 继续保护返回指针和 SessionContext 的读取，避免标签关闭时悬空。
-            const auto* entry = engine.getSessionEntry(lockedActiveIndex);
-            m_soundEffectHasBeatmap =
-                entry && entry->session &&
-                entry->session->getContext().currentBeatmap;
-            if ( m_soundEffectHasBeatmap ) {
-                // 元数据轨道数和草稿轨道数来源不同，读取后规范为非负值。
-                const auto& context = entry->session->getContext();
-                const auto& metadata =
-                    context.currentBeatmap->m_baseMapMetadata;
-                m_soundEffectPlayerTrackCount =
-                    std::max(0, metadata.track_count);
-                m_soundEffectDraftTrackCount =
-                    std::max(0, context.draftTrackCount);
-                m_soundEffectBgmTrackCount =
-                    std::max(0, metadata.bgm_track_count);
-            } else {
-                m_soundEffectPlayerTrackCount = 0;
-                m_soundEffectDraftTrackCount  = 0;
-                m_soundEffectBgmTrackCount    = 0;
-            }
-        }
-    }
-    // 离开锁后只消费缓存标量，不借用会话或谱面对象。
-    // 轨道数变化在下一次成功读取时更新，不影响本帧控件交互。
-    const bool hasBeatmap       = m_soundEffectHasBeatmap;
-    const int  playerTrackCount = m_soundEffectPlayerTrackCount;
-    const int  draftTrackCount  = m_soundEffectDraftTrackCount;
-    const int  bgmTrackCount    = m_soundEffectBgmTrackCount;
+    const auto [hasBeatmap, playerTrackCount, draftTrackCount, bgmTrackCount] =
+        engine.activeTrackLayout();
 
     // 弹层外观沿用编辑器主题，几何尺寸统一按 DPI 取整。
     const auto& aesthetics =

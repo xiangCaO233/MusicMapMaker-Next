@@ -7,6 +7,7 @@
 #include "common/ComparisonCanvas.h"
 #include "common/EditTool.h"
 #include "common/EditorGestureState.h"
+#include "common/EditorTrackLayout.h"
 #include "common/LogicCommands.h"
 #include "common/UnicodeFontData.h"
 #include "common/render/RenderSnapshot.h"
@@ -2915,6 +2916,21 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
         return;
     }
 
+    // 工具栏只提交键数意图，消费时再读取最新元数据。拥有型注册表快照保证
+    // 关闭画布不会悬空，也避免鼠标滚轮或滑条等待整轮逻辑更新。
+    if ( const auto* metadata = std::get_if<CmdUpdateBeatmapMetadata>(&cmd);
+         metadata && metadata->trackCountEdit ) {
+        const auto snapshot = impl().m_sessionRegistry.publishedSnapshot();
+        const auto active   = std::ranges::find(snapshot->sessions,
+                                                snapshot->activeIndex,
+                                                &SessionSnapshotEntry::index);
+        // 活动索引和条目来自同代，索引左移时不能回退到任意当前会话。
+        // Session 自己执行协作权限检查；Logo 只显示工具占位状态。
+        if ( active != snapshot->sessions.end() && !active->isLogoPlaceholder )
+            active->session->pushCommand(std::move(cmd));
+        return;
+    }
+
     // 剩余命令属于活动编辑上下文；取得锁后再读取活动索引，避免路由中途切换。
     std::lock_guard<std::recursive_mutex> lock(
         impl().m_sessionRegistry.mutex());
@@ -3150,6 +3166,46 @@ bool EditorEngine::hasActiveBeatmap() const
 int32_t EditorEngine::activeBeatmapTrackCount() const
 {
     return impl().m_activeBeatmapTrackCount.load(std::memory_order_relaxed);
+}
+
+/// @brief 从独立发布槽复制完整的三组轨道数。
+/// @warning UI 弹层每帧调用，短锁仅复制值，禁止嵌套其它锁。
+Common::EditorTrackLayout EditorEngine::activeTrackLayout() const
+{
+    // 与写侧只共享这个值槽，调用者不需要获取注册表或等待音频控制流程。
+    const std::lock_guard lock(impl().m_activeTrackLayoutMutex);
+    return impl().m_activeTrackLayout;
+}
+
+/// @brief 按活动会话当前状态更新工具栏可用性和完整轨道布局。
+/// @param context 已串行化的活动上下文，空指针表示正在切换或没有活动谱面。
+/// @warning 逻辑每轮调用，仅在变化时发布。锁内只写常量大小的值。
+void EditorEngine::publishTrackLayoutUnsafe(const SessionContext* context)
+{
+    auto& state = impl();
+    // 默认构造代表无谱面，玩家键数和混音区域一起撤回。
+    Common::EditorTrackLayout layout;
+    int32_t                   playerTrackCount = 0;
+    if ( context && context->currentBeatmap ) {
+        const auto& metadata = context->currentBeatmap->m_baseMapMetadata;
+        // 主工具栏沿用规范化的 K 数，音效弹层保留原先从元数据读取的布局口径。
+        playerTrackCount = std::max(1, context->trackCount);
+        layout           = { true,
+                             std::max(0, metadata.track_count),
+                             std::max(0, context->draftTrackCount),
+                             std::max(0, metadata.bgm_track_count) };
+    }
+    // 原标量继续为菜单提供只读键数，无需让普通菜单进入弹层发布锁。
+    if ( state.m_activeBeatmapTrackCount.load(std::memory_order_relaxed) !=
+         playerTrackCount )
+        state.m_activeBeatmapTrackCount.store(playerTrackCount,
+                                              std::memory_order_relaxed);
+    // 写者都受会话注册表锁串行化，锁外判等只会与 UI 的读访问并发。
+    // 值未变化不进入发布锁，写入时也不借用或复制任何谱面资源。
+    if ( state.m_activeTrackLayout != layout ) {
+        const std::lock_guard lock(state.m_activeTrackLayoutMutex);
+        state.m_activeTrackLayout = layout;
+    }
 }
 
 /// @brief 判断当前活跃 Session 是否存在已选谱面物件。
@@ -3697,8 +3753,7 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 新谱面尚未处理载入与播放命令，旧活动项状态不能继续显示。
                 impl().m_activePlaybackPlaying.store(false,
                                                      std::memory_order_relaxed);
-                impl().m_activeBeatmapTrackCount.store(
-                    0, std::memory_order_relaxed);
+                publishTrackLayoutUnsafe(nullptr);
                 impl().m_activeHasChartObjectSelection.store(
                     false, std::memory_order_relaxed);
                 // 会话条目身份变化后立即刷新候选并发布快照，UI 不能继续看到
@@ -3792,6 +3847,8 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
     /// @brief 新 Session 在注册表中的索引。
     // append 使新会话活动，此前手势不能泄漏给新画布。
     publishGestureStateUnsafe(nullptr);
+    // 新条目会成为活动项，但载图命令尚未执行，先撤回上一张谱面的轨道布局。
+    publishTrackLayoutUnsafe(nullptr);
     int32_t newIndex = impl().m_sessionRegistry.append(std::move(entry));
     // append 已负责发布会话列表；同步候选另依赖新条目的音频身份，需随后刷新。
     refreshMainAudioSyncPeerStateUnsafe();
@@ -3842,24 +3899,19 @@ void EditorEngine::closeSession(int32_t index, bool updateWorkspace)
     impl().m_activePlaybackPlaying.store(activePlaying,
                                          std::memory_order_relaxed);
     const SessionContext* gestureContext     = nullptr;
-    int32_t               activeTrackCount   = 0;
     bool                  activeHasSelection = false;
     if ( activeIndex >= 0 &&
          activeIndex < static_cast<int32_t>(remainingSessions.size()) &&
          remainingSessions[activeIndex].session ) {
         const auto& context =
             remainingSessions[activeIndex].session->getContext();
-        gestureContext = &context;
-        // 关闭活动标签后只发布剩余活动谱面的键数，缺省项保留零。
-        if ( context.currentBeatmap )
-            activeTrackCount = std::max(1, context.trackCount);
+        gestureContext     = &context;
         activeHasSelection = !context.selectedNoteEntities.empty() ||
                              !context.selectedSampleEntities.empty();
     }
     // 活动索引可能指向另一个会话，必须同时更新快捷键使用的手势。
     publishGestureStateUnsafe(gestureContext);
-    impl().m_activeBeatmapTrackCount.store(activeTrackCount,
-                                           std::memory_order_relaxed);
+    publishTrackLayoutUnsafe(gestureContext);
     impl().m_activeHasChartObjectSelection.store(activeHasSelection,
                                                  std::memory_order_relaxed);
     refreshMainAudioSyncPeerStateUnsafe();
@@ -3936,7 +3988,7 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
     impl().m_sessionRegistry.setActiveIndex(index);
     // Logo 不控制 transport；原槽重置后旧播放状态立即失效。
     impl().m_activePlaybackPlaying.store(false, std::memory_order_relaxed);
-    impl().m_activeBeatmapTrackCount.store(0, std::memory_order_relaxed);
+    publishTrackLayoutUnsafe(nullptr);
     impl().m_activeHasChartObjectSelection.store(false,
                                                  std::memory_order_relaxed);
     refreshMainAudioSyncPeerStateUnsafe();
@@ -4210,7 +4262,7 @@ void EditorEngine::applyActiveSessionIndex(int32_t index,
     impl().m_sessionRegistry.setActiveIndex(index);
     // 切换期间先撤销旧会话的播放标记，防止 UI 把旧状态用于新目标。
     impl().m_activePlaybackPlaying.store(false, std::memory_order_relaxed);
-    impl().m_activeBeatmapTrackCount.store(0, std::memory_order_relaxed);
+    publishTrackLayoutUnsafe(nullptr);
     impl().m_activeHasChartObjectSelection.store(false,
                                                  std::memory_order_relaxed);
     auto& activeSession = sessions[index].session;
@@ -4293,9 +4345,7 @@ void EditorEngine::applyActiveSessionIndex(int32_t index,
     // transport 最终状态已确定，再发布给逐帧工具栏读取。
     impl().m_activePlaybackPlaying.store(ctx.isPlaying,
                                          std::memory_order_relaxed);
-    impl().m_activeBeatmapTrackCount.store(
-        ctx.currentBeatmap ? std::max(1, ctx.trackCount) : 0,
-        std::memory_order_relaxed);
+    publishTrackLayoutUnsafe(&ctx);
     impl().m_activeHasChartObjectSelection.store(
         !ctx.selectedNoteEntities.empty() ||
             !ctx.selectedSampleEntities.empty(),
@@ -4927,12 +4977,17 @@ void EditorEngine::loop()
                             impl().m_activePlaybackPlaying.store(
                                 activeContext.isPlaying,
                                 std::memory_order_relaxed);
-                            // 使用处理命令后的键数，让修改、撤销与谱面切换共用一个发布点。
-                            impl().m_activeBeatmapTrackCount.store(
-                                activeContext.currentBeatmap
-                                    ? std::max(1, activeContext.trackCount)
-                                    : 0,
-                                std::memory_order_relaxed);
+                            // 更新快照取得后仍可能发生标签重排，发布前核对实际活动会话。
+                            const auto activeNow =
+                                impl().m_sessionRegistry.activeIndex();
+                            const auto& entries =
+                                impl().m_sessionRegistry.entriesUnsafe();
+                            if ( activeNow >= 0 &&
+                                 static_cast<size_t>(activeNow) <
+                                     entries.size() &&
+                                 entries[activeNow].session.get() ==
+                                     entry.session.get() )
+                                publishTrackLayoutUnsafe(&activeContext);
                             impl().m_activeHasChartObjectSelection.store(
                                 !activeContext.selectedNoteEntities.empty() ||
                                     !activeContext.selectedSampleEntities

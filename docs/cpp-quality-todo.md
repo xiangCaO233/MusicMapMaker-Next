@@ -88,7 +88,7 @@
   - 验收：每批提取后原行为测试通过；UI/Canvas 相关文件不再包含 SessionContext 或获取 session mutex；使用 Ninja 依赖图量化头文件翻译单元扇出变化；分别测试活动会话关闭、切换与快照保活。
 
   - 已完成批注表读模型。逻辑侧在会话更新边界按请求投影批注行与导出字段，同时发布拍位与播放状态。Canvas 读取完整的不可变快照，不获取会话更新锁。批注与 Timing 分别按修订复用，刷新检测到活动标签变更时清除另一会话的旧行。
-  - Linux Debug 32 线程全量构建及全部 218 项 CTest 通过。回归覆盖会话更新锁占用期间刷新、相同批注修订的谱面切换、分拍修改仅更新时间格式、关闭后回到剩余谱面、会话销毁后的旧快照保活，以及 SDL 虚拟输出播放期间拒绝提交。Toolbar 与 transport 等消费者留在 PERF-05 后续批次。
+  - Linux Debug 32 线程全量构建及全部 218 项 CTest 通过。回归覆盖会话更新锁占用期间刷新、相同批注修订的谱面切换、分拍修改仅更新时间格式、关闭后回到剩余谱面、会话销毁后的旧快照保活，以及 SDL 虚拟输出播放期间拒绝提交。
   - 本批逐文件注释率
 
     | 文件 | 注释行 | 代码行 | 比例 |
@@ -106,6 +106,23 @@
     | `Modules/Game/Logic/src/logic/SessionRegistry.cpp` | 125 | 279 | 30.94% |
     | `Modules/Game/Logic/src/logic/session/BeatmapSession.cpp` | 416 | 965 | 30.12% |
     | `Modules/Game/Logic/src/logic/session/BeatmapSession_Rendering.cpp` | 725 | 1685 | 30.08% |
+
+  - 已完成工具栏轨道布局批次。音效弹层一次读取玩家、草稿和 BGM 三组标量，通过短临界区取得同一代布局。键数滚轮、滑条和预设通过会话队列提交单字段变更，逻辑消费时才按当前模型计算键数，继续使用现有迁移、撤销和尾随保存流程。播放控制的生命周期入口仍待收敛。
+  - Linux Debug 32 线程全量构建，全部 218 项 CTest 通过。回归覆盖占用会话锁时音效布局读取与键数命令入队、连续两格滚轮保留前一条标题修改和 BGM 相对轨、切换及关闭后的三组轨道同步。Ninja 活动对象记录中，`ToolbarView.cpp` 移除了 `SessionContext.h` 和 `BeatmapSession.h` 的依赖，`SessionContext.h` 的扇出由 71 降至 70。
+  - 工具栏批次逐文件注释率
+
+    | 文件 | 注释行 | 代码行 | 比例 |
+    | --- | ---: | ---: | ---: |
+    | `Modules/Game/Common/include/common/EditorTrackLayout.h` | 7 | 12 | 36.84% |
+    | `Modules/Game/Common/include/common/LogicCommands.h` | 434 | 602 | 41.89% |
+    | `Modules/Game/Logic/include/logic/EditorEngine.h` | 364 | 246 | 59.67% |
+    | `Modules/Game/Logic/src/logic/EditorEngine.cpp` | 1716 | 4004 | 30.00% |
+    | `Modules/Game/Logic/src/logic/EditorEngine_Impl.h` | 77 | 75 | 50.66% |
+    | `Modules/Game/Logic/src/logic/session/BeatmapSession.cpp` | 417 | 970 | 30.06% |
+    | `Modules/Game/Logic/src/logic/session/BeatmapSession_Commands.cpp` | 1377 | 3212 | 30.01% |
+    | `Modules/Game/Logic/tests/BrushPaletteSessionStateTest.cpp` | 297 | 683 | 30.31% |
+    | `Modules/Game/UI/include/ui/imgui/manager/ToolbarView.h` | 202 | 188 | 51.79% |
+    | `Modules/Game/UI/src/ui/imgui/manager/ToolbarView.cpp` | 2022 | 4675 | 30.19% |
 
 - [ ] **PERF-06 P3 离屏几何容量扩张在命令录制阶段等待全 GPU 空闲**
 

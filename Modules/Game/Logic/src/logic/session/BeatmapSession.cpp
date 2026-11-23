@@ -357,11 +357,17 @@ bool BeatmapSession::blockCollaborationUnauthorizedEdit(
             if ( m_ctx->currentBeatmap && !samples.empty() ) {
                 // 玩家宽度与主音轨绑定变化可能迁移样本，不只是元数据编辑。
                 const auto& current = m_ctx->currentBeatmap->m_baseMapMetadata;
-                if ( metadata->baseMeta.track_count != m_ctx->trackCount ||
-                     metadata->baseMeta.main_audio_path !=
-                         current.main_audio_path ||
-                     metadata->baseMeta.song_file_hint !=
-                         current.song_file_hint ) {
+                // 工具栏载荷没有音频路径，按消费时玩家轨道数检查实际迁移权限。
+                const bool changesAudio =
+                    metadata->trackCountEdit
+                        ? metadata->trackCountEdit->target(
+                              current.track_count) != m_ctx->trackCount
+                        : metadata->baseMeta.track_count != m_ctx->trackCount ||
+                              metadata->baseMeta.main_audio_path !=
+                                  current.main_audio_path ||
+                              metadata->baseMeta.song_file_hint !=
+                                  current.song_file_hint;
+                if ( changesAudio ) {
                     required |= ::MMM::BeatmapMutationFlags::AudioSamples;
                 }
             }
