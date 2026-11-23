@@ -362,11 +362,15 @@ bool AudioManager::isSFXUsingSharedTimelineAudio(const std::string& key) const
         return false;
     }
 
-    const auto cached = m_audioTimelineResourceCache.find(
-        registration->second.m_processingCacheKey);
-    // 弱缓存可能已过期，必须先锁定再比较对象身份。
-    if ( cached == m_audioTimelineResourceCache.end() ) return false;
-    const auto preparedAudio = cached->second.preparedAudio.lock();
+    std::shared_ptr<const PreparedTimelineAudio> preparedAudio;
+    {
+        std::lock_guard lock(m_audioTimelineResourceCacheMutex);
+        const auto      cached = m_audioTimelineResourceCache.find(
+            registration->second.m_processingCacheKey);
+        // 只在锁内取得拥有型句柄；池查询不能延长缓存持锁时间。
+        if ( cached == m_audioTimelineResourceCache.end() ) return false;
+        preparedAudio = cached->second.preparedAudio.lock();
+    }
     return preparedAudio &&
            pool->second->usesPreparedAudio(preparedAudio.get());
 }

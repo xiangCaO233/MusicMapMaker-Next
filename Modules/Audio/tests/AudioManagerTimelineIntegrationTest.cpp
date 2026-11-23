@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
+#include <future>
 #include <ice/config/config.hpp>
 #include <ice/manage/AudioTrack.hpp>
 #include <memory>
@@ -887,7 +888,7 @@ bool testSharedMainStretcher(MMM::Audio::AudioManager& manager,
         const double before = manager.getCurrentTime();
         passed              = passed && waitUntil([&] {
                      return manager.getCurrentTime() > before + 0.01;
-                              });
+                 });
         // 恢复后重新预约本拍，确认节拍仍通过绑定到主时间线的输入段推进。
         // 预约已到达的拍点也覆盖目标帧落在当前音频块之前的调度边界。
         // 断言源游标实际前进，能捕获总线接错或恢复后门控未打开。
@@ -1038,6 +1039,57 @@ bool testQueuedSoundEffectShutdown(MMM::Audio::AudioManager& manager,
     return loaded;
 }
 
+/// @brief 以真实离线 DSP 验证准备和提交是两个独立动作。
+/// @param manager 已启动设备并拥有真实音频图的管理器。
+/// @param samplePath 实际短音频文件，供工作线程完整解码并变调。
+/// @return 准备、提交和停用各阶段的身份、计数均正确时返回 true。
+/// @details 准备后仍保持旧 fingerprint，再由显式提交改变它。保持旧指纹
+/// 的断言必须延续到 future 就绪，以免只检查后台尚未执行时的偶然状态。
+bool testDeferredTimelinePreparation(MMM::Audio::AudioManager& manager,
+                                     const std::string&        samplePath)
+{
+    // 冷准备不能改写正在使用的调度，其身份应保持到控制侧显式安装。
+    if ( !manager.loadAudioTimeline({}, 2.0, "before-canvas-switch").success )
+        return false;
+
+    // 工作线程不读取控制状态；主测试线程可以在准备阶段安全观察旧图。
+    // 使用独立调用者，模拟编辑器把准备委托给执行器的实际线程边界。
+    auto       preparation = std::async(std::launch::async, [&] {
+        MMM::Audio::AudioTimelineLoadEvent event;
+        event.resourceKey                  = "cold-switch";
+        event.filePath                     = samplePath;
+        event.resourceConfig.playbackPitch = 3.0F;
+        return manager.prepareAudioTimeline({ event });
+    });
+    const bool preservedWhilePreparing =
+        manager.getLoadedAudioTimelineFingerprint() == "before-canvas-switch";
+    auto prepared = preparation.get();
+    if ( !preservedWhilePreparing || !prepared ||
+         manager.getLoadedAudioTimelineFingerprint() !=
+             "before-canvas-switch" ) {
+        XERROR("Preparing a timeline changed the active transport");
+        return false;
+    }
+
+    // 片段数独立于 fingerprint：仅设置字符串而未提交真实 PCM 也会失败。
+    // 由控制侧消费结果，工作线程没有替换现有调度的能力。
+    auto result =
+        manager.installAudioTimeline(*prepared, 2.0, "new-canvas", {});
+    if ( !result.success || result.loadedClipCount != 1U ||
+         manager.getLoadedAudioTimelineFingerprint() != "new-canvas" ) {
+        XERROR("Prepared timeline did not become the active transport");
+        return false;
+    }
+
+    // 交互卸载应立即撤销指纹和片段数，设备接管空调度无需阻塞调用者。
+    // 查询应依据控制侧已发布状态，不能等待 CTest 的虚拟设备再跑一个 block。
+    // 下一场景会提交独立空调度，避免本场景遗留片段影响后续断言。
+    manager.unloadAudioTimeline(false);
+    return !manager.hasLoadedAudioTimeline() &&
+           manager.getLoadedAudioTimelineFingerprint().empty() &&
+           manager.getLoadedAudioTimelineClipCount() == 0U;
+}
+
 }  // namespace
 
 /// @brief 运行 AudioManager 自动采样时间线集成测试。
@@ -1079,6 +1131,7 @@ int main(int argc, char** argv)
     // 每个场景在前一个成功后运行，保证失败日志指向首个破坏契约的职责层。
     // 场景短路执行，避免前一集成失败留下的音频图状态造成大量次生错误。
     const bool passed =
+        testDeferredTimelinePreparation(manager, samplePath) &&
         testEmptyTimelineClock(manager) &&
         testEditorMetronomePoolGain(manager, samplePath) &&
         testSingleClipResourceProcessing(manager, samplePath) &&

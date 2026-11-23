@@ -142,8 +142,8 @@ void cancelActiveEditingState(SessionContext& ctx)
 {
     // 允许继续的手势必须与当前工具一致，并仍有有效的工作数据。
     // 单独残留的 isDragging 或 isSelecting 标志不足以恢复一次编辑。
-    const bool keepMarquee  = ctx.currentTool == EditTool::Marquee &&
-                              ctx.isSelecting && !ctx.marqueeBoxes.empty();
+    const bool keepMarquee = ctx.currentTool == EditTool::Marquee &&
+                             ctx.isSelecting && !ctx.marqueeBoxes.empty();
     const bool keepMoveDrag = ctx.currentTool == EditTool::Marquee &&
                               ctx.draggedEntity != entt::null &&
                               ctx.noteRegistry.valid(ctx.draggedEntity) &&
@@ -466,6 +466,13 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
         m_ctx.isPlaying                   = false;
         m_ctx.isAudioTimelineSyncFollower = false;
         m_ctx.m_audioTimelineSyncSourceFingerprint.clear();
+        return;
+    }
+
+    if ( m_ctx.m_waitingForCanvasAudio ) {
+        // 尚无可用音频，保存最后一次播放意图，完成后从当前编辑位置开始。
+        // 取消请求同样覆盖先前的续播，且在 PCM 就绪前不改变真实传输状态。
+        m_ctx.m_playWhenCanvasAudioReady = cmd.isPlaying;
         return;
     }
 
@@ -799,6 +806,12 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
          (SessionUtils::isMainCanvasCameraId(cmd.cameraId) ||
           cmd.cameraId == "Timeline") ) {
         wheel = -wheel;
+    }
+
+    if ( m_ctx.m_waitingForCanvasAudio &&
+         m_ctx.lastConfig.settings.stopPlaybackOnScroll ) {
+        // 用户已滚动到新位置，停止播放策略同样取消尚未兑现的续播意图。
+        m_ctx.m_playWhenCanvasAudioReady = false;
     }
 
     // 后台同音轨跟随也视作播放：仅看 isPlaying 会漏掉跟随中的画布。

@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -38,6 +39,7 @@ class KeySoundControlBank;
 class AudioTimelineMixerNode;
 class PreparedTimelineAudio;
 struct PreparedTimelineClip;
+struct PreparedAudioTimeline;
 struct BackgroundSpectrumLevels;
 class BackgroundSpectrumAnalyzer;
 class BackgroundSpectrumCaptureNode;
@@ -121,9 +123,22 @@ public:
         double chartEndSeconds, const std::string& fingerprint,
         const std::vector<AudioTimelineStop>& stops = {});
 
+    /// @brief 在后台准备时间线 PCM，期间只访问音轨池和资源缓存。
+    /// @warning 调用方须在关闭 AudioManager 前收回该任务。
+    [[nodiscard]] std::shared_ptr<PreparedAudioTimeline> prepareAudioTimeline(
+        const std::vector<AudioTimelineLoadEvent>& events);
+
+    /// @brief 在控制线程安装已准备的 PCM 与对应时钟。
+    /// @warning 准备结果必须只提交一次；不得在音频回调调用。
+    [[nodiscard]] AudioTimelineLoadResult installAudioTimeline(
+        PreparedAudioTimeline& prepared, double chartEndSeconds,
+        const std::string&                    fingerprint,
+        const std::vector<AudioTimelineStop>& stops);
+
     /// @brief 卸载自动采样时间线并断开主时间线音频图。
-    /// @warning 低频资源切换路径；会停止全部已调度 HitEffect。
-    void unloadAudioTimeline();
+    /// @param waitForRetirement 是否等待设备确认空调度。交互路径必须传 false。
+    /// @warning 会停止全部已调度 HitEffect；等待模式仅用于低频资源生命周期。
+    void unloadAudioTimeline(bool waitForRetirement = true);
 
     /// @brief 获取当前完整时间线的稳定指纹。
     /// @return 未加载时间线时返回空字符串。
@@ -932,6 +947,9 @@ private:
         /// @brief 已完成资源级 DSP 的只读 PCM。
         std::weak_ptr<const PreparedTimelineAudio> preparedAudio;
     };
+
+    /// @brief 短时保护后台准备与控制侧查询共用的弱缓存，锁内禁止执行 DSP。
+    mutable std::mutex m_audioTimelineResourceCacheMutex;
 
     /// @brief 按文件和资源 DSP 配置索引的弱缓存。
     ///

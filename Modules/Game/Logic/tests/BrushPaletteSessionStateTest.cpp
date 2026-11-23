@@ -20,9 +20,12 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <future>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -98,7 +101,7 @@ bool testPaletteRestoredAfterSessionClose()
     // 零时间步只消费状态，不依赖播放时间推进或等待固定帧数。
     // 读取目标会话落地后的画笔状态，而非仅检查编辑器暂存的命令或配置。
     const auto& restored = session->getContext().brushState.customColors;
-    const bool matches = colorMatches(restored.tap, colors[0]) &&
+    const bool  matches  = colorMatches(restored.tap, colors[0]) &&
                          colorMatches(restored.head, colors[1]) &&
                          colorMatches(restored.hold, colors[2]) &&
                          colorMatches(restored.end, colors[3]) &&
@@ -291,7 +294,7 @@ bool testBackgroundCanvasMousePositionRouting()
     const auto& activeContext = activeSession->getContext();
     // 同时检查目标收到事件、非目标未被污染，比只检查后台坐标更严格。
     const auto& backgroundContext = backgroundSession->getContext();
-    const bool routed = activeContext.mouseCameraId.empty() &&
+    const bool  routed            = activeContext.mouseCameraId.empty() &&
                         // 空相机标识是初始状态，用作活动会话未接收输入的证据。
                         backgroundContext.mouseCameraId == backgroundCameraId &&
                         backgroundContext.isMouseInCanvas &&
@@ -408,7 +411,7 @@ bool testSkinSelectionSurvivesPaletteRefresh()
         // 写入后清除内存选择，读取结果必须真正来自持久化文件。
         ok                                            = app.save();
         app.getEditorSettings().selectedSkinDirectory = "mmm-default";
-        ok = app.load() && ok &&
+        ok                                            = app.load() && ok &&
              app.getEditorSettings().selectedSkinDirectory == "rm";
     }
     // 测试结束恢复单例，后续会话及并发测试不继承本场景状态。
@@ -730,6 +733,65 @@ bool testClearAllNoteColors()
     return ok;
 }
 
+/// @brief 在会话长锁被占用时提交多次焦点，随后只应用最后一个相机身份。
+/// @details 请求线程始终不触碰可变 SessionContext。测试线程先持有真实
+/// 注册表互斥锁，逻辑线程稍后启动，分别验证提交和消费两个边界。
+/// @return 请求在注册表不可用时仍完成，并且最后一个有效目标被激活。
+bool testLatestCanvasFocusRequest()
+{
+    auto& engine = MMM::Logic::EditorEngine::instance();
+    // 根据引擎返回的索引取得相机身份；测试不用窗口标题作为跨线程地址。
+    // 三个真实登记项区分初始活动会话、被覆盖的目标和最终应激活的目标。
+    const auto first  = engine.createSession(nullptr, "Focus first", false);
+    const auto second = engine.createSession(nullptr, "Focus second", false);
+    const auto last   = engine.createSession(nullptr, "Focus last", false);
+    const auto secondCamera = engine.getSessionEntry(second)->cameraId;
+    const auto lastCamera   = engine.getSessionEntry(last)->cameraId;
+    engine.setActiveSessionIndex(first);
+
+    // 用另一执行线程模拟 UI。旧的同步入口无法越过本线程持有的注册表锁。
+    // 模拟跨整轮 Session::update 的长锁。不能用两个互不相关的 mutex
+    // 推断焦点提交速度，也不能在持锁线程本身尝试递归获取来假装并发。
+    std::unique_lock holdSessionLock(engine.getSessionMutex());
+    auto             request = std::async(std::launch::async, [&] {
+        engine.requestActiveCanvas(secondCamera);
+        engine.requestActiveCanvas(lastCamera);
+    });
+    const bool       returnedWithoutRegistryLock =
+        request.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+    // 即使超时也先解除阻塞再收回异步调用，有问题时应报告失败而非死锁。
+    // get 返回后两个请求都已发布，启动工作者即可确定地验证合并。
+    holdSessionLock.unlock();
+    request.get();
+
+    // 使用生产逻辑循环消费邮箱；无需依赖真实 GPU、窗口焦点或音频设备。
+    // 此处只验证焦点提交，PCM 准备与 transport 提交由独立音频集成用例覆盖。
+    engine.start();
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    // 固定上限只用于防止失败测试挂起，生产请求由逻辑循环消费。
+    while ( engine.getActiveSessionIndex() != last &&
+            std::chrono::steady_clock::now() < deadline ) {
+        std::this_thread::yield();
+    }
+    // 只观察原子发布的活动身份，不跨线程读取可变上下文来证明切换完成。
+    // 到期后仍要完整执行 stop，避免本场景留下并发任务进入下一场景。
+    const bool latestApplied = engine.getActiveSessionIndex() == last;
+    engine.stop();
+    while ( engine.getSessionCount() > 0 ) {
+        engine.closeSession(engine.getSessionCount() - 1, false);
+    }
+    // 清理后统一检查进展条件和最终身份。单纯能排队仍不足以验证逻辑提交。
+    // 保留独立布尔值可区分提交被阻塞和邮箱覆盖顺序错误。
+    if ( !returnedWithoutRegistryLock || !latestApplied ) {
+        XERROR(
+            "Canvas focus must submit without the registry lock and apply the "
+            "latest request");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行画笔调色盘跨会话恢复测试。
@@ -745,6 +807,7 @@ int main()
                    testPaletteRestoredAfterSessionClose() &&
                    testAudioResourceRestoredAfterSessionClose() &&
                    testBackgroundCanvasMousePositionRouting() &&
+                   testLatestCanvasFocusRequest() &&
                    testCameraConfigSnapshot() &&
                    testConcurrentEditorConfigSnapshots()
                ? 0

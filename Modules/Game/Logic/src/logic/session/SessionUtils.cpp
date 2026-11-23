@@ -949,6 +949,9 @@ bool rebuildAudioTimelineDescriptor(SessionContext&       ctx,
 /// @warning 会话切换或显式激活路径可能加载资源，不可作为逐帧时钟读取接口。
 bool activateAudioTimeline(SessionContext& ctx, bool shouldPlay)
 {
+    // 画布已能编辑和定位；准备期间不能从逻辑侧重新进行同步解码。
+    if ( ctx.m_waitingForCanvasAudio ) return false;
+
     if ( !ctx.isActiveSession ) {
         // 后台谱面不得覆盖正在由活动会话使用的全局音频时间线。
         return false;
@@ -1360,7 +1363,7 @@ SnapResult getSnapResult(
         // 不能以 BPM 拍长直接推算像素高度替代滚动积分后的绝对坐标。
         // 投影仅作有效性检查，不在多候选间比较鼠标的像素距离。
         double snapAbsY = cache->getAbsY(candidate.snappedTime);
-        float snapY = judgmentLineY -
+        float  snapY    = judgmentLineY -
                       static_cast<float>(snapAbsY - currentAbsY) * renderScaleY;
         if ( !std::isfinite(snapY) || !std::isfinite(mouseY) ) continue;
 
@@ -1384,7 +1387,7 @@ void syncHitIndex(SessionContext& ctx)
     ensureHitEvents(ctx);
     // 定位基准是 animateTime，包含会话视觉偏移；不能改成设备采样时间。
     // 空事件表的查询结果为 end，距离为零，三个消费者均从空区间开始。
-    auto it = std::lower_bound(ctx.hitEvents.begin(),
+    auto it                 = std::lower_bound(ctx.hitEvents.begin(),
                                ctx.hitEvents.end(),
                                System::HitFXSystem::HitEvent{
                                    ctx.animateTime, ::MMM::NoteType::NOTE });

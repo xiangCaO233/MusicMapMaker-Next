@@ -843,8 +843,8 @@ bool Basic2DCanvas::updateComposeLessonHints(
                                          : ImTextureID{};
     const TextureID   headTexture =
         uvMap.contains(static_cast<std::uint32_t>(TextureID::HoldHead))
-            ? TextureID::HoldHead
-            : TextureID::Note;
+              ? TextureID::HoldHead
+              : TextureID::Note;
     // 头部可选是皮肤协议的一部分，普通 Note 是旧皮肤的兼容回退。
     // 必须在求尺寸之前确定最终纹理，否则头部与真实物件宽高不同。
     // Hold、Flick 和 Polyline 均共享这个选择；Tap 始终使用 Note。
@@ -2823,9 +2823,9 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
 
     // 会话结构重置先于新渲染快照发布，占位身份必须立即压过旧谱名。
     // 不等待逻辑线程生成下一份画面，也不能让旧 dirty 标志留在标签上。
-    const bool  titleHasBeatmap = !isLogoPlaceholder && m_currentSnapshot &&
-                                  m_currentSnapshot->hasBeatmap;
-    std::string title           = makeCanvasTabTitle(
+    const bool titleHasBeatmap = !isLogoPlaceholder && m_currentSnapshot &&
+                                 m_currentSnapshot->hasBeatmap;
+    std::string title = makeCanvasTabTitle(
         TR("canvas.editor").data(),
         titleHasBeatmap,
         m_currentSnapshot ? m_currentSnapshot->beatmapName : std::string_view{},
@@ -2928,6 +2928,8 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
     }
 
     m_isCanvasVisible = isCurrentCanvasWindowVisible();
+    // 停靠标签隐藏时不能保留此前焦点，下次真正显示才能检测到新的边沿。
+    if ( !m_isCanvasVisible ) m_hadSessionFocus = false;
     // 可见性同步到会话调度器，使逻辑线程只准备当前可见 Canvas 的
     // 完整渲染数据，同时后台标签仍保留自身对象与轻量状态。
     if ( !comparison ) {
@@ -2965,22 +2967,13 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                            railWidth,
                            48.0F * dpiScale);
 
-        // 键盘或鼠标使当前窗口获得根级焦点时，同步活动 Session。
-        // 只有索引确实变化才发布，避免每帧重复触发会话切换副作用。
-        if ( ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) ) {
-            int32_t activeIdx = engine.getActiveSessionIndex();
-            int32_t myIdx     = findSessionIndex();
-            // 根窗口及其子控件均可激活谱面，表格或画布内弹出控件获得
-            // 焦点时不会让该标签仍被当作后台会话。
-            if ( myIdx != -1 && myIdx != activeIdx ) {
-                engine.setActiveSessionIndex(myIdx);
-                XINFO(
-                    "Basic2DCanvas: Focus switched active session to index {} "
-                    "(cameraId={})",
-                    myIdx,
-                    m_cameraId);
-            }
+        // 焦点边沿发布切换意图；稳定焦点帧无需访问跨线程邮箱。
+        const bool hasFocus =
+            ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+        if ( hasFocus && !m_hadSessionFocus && myIndex != -1 ) {
+            engine.requestActiveCanvas(owner);
         }
+        m_hadSessionFocus = hasFocus;
 
         if ( m_currentSnapshot ) {
             // 背景资源只在路径或媒体类型变化时同步；纹理加载与视频
@@ -3070,11 +3063,10 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
 
         // 3D 对比的透视不影响主窗口的教学提示，注册目标仍使用原始视图。
         // 主画布和对比同时停靠可见时，只有指针选定的视口解释当次编辑动作。
-        // 后台谱面收到内容区滚轮时先切换活动会话和窗口焦点，
-        // 本帧若 cameraId 已切换成功即可继续消费这一次滚轮操作。
+        // 内容区滚轮会请求活动会话切换，并可在切换提交前更新目标位置。
         const bool focused =
             ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-        bool isActiveCanvas =
+        const bool isActiveCanvas =
             engine.getActiveCameraId() == owner && (!hasComparison || focused);
         // 同一会话的多个窗口不能同时提交编辑。首次在另一内容区按下或滚动
         // 时切换到该窗口，工具继续使用收到输入的视口坐标。
@@ -3094,14 +3086,20 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                 ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
                 ImGui::IsMouseClicked(ImGuiMouseButton_Middle)))) ) {
             ImGui::SetWindowFocus();
-            engine.setActiveSessionIndex(myIndex);
+            engine.requestActiveCanvas(owner);
             m_shouldFocusNextFrame = true;
-            isActiveCanvas         = engine.getActiveCameraId() == owner;
-            XINFO(
-                "Basic2DCanvas: Wheel switched active session to index {} "
-                "(cameraId={})",
-                myIndex,
-                m_cameraId);
+            // 音频尚未就绪时也保留首次滚轮；只发送定向导航，不启动编辑手势。
+            // 此处分支只匹配未活动窗口；当前活动窗口的滚轮仍由正常交互路径消费。
+            // 修饰键优先于普通导航，并与布局手势共享同一消费边界。
+            const float wheel = UI::Interaction::mouseWheel();
+            if ( !layoutInputConsumed && std::abs(wheel) > 0.01F &&
+                 !m_interaction->handleModifierWheel(m_currentSnapshot,
+                                                     false) ) {
+                UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
+                    Logic::CmdScroll{ m_cameraId,
+                                      -wheel,
+                                      UI::Interaction::acceleratedScroll() }));
+            }
         }
 
         if ( layoutInputConsumed ) {
@@ -3330,9 +3328,9 @@ void Basic2DCanvas::updateCollaborationViewports(
     const auto& visual = canvasVisualConfig();
     // 渲染模式是本地显示偏好，不写入 ParticipantViewport；不同用户
     // 可独立选择填充、轮廓或轨道边缘而不影响网络协议。
-    const auto  viewportRenderMode = Config::AppConfig::instance()
-                                         .getEditorSettings()
-                                         .collaborationViewportRenderMode;
+    const auto viewportRenderMode = Config::AppConfig::instance()
+                                        .getEditorSettings()
+                                        .collaborationViewportRenderMode;
     const auto& layout =
         visual.trackLayoutForKeyCount(m_currentSnapshot->trackCount);
     // 使用当前轨道数对应布局，使动态扩轨后的协作范围立即跟随

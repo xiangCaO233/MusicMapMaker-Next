@@ -42,6 +42,11 @@ namespace MMM::Common::Render
 class RenderSnapshotBuffer;
 }
 
+namespace MMM::Audio
+{
+struct PreparedAudioTimeline;
+}
+
 namespace MMM::Logic
 {
 
@@ -280,6 +285,10 @@ public:
      * @param index 目标 Session 索引
      */
     void setActiveSessionIndex(int32_t index);
+
+    /// @brief 请求切换到指定画布，后到的焦点请求覆盖此前请求。
+    /// @warning UI 热路径：只更新独立邮箱，禁止获取会话锁或准备音频。
+    void requestActiveCanvas(std::string_view cameraId);
 
     /// @brief 为当前活动谱面提交一次跨线程自动保存与自动备份事件。
     /// @param trigger 需要由逻辑线程按软件级和项目级配置筛选的事件来源。
@@ -580,6 +589,14 @@ public:
     bool saveDirtyBeatmapsForPackaging();
 
 private:
+    /// @brief 消费画布切换请求并在资源准备完毕后提交。
+    /// @warning 每轮逻辑调用，只有待办或已完成结果才进入低频提交路径。
+    void processActiveCanvasRequest();
+
+    /// @brief 切换会话并提交可用的时间线准备结果。
+    /// @warning 低频逻辑事务；异步入口只能提交已准备资源或复用现有图。
+    void applyActiveSessionIndex(int32_t index, bool allowSynchronousPrepare);
+
     /// @brief 将编辑器级画笔配色恢复到指定会话。
     /// @param session 接收当前画笔配色的会话。
     /// @warning 调用者必须持有 SessionRegistry 互斥锁；仅用于会话创建、复用、
