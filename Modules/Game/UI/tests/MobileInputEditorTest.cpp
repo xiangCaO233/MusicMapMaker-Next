@@ -20,6 +20,7 @@
 #include <imgui_internal.h>
 
 #include <cmath>
+#include <string>
 namespace
 {
 // 所有场景都运行完再返回失败，前一场景不能阻止边界回归。
@@ -437,6 +438,54 @@ void longFormFooter(float scale = 1)
     // 其它场景继续使用自己的 DPI，不能继承高字号的系统比例。
     config.setWindowContentScale(originalScale);
 }
+/// @brief 用真实输入帧校验越过旧元数据容量的 UTF-8 文本。
+/// @details 用真实多行控件打开大 UTF-8 字符串；验证长度和尾部逐字节相等，
+/// 防止只比较可见区域掩盖旧截断点之后的内容丢失。
+/// 两条边界分别对应此前 JSON 和 OSU 的载入限制。
+void longMetadataTextInput()
+{
+    Fixture fixture;
+    for ( const std::size_t boundary : { 32768U, 65536U } ) {
+        // 多字节字符跨过旧截断点，尾部标记用来检验打开和输入后仍完整。
+        const std::string original = std::string(boundary - 2, 'a') + "谱面尾";
+        // 编辑器持有副本，断言原文是不可变基线。即使输入导致容量重分配，
+        // 原始谱面交给编辑窗口的值仍可用于精确比较。
+        std::string text = original;
+        // 每种容量场景使用独立控件 ID，避免复用上一场景的活动编辑缓存。
+        // 固定可见尺寸迫使长内容通过正常多行滚动，而非一行标签传值。
+        const auto frame = [&](bool focus) {
+            ImGui::NewFrame();
+            ImGui::Begin("Metadata text");
+            ImGui::PushID(static_cast<int>(boundary));
+            if ( focus ) ImGui::SetKeyboardFocusHere();
+            MMM::UI::dynamicInputTextMultiline(
+                "##value",
+                text,
+                { 450, 220 },
+                ImGuiInputTextFlags_AllowTabInput);
+            ImGui::PopID();
+            ImGui::End();
+            ImGui::Render();
+        };
+        // 第一个帧只请求键盘焦点，第二个帧推进 ImGui 的实际焦点转移。
+        // 先检查未编辑文本，才能辨认打开阶段的截断与键盘处理差异。
+        frame(true);
+        frame(false);
+        check(text == original, "opening metadata keeps complete UTF-8");
+        // 通过真实键盘事件定位到末尾并追加字符，不直接编辑缓冲。
+        auto& io = ImGui::GetIO();
+        io.AddKeyEvent(ImGuiKey_End, true);
+        frame(false);
+        // 改变位置与输入分属不同帧，避免平台输入队列顺序影响期望。
+        // 非 ASCII 追加还需通过多字节长度同步，旧字符数推断在这里无效。
+        io.AddKeyEvent(ImGuiKey_End, false);
+        io.AddInputCharactersUTF8("续");
+        frame(false);
+        // 全文比较同时检查既有前缀、旧边界后的尾部和本帧新增字节。
+        check(text == original + "续",
+              "metadata edit keeps bytes across old fixed limit");
+    }
+}
 }  // namespace
 /// @brief 场景各自拥有 UI 上下文，不以新建对象掩盖同一场景内的取消行为。
 /// @details 每个失败累计到退出码，不能依赖日志级别或测试运行顺序。
@@ -449,5 +498,6 @@ int main()
     keyboardFocusAndConflict();
     longFormFooter();
     longFormFooter(2.7625f);
+    longMetadataTextInput();
     return failures ? 1 : 0;
 }
