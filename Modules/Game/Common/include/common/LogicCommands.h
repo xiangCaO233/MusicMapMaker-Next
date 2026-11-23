@@ -22,6 +22,7 @@
 #include "mmm/project/AudioTrackType.h"
 #include "mmm/timing/Timing.h"
 #include "mmm/timing/TimingTemplate.h"
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <entt/entity/entity.hpp>
@@ -1091,15 +1092,35 @@ struct CmdCreateBeatmap {
     std::vector<::MMM::Timing> initialTimings;
 };
 
-/**
- * @brief 更新谱面元数据指令
- */
+/// @brief 工具栏对玩家区轨道数的单字段编辑。
+struct ToolbarTrackCountEdit {
+    /// @brief 滑条或预设的目标键数，或滚轮相对于最新逻辑状态的有符号增量。
+    int32_t value{};
+    /// @brief 滚轮事件逐次累加，禁止用同一 UI 快照覆盖此前排队的增量。
+    bool relative{};
+
+    /// @brief 按工具栏既有的 1 至 32 键范围计算目标值。
+    /// @param current 当前逻辑谱面的真实键数。
+    [[nodiscard]] int32_t target(int32_t current) const noexcept
+    {
+        // 旧谱面可能包含宽布局，先提升整数再应用步长，防止在裁限前溢出。
+        const auto candidate =
+            relative ? static_cast<std::int64_t>(current) + value : value;
+        return static_cast<int32_t>(std::clamp<std::int64_t>(candidate, 1, 32));
+    }
+};
+
+/// @brief 更新整份谱面元数据，或对工具栏键数执行单字段修改。
 struct CmdUpdateBeatmapMetadata {
+    /// @brief 元数据窗口提交的完整替换对象，工具栏编辑不读取此字段。
     ::MMM::BaseMapMeta baseMeta;
 
     /// @brief 入队时会话已完成的媒体资源改名代次。
     /// @note 零值保留直接调用命令处理器的旧测试与聚合初始化兼容。
     std::uint64_t m_resourceRenameGeneration{ 0U };
+
+    /// @brief 仅修改玩家键数时从消费时模型取基准，保留其它字段和待处理改名。
+    std::optional<ToolbarTrackCountEdit> trackCountEdit{};
 };
 
 /// @brief 标记直接修改的扩展谱面元数据，并请求尾随自动保存。

@@ -48,6 +48,11 @@ namespace MMM::Audio
 struct PreparedAudioTimeline;
 }
 
+namespace MMM::Common
+{
+struct EditorTrackLayout;
+}
+
 namespace MMM::Logic
 {
 
@@ -466,6 +471,11 @@ public:
     /// 避免为显示键数等待整个会话更新。
     int32_t activeBeatmapTrackCount() const;
 
+    /// @brief 读取活动谱面的玩家、草稿和 BGM 同代布局。
+    /// @warning 音效弹层开启时每帧读取。独立短锁只复制标量，
+    /// 与会话更新锁无关，内部不得借用会话或谱面对象。
+    Common::EditorTrackLayout activeTrackLayout() const;
+
     /// @brief 判断当前活跃 Session 是否存在已选谱面物件。
     /// @return 玩家物件或自动采样至少有一个被选中时返回 true。
     /// @warning UI 菜单每帧读取 relaxed 原子；逻辑 update 发布最终状态，
@@ -586,6 +596,11 @@ private:
     /// @warning 逻辑热路径：每次活动会话更新后调用，只在变化时发布 relaxed
     /// 原子。
     void publishGestureStateUnsafe(const SessionContext* context);
+
+    /// @brief 发布当前活动轨道布局；context 为空则撤回旧谱面状态。
+    /// @pre 调用者串行持有会话注册表锁，保证活动身份及模型字段属于同一会话。
+    /// @warning 逻辑热路径，只在标量发生变化时取得与会话无关的短发布锁。
+    void publishTrackLayoutUnsafe(const SessionContext* context);
 
     /// @brief 消费画布切换请求并在资源准备完毕后提交。
     /// @warning 每轮逻辑调用，只有待办或已完成结果才进入低频提交路径。

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/EditTool.h"
+#include "common/EditorTrackLayout.h"
 #include "common/NoteColor.h"
 #include "config/EditorConfig.h"
 #include "config/FrameLimitPreference.h"
@@ -139,6 +140,12 @@ struct EditorEngine::Impl {
     /// @warning 逻辑线程每 update 及会话切换时写入，UI 每帧 relaxed 读取；
     /// 菜单和工具栏只需标量，不能为此等待会话注册表长锁。
     std::atomic<int32_t> m_activeBeatmapTrackCount{ 0 };
+
+    /// @brief 独立保护活动轨道布局的短锁，锁内仅允许读写值。
+    /// @warning UI 弹层逐帧读取；只在布局变化时写入，锁内不获取会话锁。
+    mutable std::mutex m_activeTrackLayoutMutex;
+    /// @brief 同一代发布的完整轨道布局，避免三个范围分开读取时跨谱面混合。
+    Common::EditorTrackLayout m_activeTrackLayout;
 
     /// @brief 活动会话是否选中了 Note 或 Sample，供菜单显示可用状态。
     /// @warning 逻辑线程每 update 写入、UI 每帧读取 relaxed；选择只在

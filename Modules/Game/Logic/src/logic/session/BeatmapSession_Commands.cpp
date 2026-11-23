@@ -4620,35 +4620,48 @@ void BeatmapSession::recordResourceRename(const std::filesystem::path& oldPath,
     if ( m_ctx->currentBeatmap ) {
         // 旧值按值保留，用于判等、轨道迁移、资源重定向和派生缓存比较。
         const auto oldMetadata = m_ctx->currentBeatmap->m_baseMapMetadata;
-        auto       updatedMeta = cmd.baseMeta;
-        // 重新选择或导入音频即退出显式清除状态，其他调用方可继续只填路径。
-        if ( !updatedMeta.song_file_hint.empty() ||
-             !updatedMeta.main_audio_path.empty() )
-            updatedMeta.song_file_hint_cleared = false;
-        // UI 输入在进入会话后统一规范化路径和结构边界，避免多个入口行为不一。
-        normalizeCurrentProjectMetadataPaths(updatedMeta);
-        // 只迁移命令入队以后发生的改名；后来新建同名文件时的新命令不受影响。
-        // 此处只读取别名表和命令代次，不增加逻辑 update 中的文件系统访问。
-        for ( const auto& alias : m_resourceRenameAliases ) {
-            if ( alias.m_generation <= cmd.m_resourceRenameGeneration ) {
-                continue;
-            }
-            if ( updatedMeta.main_audio_path == alias.m_oldPath ) {
-                updatedMeta.main_audio_path = alias.m_newPath;
-            }
-            if ( updatedMeta.song_file_hint == alias.m_oldPath ) {
-                updatedMeta.song_file_hint = alias.m_newPath;
-            }
-            if ( updatedMeta.cover_path == alias.m_oldPath ) {
-                updatedMeta.cover_path = alias.m_newPath;
-            }
-            if ( updatedMeta.main_cover_path == alias.m_oldPath ) {
-                updatedMeta.main_cover_path = alias.m_newPath;
+        // 键数编辑只覆盖当前模型的一列；旧 UI
+        // 帧不再能覆盖队列中刚提交的标题和路径。
+        auto updatedMeta = cmd.trackCountEdit ? oldMetadata : cmd.baseMeta;
+        if ( cmd.trackCountEdit ) {
+            updatedMeta.track_count =
+                cmd.trackCountEdit->target(oldMetadata.track_count);
+            // 单字段未改变时，不因路径规范化等附带流程引入其它元数据变更。
+            if ( updatedMeta.track_count == oldMetadata.track_count )
+                return mutationFlags;
+        }
+        if ( !cmd.trackCountEdit ) {
+            // 重新选择或导入音频即退出显式清除状态，其他调用方可继续只填路径。
+            if ( !updatedMeta.song_file_hint.empty() ||
+                 !updatedMeta.main_audio_path.empty() )
+                updatedMeta.song_file_hint_cleared = false;
+            // UI
+            // 输入在进入会话后统一规范化路径和结构边界，避免多个入口行为不一。
+            normalizeCurrentProjectMetadataPaths(updatedMeta);
+            // 只迁移命令入队以后发生的改名；后来新建同名文件时的新命令不受影响。
+            // 此处只读取别名表和命令代次，不增加逻辑 update 中的文件系统访问。
+            for ( const auto& alias : m_resourceRenameAliases ) {
+                if ( alias.m_generation <= cmd.m_resourceRenameGeneration ) {
+                    continue;
+                }
+                if ( updatedMeta.main_audio_path == alias.m_oldPath ) {
+                    updatedMeta.main_audio_path = alias.m_newPath;
+                }
+                if ( updatedMeta.song_file_hint == alias.m_oldPath ) {
+                    updatedMeta.song_file_hint = alias.m_newPath;
+                }
+                if ( updatedMeta.cover_path == alias.m_oldPath ) {
+                    updatedMeta.cover_path = alias.m_newPath;
+                }
+                if ( updatedMeta.main_cover_path == alias.m_oldPath ) {
+                    updatedMeta.main_cover_path = alias.m_newPath;
+                }
             }
         }
         updatedMeta.track_count = std::max(1, updatedMeta.track_count);
         // BGM 轨道数由专门交互命令维护，元数据编辑不能绕过采样迁移逻辑覆盖。
-        updatedMeta.bgm_track_count = m_ctx->bgmTrackCount;
+        if ( !cmd.trackCountEdit )
+            updatedMeta.bgm_track_count = m_ctx->bgmTrackCount;
         if ( baseMapMetadataEqual(oldMetadata, updatedMeta) ) {
             // 完全相同输入不污染撤销栈、不启动尾随保存，也不重建派生缓存。
             return mutationFlags;
@@ -4681,10 +4694,13 @@ void BeatmapSession::recordResourceRename(const std::filesystem::path& oldPath,
             }
         }
 
+        // 键数迁移发生在前面的轨道动作中，不重新对未改动的主音频引用做绑定。
         const bool audioSamplesChanged =
-            updatedMeta.song_file_hint_cleared
-                ? clearLinkedMainBgmSamples(*m_ctx, oldMetadata)
-                : retargetFirstMainBgmSample(*m_ctx, oldMetadata, updatedMeta);
+            !cmd.trackCountEdit &&
+            (updatedMeta.song_file_hint_cleared
+                 ? clearLinkedMainBgmSamples(*m_ctx, oldMetadata)
+                 : retargetFirstMainBgmSample(
+                       *m_ctx, oldMetadata, updatedMeta));
         if ( audioSamplesChanged ) {
             // 主音频绑定变更后同步通知协作和其余采样消费者。
             mutationFlags |= ::MMM::BeatmapMutationFlags::AudioSamples;

@@ -1,9 +1,12 @@
 // 配色回归用例按值构造编辑配置，显式包含对应定义以固定测试输入。
 #include "common/EditorGestureState.h"
+#include "common/EditorTrackLayout.h"
+#include "common/LogicCommands.h"
 #include "config/EditorSettings.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/NoteColorUtils.h"
+#include "logic/ecs/components/SampleComponent.h"
 #include "logic/session/ActionController.h"
 #include "logic/session/EditorAction.h"
 #include "logic/session/SessionUtils.h"
@@ -874,6 +877,134 @@ bool testPublishedActiveGestureState()
     return lockBypassed && switchPublished && closePublished;
 }
 
+/// @brief 验证工具栏布局及键数命令经实际引擎路由，替换会话时不混用旧布局。
+/// @details 两份内存谱面都通过正式加载命令创建，无文件写入与音频设备依赖。
+/// 独立读取和命令入队在长锁持有期间完成，再由生产循环消费两格滚轮。
+/// @return 布局、变更顺序、尾随保存及会话回退同时正确时返回 true。
+bool testToolbarTrackLayoutPublication()
+{
+    using namespace MMM;
+    auto& engine = Logic::EditorEngine::instance();
+    // 两份布局的三个区域都取不同值，便于发现只刷新玩家键数的半代发布。
+    auto firstMap                               = std::make_shared<BeatMap>();
+    firstMap->m_baseMapMetadata.track_count     = 5;
+    firstMap->m_baseMapMetadata.bgm_track_count = 2;
+    firstMap->m_baseMapMetadata.name            = "before queued edit";
+    // 采样放在 BGM 第二轨，初始绝对位置为 5 + 1。
+    // 虚拟资源没有 PCM；它足以覆盖 ECS 迁移以及协作采样权限的分类。
+    firstMap->m_audioSamples.push_back({ .m_timestamp       = 500.0,
+                                         .m_track           = 6,
+                                         .m_audioResourceId = "virtual-bgm" });
+    const auto first = engine.createSession(firstMap, "Toolbar source", false);
+    const auto firstSession = engine.getActiveSession();
+    // 仅用直接 update 准备两个固定谱面，其后的并发路由通过正式引擎循环验证。
+    firstSession->update(0, engine.getEditorConfig(), true);
+    // 夹具只设置草稿区宽度；玩家和 BGM 的布局必须来自正式模型加载。
+    // 逻辑线程尚未启动，直接设置测试模型不会造成跨线程读写。
+    firstSession->getContextMutable().draftTrackCount = 11;
+    engine.setActiveSessionIndex(first);
+
+    // 排队中的模型修改不能被旧 UI 副本覆盖。先把改标题载荷准备好，
+    // 交给同一个生产者顺序入队，模拟元数据窗口与工具栏共享 UI 线程。
+    // 入队时尚未消费标题，要求单字段命令在消费时读取，而非在提交线程复制元数据。
+    // 不把不同生产者在并发队列中的相对顺序当作产品保证。
+    auto renamed = firstMap->m_baseMapMetadata;
+    renamed.name = "latest title";
+
+    // 同一线程保有会话锁，另一个线程完成一次实际布局读取及两次正常输入路由。
+    // 超时时先解除锁再回收 future，因此回归会报告失败，不会让整个套件挂起。
+    std::unique_lock holdSessionLock(engine.getSessionMutex());
+    // 先持锁再创建线程，确保读和两次输入都确实发生在受测的临界区间。
+    auto reader = std::async(std::launch::async, [&] {
+        const auto layout = engine.activeTrackLayout();
+        // 夹具已经持有会话句柄，直接走它的正常队列提交前置元数据；
+        // 两个工具栏事件仍从公开引擎入口路由，用同一线程保留先后顺序。
+        firstSession->pushCommand(
+            Logic::CmdUpdateBeatmapMetadata{ .baseMeta = renamed });
+        for ( int i = 0; i < 2; ++i ) {
+            engine.pushCommand(Logic::CmdUpdateBeatmapMetadata{
+                .trackCountEdit = Logic::ToolbarTrackCountEdit{ 1, true } });
+        }
+        return layout;
+    });
+    // 等待 future 而不是采样会话锁位；若读或入队任何一处发生等待，都会超时。
+    const bool returned =
+        reader.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+    holdSessionLock.unlock();
+    // future 完成说明并发调用已结束，以下布局副本无需再与读线程同步。
+    const auto readWhileLocked = reader.get();
+    // 用非零的积累状态作阳性对照，恒返回空布局不能通过。
+    const auto expectedFirst = Common::EditorTrackLayout{ true, 5, 11, 2 };
+
+    // UI 只等最终发布值，运行期间不借用会话模型。截止时间只约束测试故障路径。
+    engine.start();
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while ( engine.activeTrackLayout().playerTracks != 7 &&
+            std::chrono::steady_clock::now() < deadline )
+        std::this_thread::yield();
+    // 停止后才能检查模型及采样 Registry，否则测试本身会制造跨线程读风险。
+    engine.stop();
+    // 同步模型在逻辑线程停止后读取，两次滚轮应从 5 逐步累加至 7。
+    // 草稿和 BGM 在本次操作中独立于玩家区，必须保留其原有值。
+    const auto applied = engine.activeTrackLayout();
+    // 此时样本应位于 7 + 1；验证保留的是 BGM 区内索引而非旧绝对编号。
+    // 仅检查布局和计数会漏掉声音仍停在原轨的错误。
+    const auto samples =
+        firstSession->getContext()
+            .sampleRegistry.view<const Logic::SampleComponent>();
+    const bool sampleMigrated =
+        samples.size() == 1 &&
+        samples.get<const Logic::SampleComponent>(*samples.begin()).m_track ==
+            8;
+    // 保存请求要与两次布局修改同时存在，确认字段级路由也走元数据的尾随保存。
+    // 不给内存谱面配置落盘目的地，因此在这里核对请求而不触发实际保存。
+    const bool editsApplied =
+        applied == Common::EditorTrackLayout{ true, 7, 11, 2 } &&
+        firstMap->m_baseMapMetadata.track_count == 7 &&
+        firstMap->m_baseMapMetadata.name == "latest title" &&
+        firstSession->hasPendingMetadataAutoSave() && sampleMigrated;
+
+    // 建立新会话后的短暂空窗不能继续显示旧谱面。等待载入后才发布新组合。
+    auto secondMap                               = std::make_shared<BeatMap>();
+    secondMap->m_baseMapMetadata.track_count     = 8;
+    secondMap->m_baseMapMetadata.bgm_track_count = 3;
+    const auto second =
+        engine.createSession(secondMap, "Toolbar target", false);
+    // 新会话默认字段尚未绑定谱面，不应提前按默认四键显示。
+    const auto pending       = engine.activeTrackLayout();
+    const auto secondSession = engine.getActiveSession();
+    secondSession->update(0, engine.getEditorConfig(), true);
+    secondSession->getContextMutable().draftTrackCount = 13;
+    engine.setActiveSessionIndex(second);
+    // 不打开 ImGui 或请求渲染快照。工具栏布局在逻辑侧切换完成时即可消费。
+    const auto switched = engine.activeTrackLayout();
+
+    // 正式关闭路径同时覆盖恢复剩余会话以及撤回最后一份布局。
+    engine.closeSession(second, false);
+    // 关闭后必须保留剩余谱面的草稿区与 BGM 区，不能靠全部复位通过。
+    const auto restored = engine.activeTrackLayout();
+    // 先关闭第二个索引，使回退发生在正常清理路径；最后关闭才应得到空布局。
+    engine.closeSession(first, false);
+    // 数值份额与会话都已释放，独占最后一份布局的测试读者仍可持值做比较。
+    const auto empty = engine.activeTrackLayout();
+
+    // 分阶段报告，以便区分长锁回归、相对步长丢失与索引重排后的失效处理。
+    // 失败阶段各自独立计算，避免单个失败吞掉其他场景的结果。
+    const bool usableWhileLocked = returned && readWhileLocked == expectedFirst;
+    // 比较整组而不是单个计数，三个来自不同会话的值不能在同一轮混合。
+    const bool switchedCleanly =
+        pending == Common::EditorTrackLayout{} &&
+        switched == Common::EditorTrackLayout{ true, 8, 13, 3 } &&
+        restored == applied && empty == Common::EditorTrackLayout{};
+    if ( !usableWhileLocked || !editsApplied || !switchedCleanly )
+        XERROR("Toolbar track layout regression: lock={}, edits={}, switch={}",
+               usableWhileLocked,
+               editsApplied,
+               switchedCleanly);
+    return usableWhileLocked && editsApplied && switchedCleanly;
+}
+
 }  // namespace
 
 /// @brief 运行画笔调色盘跨会话恢复测试。
@@ -891,6 +1022,7 @@ int main()
                    testBackgroundCanvasMousePositionRouting() &&
                    testLatestCanvasFocusRequest() &&
                    testPublishedActiveGestureState() &&
+                   testToolbarTrackLayoutPublication() &&
                    testCameraConfigSnapshot() &&
                    testConcurrentEditorConfigSnapshots()
                ? 0
