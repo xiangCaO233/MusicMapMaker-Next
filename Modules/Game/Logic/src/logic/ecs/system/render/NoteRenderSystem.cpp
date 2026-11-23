@@ -3,7 +3,9 @@
 #include "common/render/HoverRenderData.h"
 #include "common/render/TextureID.h"
 #include "config/AppConfig.h"
+#include "config/EditorConfigView.h"
 #include "config/EditorSettings.h"
+#include "config/VisualConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "config/visual/InteractionHitboxConfig.h"
 #include "logic/ecs/components/TimelineComponent.h"
@@ -15,7 +17,6 @@
 #include "logic/ecs/system/render/SkinTextureScale.h"
 #include "logic/session/CanvasCamera.h"
 #include "logic/session/SessionUtils.h"
-#include "logic/session/context/SessionContext.h"
 #include "mmm/timing/BpmNormalization.h"
 #include <algorithm>
 #include <array>

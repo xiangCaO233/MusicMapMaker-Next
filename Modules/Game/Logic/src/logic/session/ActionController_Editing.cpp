@@ -10,6 +10,7 @@
 // 头文件隔离只调整编译边界，动作提交和数据所有权保持原协议。
 #include "common/LogicCommands.h"
 #include "config/CreatorIdentity.h"
+#include "config/EditorConfigView.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"

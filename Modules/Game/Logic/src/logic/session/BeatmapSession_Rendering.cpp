@@ -7,6 +7,8 @@
 // 快照生产端直接访问字段；缓冲兼容头只提供声明和公共小类型。
 #include "PreviewNavigationProjection.h"
 #include "common/render/RenderSnapshot.h"
+#include "config/EditorConfig.h"
+#include "config/EditorConfigView.h"
 #include "config/Utf8Path.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
@@ -18,6 +20,7 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/NoteTransformSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/ecs/system/render/DragRenderPinnedEntities.h"
 #include "logic/session/CanvasCamera.h"
 #include "logic/session/InteractionController.h"
 #include "logic/session/SessionUtils.h"

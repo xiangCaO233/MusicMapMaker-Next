@@ -1,4 +1,5 @@
 #include "common/render/TextureID.h"
+#include "config/EditorConfig.h"
 #include "logic/ecs/system/HitFXSystem.h"
 
 #include "audio/StereoGainEnvelope.h"

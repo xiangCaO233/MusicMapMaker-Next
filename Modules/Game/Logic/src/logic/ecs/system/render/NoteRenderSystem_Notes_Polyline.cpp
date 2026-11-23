@@ -1,5 +1,9 @@
 #include "common/render/NotePartSizing.h"
+// 折线各段读取同一视口配置，避免嵌套绘制重新取得全局配置。
+#include "common/render/RenderSnapshot.h"
 #include "common/render/TextureID.h"
+#include "config/EditorConfigView.h"
+#include "config/VisualConfig.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"

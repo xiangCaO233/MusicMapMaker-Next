@@ -1,13 +1,16 @@
 #pragma once
 
+#include "config/EditorConfigView.h"
+
 #include "common/render/RenderSnapshot.h"
 
-#include "config/EditorConfig.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include <algorithm>
+#include <cstdint>
 #include <entt/entt.hpp>
 #include <glm/vec4.hpp>
+#include <string>
 #include <vector>
 
 namespace MMM::Logic

@@ -1,5 +1,8 @@
 #include "logic/ecs/system/BackgroundRenderSystem.h"
+#include "common/render/RenderSnapshot.h"
 #include "common/render/TextureID.h"
+#include "config/EditorConfigView.h"
+#include "config/VisualConfig.h"
 
 #include "audio/AudioManager.h"
 #include "logic/ecs/system/BackgroundSpectrumRenderSystem.h"

@@ -1,15 +1,16 @@
 #include "common/render/TextureID.h"
+#include "config/EditorConfigView.h"
+#include "config/EditorSettings.h"
+#include "config/VisualConfig.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
 
 #include "common/render/CanvasCameraMath.h"
 #include "common/render/RenderSnapshot.h"
-#include "config/EditorConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/AudioObjectLabelRenderer.h"
 #include "logic/ecs/system/render/Batcher.h"
-#include "logic/session/context/SessionContext.h"
 #include "mmm/timing/BpmNormalization.h"
 #include <fmt/format.h>
 

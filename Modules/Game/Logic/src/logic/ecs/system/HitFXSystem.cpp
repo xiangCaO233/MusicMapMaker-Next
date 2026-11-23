@@ -1,6 +1,7 @@
 #include "logic/ecs/system/HitFXSystem.h"
 #include "audio/AudioManager.h"
 #include "config/EditorConfig.h"
+#include "config/EditorConfigView.h"
 #include "config/EditorSettings.h"
 #include "config/VisualConfig.h"
 #include "config/skin/SkinConfig.h"

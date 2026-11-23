@@ -1,6 +1,7 @@
 #include "logic/session/tool/DrawTool.h"
 #include "common/LogicCommands.h"
 #include "common/walkthrough/WalkthroughEditEvent.h"
+#include "config/EditorConfigView.h"
 #include "log/colorful-log.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteColorUtils.h"

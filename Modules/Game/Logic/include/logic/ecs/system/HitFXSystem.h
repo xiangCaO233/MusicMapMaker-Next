@@ -1,7 +1,8 @@
 #pragma once
 
+#include "config/EditorConfigView.h"
+
 #include "audio/StereoGainEnvelope.h"
-#include "config/EditorConfig.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include <cstddef>
@@ -15,8 +16,10 @@
 
 namespace MMM::Config
 {
+struct EditorConfig;
+struct SfxConfig;
 enum class HitEffectLayoutMode : std::uint8_t;
-}
+}  // namespace MMM::Config
 
 namespace MMM::Logic::System
 {

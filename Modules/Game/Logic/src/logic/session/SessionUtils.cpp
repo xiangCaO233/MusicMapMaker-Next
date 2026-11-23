@@ -1,8 +1,12 @@
 #include "logic/session/SessionUtils.h"
+// 位置信息使用视口视觉设置。
+// 放置规则使用同一会话的编辑偏好，避免复制整个配置。
+#include "config/EditorConfigView.h"
 
 #include "audio/AudioManager.h"
 #include "common/ComparisonCanvas.h"
 #include "common/render/BeatTimeIndex.h"
+#include "config/EditorConfig.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/NoteComponent.h"

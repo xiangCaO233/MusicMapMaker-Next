@@ -75,12 +75,6 @@ struct MarqueeBox {
     SelectionOperation operation{ SelectionOperation::Add };
 };
 
-/// @brief 提供给渲染系统的拖动中实体列表视图。
-struct DragRenderPinnedEntities {
-    /// @brief 当前拖动手势中需要绕过静态可见性索引补充渲染的实体列表。
-    const std::vector<entt::entity>* entities{ nullptr };
-};
-
 /// @brief 一次绘制教学创建的物件身份；仅用于核对删除练习，不参与保存。
 struct WalkthroughPracticeNote {
     std::uint64_t token{ 0 };            ///< 创建步骤的唯一标记。

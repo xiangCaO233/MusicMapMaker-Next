@@ -1,4 +1,5 @@
 #include "logic/ecs/system/BackgroundRenderSystem.h"
+#include "config/EditorConfig.h"
 // 背景批次按固定纹理语义校验，不借用其他渲染头传入枚举。
 #include "common/render/TextureID.h"
 

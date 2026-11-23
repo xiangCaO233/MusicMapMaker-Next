@@ -1,6 +1,9 @@
 #include "common/render/NotePartSizing.h"
+// 长条与滑键沿用快照调用者绑定的视觉设置。
 #include "common/render/RenderSnapshot.h"
 #include "common/render/TextureID.h"
+#include "config/EditorConfigView.h"
+#include "config/VisualConfig.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
