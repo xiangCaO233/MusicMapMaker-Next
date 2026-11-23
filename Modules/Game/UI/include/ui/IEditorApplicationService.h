@@ -14,6 +14,11 @@ namespace MMM::Config
 struct EditorConfig;
 }  // namespace MMM::Config
 
+namespace MMM::Common
+{
+struct EditorGestureState;
+}
+
 namespace MMM::UI
 {
 
@@ -71,17 +76,10 @@ public:
     /// @warning UI 热路径：只读取播放标量状态。
     [[nodiscard]] virtual bool isPlaybackPlaying() const = 0;
 
-    /// @brief 判断活动会话是否正在框选物件。
-    /// @warning UI 热路径：只读取活动交互状态。
-    [[nodiscard]] virtual bool isSelectingMarquee() const = 0;
-
-    /// @brief 判断活动会话是否正在拖动物件。
-    /// @warning UI 热路径：只读取活动交互状态。
-    [[nodiscard]] virtual bool isDraggingNote() const = 0;
-
-    /// @brief 判断活动会话是否正在绘制画笔。
-    /// @warning UI 热路径：只读取活动交互状态。
-    [[nodiscard]] virtual bool isDrawingBrush() const = 0;
+    /// @brief 获取活动会话的框选、拖动及画笔状态。
+    /// @warning UI 热路径：一次发布态读取，无需锁定活动会话。
+    [[nodiscard]] virtual Common::EditorGestureState
+    activeGestureState() const = 0;
 
     /// @brief 请求当前活动谱面自动保存。
     /// @warning UI 热路径低频分支：只设置 Logic 原子事件位，不执行文件 I/O。

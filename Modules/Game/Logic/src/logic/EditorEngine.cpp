@@ -6,6 +6,7 @@
 #include "common/AsciiFontData.h"
 #include "common/ComparisonCanvas.h"
 #include "common/EditTool.h"
+#include "common/EditorGestureState.h"
 #include "common/LogicCommands.h"
 #include "common/UnicodeFontData.h"
 #include "common/render/RenderSnapshot.h"
@@ -1653,6 +1654,9 @@ void EditorEngine::restoreProjectWorkspace(
             // 注册表和渲染缓存必须同步清理；仅删条目会留下同名旧快照。
             impl().m_renderSyncRegistry.eraseCamera(logoCameraId);
         }
+        // 移除占位槽可能改变活动索引，恢复时同步更新手势状态。
+        const auto active = impl().m_sessionRegistry.activeSession();
+        publishGestureStateUnsafe(active ? &active->getContext() : nullptr);
     }
 
     const std::string& activePath =
@@ -3136,62 +3140,50 @@ bool EditorEngine::hasActiveChartObjectSelection() const
         std::memory_order_relaxed);
 }
 
-/// @brief 判断当前活跃 Session 是否正在拖拽框选区域。
-/// @return 活动会话处于 Marquee 工具且选择手势已开始时返回 true。
-/// @warning UI 热路径：会短暂锁定 SessionRegistry 并读取活跃 Session
-/// 的常量状态， 且不复制 shared_ptr 所有权。
-bool EditorEngine::isActiveSessionSelectingMarquee() const
+namespace
 {
-    std::lock_guard<std::recursive_mutex> lock(
-        impl().m_sessionRegistry.mutex());
-    const auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
-    const auto  idx      = impl().m_sessionRegistry.activeIndex();
-    if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) &&
-         sessions[idx].session ) {
-        const auto& ctx = sessions[idx].session->getContext();
-        // isSelecting 也可能被其他工具用于内部状态，必须与当前工具联合判断。
-        return ctx.currentTool == EditTool::Marquee && ctx.isSelecting;
-    }
-    return false;
+/// @brief 三种手势同时发布，一次读取即得到同代状态。
+constexpr std::uint8_t MARQUEE_GESTURE = 1U << 0U;
+/// @brief 只有命中有效实体的拖动才允许特定快捷键。
+constexpr std::uint8_t NOTE_DRAG_GESTURE = 1U << 1U;
+/// @brief 画笔状态必须与当前绘图工具同时匹配。
+constexpr std::uint8_t BRUSH_GESTURE = 1U << 2U;
+}  // namespace
+
+/// @brief 读取最近发布的活动会话手势状态。
+/// @warning UI 热路径：读一份 relaxed 标量，无需读取被保护的 SessionContext。
+Common::EditorGestureState EditorEngine::activeGestureState() const
+{
+    const auto bits =
+        impl().m_activeGestureBits.load(std::memory_order_relaxed);
+    return {
+        (bits & MARQUEE_GESTURE) != 0U,
+        (bits & NOTE_DRAG_GESTURE) != 0U,
+        (bits & BRUSH_GESTURE) != 0U,
+    };
 }
 
-/// @brief 判断当前活跃 Session 是否正在拖拽物件。
-/// @return 选择工具存在有效拖拽实体且手势进行中时返回 true。
-/// @warning UI 热路径：会短暂锁定 SessionRegistry 并读取活跃 Session
-/// 的常量状态，且不复制 shared_ptr 所有权。
-bool EditorEngine::isActiveSessionDraggingNote() const
+/// @brief 在活动会话更新或身份变更时发布稳定手势位。
+/// @param context 锁内借用的活动会话，没有会话或需要清空时传空指针。
+/// @warning 逻辑热路径：写者由现有注册表锁串行化；只在手势变化时以 relaxed
+/// 发布自包含标量，UI 无需等待 SessionContext 或借用会话生命周期。
+void EditorEngine::publishGestureStateUnsafe(const SessionContext* context)
 {
-    std::lock_guard<std::recursive_mutex> lock(
-        impl().m_sessionRegistry.mutex());
-    const auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
-    const auto  idx      = impl().m_sessionRegistry.activeIndex();
-    if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) &&
-         sessions[idx].session ) {
-        const auto& ctx = sessions[idx].session->getContext();
-        // draggedEntity 哨兵可排除仅开始空白区域手势但未命中对象的状态。
-        return ctx.currentTool == EditTool::Marquee && ctx.isDragging &&
-               ctx.draggedEntity != entt::null;
+    std::uint8_t bits = 0U;
+    if ( context && context->currentTool == EditTool::Marquee ) {
+        // 两种状态允许同时存在；拖动空区域不会构成有效物件拖动。
+        if ( context->isSelecting ) bits |= MARQUEE_GESTURE;
+        if ( context->isDragging && context->draggedEntity != entt::null )
+            bits |= NOTE_DRAG_GESTURE;
+    } else if ( context && context->currentTool == EditTool::Draw &&
+                context->brushState.isActive ) {
+        // 切换工具后可能仍保留旧画笔数据，仅当前绘图工具允许该快捷键策略。
+        bits |= BRUSH_GESTURE;
     }
-    return false;
-}
-
-/// @brief 判断当前活跃 Session 是否正在使用画笔绘制。
-/// @return Draw 工具的画笔状态已激活时返回 true。
-/// @warning UI 热路径：会短暂锁定 SessionRegistry 并读取活跃 Session
-/// 的常量状态，且不复制 shared_ptr 所有权。
-bool EditorEngine::isActiveSessionDrawingBrush() const
-{
-    std::lock_guard<std::recursive_mutex> lock(
-        impl().m_sessionRegistry.mutex());
-    const auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
-    const auto  idx      = impl().m_sessionRegistry.activeIndex();
-    if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) &&
-         sessions[idx].session ) {
-        const auto& ctx = sessions[idx].session->getContext();
-        // 工具与 brushState 双重判断避免切换工具后的尾随状态短暂误报。
-        return ctx.currentTool == EditTool::Draw && ctx.brushState.isActive;
-    }
-    return false;
+    // 静态帧不写共享缓存行，避免逻辑与 UI 线程无效争用。
+    auto& published = impl().m_activeGestureBits;
+    if ( published.load(std::memory_order_relaxed) != bits )
+        published.store(bits, std::memory_order_relaxed);
 }
 
 /// @brief 设置同主音轨多画布时间同步开关。
@@ -3678,6 +3670,7 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                         .session->requestAutoSave(
                             AutoSaveTrigger::BeatmapSwitch);
                 }
+                publishGestureStateUnsafe(nullptr);
                 impl().m_sessionRegistry.setActiveIndex(i);
                 // 新谱面尚未处理载入与播放命令，旧活动项状态不能继续显示。
                 impl().m_activePlaybackPlaying.store(false,
@@ -3775,6 +3768,8 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
     entry.isLogoPlaceholder        = isLogoPlaceholder;
     entry.restoreDockFromWorkspace = restoreDockFromWorkspace;
     /// @brief 新 Session 在注册表中的索引。
+    // append 使新会话活动，此前手势不能泄漏给新画布。
+    publishGestureStateUnsafe(nullptr);
     int32_t newIndex = impl().m_sessionRegistry.append(std::move(entry));
     // append 已负责发布会话列表；同步候选另依赖新条目的音频身份，需随后刷新。
     refreshMainAudioSyncPeerStateUnsafe();
@@ -3824,19 +3819,23 @@ void EditorEngine::closeSession(int32_t index, bool updateWorkspace)
         remainingSessions[activeIndex].session->getContext().isPlaying;
     impl().m_activePlaybackPlaying.store(activePlaying,
                                          std::memory_order_relaxed);
-    int32_t activeTrackCount   = 0;
-    bool    activeHasSelection = false;
+    const SessionContext* gestureContext     = nullptr;
+    int32_t               activeTrackCount   = 0;
+    bool                  activeHasSelection = false;
     if ( activeIndex >= 0 &&
          activeIndex < static_cast<int32_t>(remainingSessions.size()) &&
          remainingSessions[activeIndex].session ) {
         const auto& context =
             remainingSessions[activeIndex].session->getContext();
+        gestureContext = &context;
         // 关闭活动标签后只发布剩余活动谱面的键数，缺省项保留零。
         if ( context.currentBeatmap )
             activeTrackCount = std::max(1, context.trackCount);
         activeHasSelection = !context.selectedNoteEntities.empty() ||
                              !context.selectedSampleEntities.empty();
     }
+    // 活动索引可能指向另一个会话，必须同时更新快捷键使用的手势。
+    publishGestureStateUnsafe(gestureContext);
     impl().m_activeBeatmapTrackCount.store(activeTrackCount,
                                            std::memory_order_relaxed);
     impl().m_activeHasChartObjectSelection.store(activeHasSelection,
@@ -3911,6 +3910,7 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
     entry.isLogoPlaceholder        = true;
     entry.restoreDockFromWorkspace = false;
 
+    publishGestureStateUnsafe(nullptr);
     impl().m_sessionRegistry.setActiveIndex(index);
     // Logo 不控制 transport；原槽重置后旧播放状态立即失效。
     impl().m_activePlaybackPlaying.store(false, std::memory_order_relaxed);
@@ -4184,6 +4184,7 @@ void EditorEngine::applyActiveSessionIndex(int32_t index,
         previousCtx.isActiveSession = false;
     }
 
+    publishGestureStateUnsafe(nullptr);
     impl().m_sessionRegistry.setActiveIndex(index);
     // 切换期间先撤销旧会话的播放标记，防止 UI 把旧状态用于新目标。
     impl().m_activePlaybackPlaying.store(false, std::memory_order_relaxed);
@@ -4287,6 +4288,8 @@ void EditorEngine::applyActiveSessionIndex(int32_t index,
     ctx.animatedTimelineZoomTarget          = ctx.animatedTimelineZoom;
     ctx.animatedTimelineZoomAnimationActive = false;
     ctx.currentTool = impl().m_currentTool.load(std::memory_order_relaxed);
+    // 新画布以最终工具判断手势，不能把切换前保留的工具与状态一起发布。
+    publishGestureStateUnsafe(&ctx);
     // 打击特效属于会话时间位置的派生视觉状态，切换后由后续播放重新触发。
     ctx.hitFXSystem.clearActiveEffects();
 
@@ -4898,6 +4901,7 @@ void EditorEngine::loop()
                             // 命令可能在本轮改变播放状态；发布只含活动源的最终值。
                             const auto& activeContext =
                                 entry.session->getContext();
+                            publishGestureStateUnsafe(&activeContext);
                             impl().m_activePlaybackPlaying.store(
                                 activeContext.isPlaying,
                                 std::memory_order_relaxed);

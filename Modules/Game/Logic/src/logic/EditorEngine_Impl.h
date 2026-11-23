@@ -145,6 +145,12 @@ struct EditorEngine::Impl {
     /// 会话命令消费后生效，原子值避免菜单检查等待逻辑更新的长锁。
     std::atomic<bool> m_activeHasChartObjectSelection{ false };
 
+    /// @brief 当前活动会话的框选、拖动和画笔状态，同一字节一次性发布。
+    /// @warning 会话更新与切换持同一会话锁写入，UI 热路径 relaxed 读取。
+    /// 该值只用于快捷键路由，原子读取避免等待会话整轮更新，不发布其他对象。
+    static_assert(std::atomic<std::uint8_t>::is_always_lock_free);
+    std::atomic<std::uint8_t> m_activeGestureBits{ 0U };
+
 
 
 
