@@ -153,12 +153,16 @@
   - 整改：将窗口组提升、最大化恢复意图、startup frame shape 操作逐项收入现有平台适配器；renderer 只调用抽象窗口动作。保留现有低频激活边沿机制，不把系统调用移入逐帧无条件路径。
   - 验收：Windows 任务栏/系统菜单最小化与恢复、浮动 ImGui 工具窗不抢焦点；macOS 模拟最大化；X11/Wayland 的既有行为分别验证。此项是职责治理建议，未发现仅靠宏本身即可证明的运行故障。
 
-- [ ] **PLAT-07（P3）致命提示接口的平台实现不完整**
+- [x] **PLAT-07（P3）致命提示接口的平台实现不完整**
 
   - 位置：`Modules/Game/Common/include/common/MessageBox.h:21-40`；唯一已定位调用 `Modules/Game/Graphic/src/imguivk/context/VKContextDebugFeats.cpp:82`。
   - 行为：Windows 使用 `MessageBoxA`；所有非 Windows 系统都尝试 Linux 桌面命令 zenity/kdialog/notify-send，忽略全部失败。当前调用为固定可信英文文本，因此不能据此宣称存在当前可触发的命令注入，也不需要扩大成安全审计；macOS 未提供独立原生提示实现。
   - 整改：移动到平台源文件；Windows 采用明确 UTF-8 到宽字符转换，macOS 提供本机提示或可靠日志/退出降级；外部命令如需保留用参数数组避免 shell 文本协议。
   - 验收：未能初始化图形界面时三桌面平台均可见错误或有可靠诊断；引号、换行和中文正确；保持只用于低频致命路径。
+
+  - 致命提示移入按平台编译的实现，统一先记录完整诊断。Windows 用 UTF-16 消息框，Linux 通过进程参数数组尝试桌面通知，macOS 和其他平台走日志及现有启动失败退出路径。
+  - Linux RelWithDebInfo 全量构建及 5 项相关 CTest 通过。独立探针验证中文、引号和换行在 Linux 通知参数中保持原样，全部工具不可用时仍保留日志；通用日志后备也通过同机独立探针。debsrv 使用既有 Runner 和 clang-cl 交叉构建 Win32 适配器及测试探针，Windows x64 探针在 Wine 下通过 UTF-16 参数和非法 UTF-8 回退，使用替身拦截弹窗。macOS 后备路径未在原生宿主运行。
+  - 注释／代码行数：`MessageBox.h` 4/6、`MessageBoxFallback.cpp` 5/9、`MessageBoxLinux.cpp` 21/48、`MessageBoxWin32.cpp` 24/56、`VKContextDebugFeats.cpp` 40/86、`Modules/Game/Common/CMakeLists.txt` 26/58，均达到 30%。
 
 ## 谱面、音频、资产和协作文档
 

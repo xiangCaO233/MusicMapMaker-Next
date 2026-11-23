@@ -8,6 +8,19 @@ add_library(
   # 视频解码实现私有使用 FFmpeg，不泄漏其头文件。
   src/common/VideoFrameDecoder.cpp)
 
+# 致命提示在图形初始化失败时独立运行，每个平台只编译对应实现。
+if(WIN32)
+  # Win32 直接显示 UTF-16 消息框，不向消费方传播 Windows SDK 头。
+  target_sources(Common PRIVATE src/common/MessageBoxWin32.cpp)
+  target_link_libraries(Common PRIVATE user32)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # 桌面工具仅用于 Linux，退出状态用于选择下一提示方式。
+  target_sources(Common PRIVATE src/common/MessageBoxLinux.cpp)
+else()
+  # macOS 和移动端保留日志诊断，调用者沿原启动失败路径退出。
+  target_sources(Common PRIVATE src/common/MessageBoxFallback.cpp)
+endif()
+
 # 公共头直接暴露项目模型、配置路径、日志及轻量第三方数据类型。 这些目录必须保持 PUBLIC，保证消费模块能够独立编译公共接口。
 target_include_directories(
   Common

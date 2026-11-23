@@ -78,7 +78,7 @@ void VKContext::enableVKValidateLayer()
             "This build enables Vulkan validation layers, so they are "
             "required.\n"
             "Install VK_LAYER_KHRONOS_validation on the target system.";
-        XERROR("Fatal: {}", msg);
+        // 提示入口先记录完整诊断，无桌面环境时仍可查到失败原因。
         UI::showFatalError("MusicMapMaker - Vulkan Validation Layer Missing",
                            msg);
 
