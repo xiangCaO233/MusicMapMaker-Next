@@ -14,11 +14,11 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <future>
 #include <glm/vec4.hpp>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace MMM::Logic
@@ -27,10 +27,10 @@ namespace MMM::Logic
 /// @details 只移动成员的存放位置，保留原初始化次序、锁及原子内存序。
 /// @warning 逻辑热路径借用此稳定实例；仅在引擎构造时分配，stop 后才销毁。
 struct EditorEngine::Impl {
-    /// @brief 逻辑循环在线程池中的任务句柄。
+    /// @brief 独立于应用共享线程池的逻辑线程。
     /// @warning 生命周期路径：仅在 start/stop
-    /// 低频路径写入；逻辑循环本身长期占用一个共享线程池工作线程。
-    std::future<void> m_loopFuture;
+    /// 低频路径写入；停止请求仍由 m_running 发布。
+    std::thread m_loopThread;
 
     /// @brief 线程运行标志
     /// @warning 逻辑热路径/原子：loop 每次迭代读取、stop

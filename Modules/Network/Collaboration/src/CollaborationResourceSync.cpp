@@ -5,7 +5,6 @@
 #include "config/Utf8Path.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
-#include "runtime/AppThreadPool.h"
 
 #include <algorithm>
 #include <array>
@@ -16,8 +15,6 @@
 #include <cstdint>
 #include <deque>
 #include <fstream>
-#include <future>
-#include <ice/thread/ThreadPool.hpp>
 #include <iomanip>
 #include <limits>
 #include <mutex>
@@ -28,6 +25,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -877,36 +875,22 @@ public:
     }
 
 private:
-    /// @brief 启动后台循环。
-    /// @details 必须使用全局 AppThreadPool；未初始化时发布稳定错误，不创建私有
-    /// 线程绕过应用生命周期。stop_token 与 future 一起保存供 restart/析构回收。
+    /// @brief 启动可长期等待请求的独立协作文件线程。
     void startWorker()
     {
-        auto* appThreadPool = Runtime::AppThreadPool::instance().get();
-        if ( !appThreadPool ) {
-            fail("runtime_thread_pool_not_initialized");
-            return;
-        }
-        m_stopSource = std::stop_source{};
-        // 每次启动创建新 stop state，旧 token 不会取消新 worker。
-        const auto token = m_stopSource.get_token();
-        m_workerFuture =
-            appThreadPool->enqueue([this, token]() { workerLoop(token); });
+        // 任务必须保持串行，但等待请求时不能占用短任务执行器。
+        m_worker =
+            std::jthread([this](std::stop_token token) { workerLoop(token); });
     }
 
-    /// @brief 请求后台线程停止。
-    /// @details 请求 stop、唤醒条件变量并等待 future；无有效 future
-    /// 时幂等返回。
-    /// @warning 等待当前哈希、加密或物化任务响应
-    /// stop_token，只用于低频重启/析构。
+    /// @brief 请求停止并等待当前文件任务释放资源。
+    /// @warning 仅用于低频重启或析构，绝不能在 workerLoop 中调用。
     void stopWorker()
     {
-        if ( !m_workerFuture.valid() ) return;
-        m_stopSource.request_stop();
-        // notify_all 唤醒尚未有任务的 worker，使其立即观察停止请求。
-        m_taskCondition.notify_all();
-        m_workerFuture.wait();
-        m_workerFuture = std::future<void>{};
+        if ( !m_worker.joinable() ) return;
+        // 带令牌的条件变量直接响应停止，因此不会丢失析构唤醒。
+        m_worker.request_stop();
+        m_worker.join();
     }
 
     /// @brief 后台串行处理文件任务。
@@ -1729,10 +1713,8 @@ private:
     std::mutex m_eventMutex;
     /// @brief 按状态机处理顺序发布的完成事件。
     std::deque<CollaborationResourceSyncEvent> m_events;
-    /// @brief 全局应用线程池中当前 worker 的完成句柄。
-    std::future<void> m_workerFuture;
-    /// @brief restart 和析构用于请求当前 worker 停止的来源。
-    std::stop_source m_stopSource;
+    /// @brief 负责串行协作文件任务的独立线程。
+    std::jthread m_worker;
 
     /// @brief 当前房主 generation 可按索引读取的不可变快照文件。
     std::vector<HostFile> m_hostFiles;

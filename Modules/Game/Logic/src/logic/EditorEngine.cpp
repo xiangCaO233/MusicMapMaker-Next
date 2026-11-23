@@ -38,7 +38,6 @@
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
-#include "runtime/AppThreadPool.h"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -47,9 +46,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <future>
 #include <glm/vec4.hpp>
-#include <ice/thread/ThreadPool.hpp>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -1287,11 +1284,11 @@ EditorEngine::EditorEngine() : m_impl(std::make_unique<Impl>())
 }
 
 /// @brief 析构前结束逻辑线程，避免线程继续借用引擎成员。
-/// @post 返回后逻辑循环 future 已完成，不再访问 SessionRegistry 或配置缓存。
+/// @post 返回后逻辑线程已退出，不再访问 SessionRegistry 或配置缓存。
 /// @warning 进程退出低频路径：stop 可能等待逻辑线程结束。
 EditorEngine::~EditorEngine()
 {
-    // 注册表和配置必须一直存活到逻辑 future 完成，不能先释放 Impl 再等待线程。
+    // 注册表和配置必须一直存活到逻辑线程退出，不能先释放 Impl 再等待线程。
     stop();
 }
 
@@ -2195,7 +2192,7 @@ bool EditorEngine::closeProject()
 /// @brief 从应用配置初始化逻辑状态，并向应用线程池提交长驻循环。
 /// @details
 /// 每次有效启动都重新读取 AppConfig，发布运行标记后向全局线程池提交 loop。
-/// 若线程池尚未初始化则撤回标记，不保留一个永远不会执行的 future。重复启动
+/// 独立逻辑线程与通用计算池各有生命周期，互不占用对方工作者。重复启动
 /// 是幂等操作，不会创建第二条逻辑循环。
 /// @pre 启停由运行生命周期入口串行调用，原子标记不替代并发 start 的互斥。
 /// @warning 启动低频路径；运行标记由启停入口写入、逻辑循环读取，
@@ -2219,26 +2216,17 @@ void EditorEngine::start()
 
     impl().m_running.store(true, std::memory_order_release);
 
-    // 线程池由应用初始化；缺失时撤回运行标记，不能留下没有执行者的运行状态。
-    auto* appThreadPool = MMM::Runtime::AppThreadPool::instance().get();
-    if ( !appThreadPool ) {
-        impl().m_running.store(false, std::memory_order_release);
-        XERROR("AppThreadPool is not initialized before EditorEngine::start.");
-        return;
-    }
-
-    // 任务借用 this，future 交给 stop 等待，保证销毁成员前循环已经退出。
-    // 不在此创建独立 std::thread，统一沿用应用线程池的异常和退出管理策略。
-    impl().m_loopFuture = appThreadPool->enqueue([this]() { loop(); });
+    // 常驻逻辑循环有独立线程，避免占用帧任务与音频解码共用的工作者。
+    impl().m_loopThread = std::thread([this]() { loop(); });
     XINFO("EditorEngine logic thread started.");
 }
 
 /// @brief 停止目录监视并请求逻辑循环退出，等待其不再访问引擎成员。
 /// @details
 /// 停止顺序先撤销目录事件来源，再由 running 原子请求 loop 退出，最后等待
-/// 线程池任务完成并清空 future。只有首次把运行状态从 true 改为 false 的调用
+/// 逻辑线程退出。只有首次把运行状态从 true 改为 false 的调用
 /// 承担等待责任，析构和显式关闭可以安全重复调用。
-/// @warning 退出低频路径：监视器停止与 future::wait 可能阻塞；不得从逻辑
+/// @warning 退出低频路径：监视器停止与 join 可能阻塞；不得从逻辑
 /// 循环自身调用而等待自己。启停入口写运行原子、逻辑循环读，exchange
 /// 使用 acq_rel 取得本次停止责任并发布退出请求，不提供超时或任务强制取消。
 void EditorEngine::stop()
@@ -2248,10 +2236,8 @@ void EditorEngine::stop()
 
     if ( impl().m_running.exchange(false, std::memory_order_acq_rel) ) {
         // 只有成功把 true 改为 false 的调用者承担等待责任，重复 stop 保持幂等。
-        if ( impl().m_loopFuture.valid() ) {
-            impl().m_loopFuture.wait();
-            // 已完成任务句柄不跨下一次启动复用；wait 只等待，不提取任务结果。
-            impl().m_loopFuture = std::future<void>{};
+        if ( impl().m_loopThread.joinable() ) {
+            impl().m_loopThread.join();
         }
         XINFO("EditorEngine logic thread stopped.");
     }

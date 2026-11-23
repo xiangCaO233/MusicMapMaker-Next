@@ -22,7 +22,7 @@ namespace MMM::Runtime
 
 namespace
 {
-/// @brief 共享池保留的最低工作线程数，避免逻辑循环和监听任务占满小型机器。
+/// @brief 共享池保留的最低工作线程数，让小型机器仍有足够的短任务并发度。
 constexpr int32_t MINIMUM_APP_WORKER_COUNT = 8;
 
 /// @brief 在正常退出超时后立即终止整个进程。

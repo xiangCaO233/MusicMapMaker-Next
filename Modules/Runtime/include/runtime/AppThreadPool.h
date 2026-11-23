@@ -15,7 +15,7 @@ namespace MMM::Runtime
 class ShutdownWatchdog;
 
 /// @brief 应用级后台线程池管理器。
-/// 通用池承载音频解码、后台计算、渲染命令录制和逻辑任务；独立文件池承载
+/// 通用池承载音频解码、后台计算、渲染命令录制和有限逻辑任务；独立文件池承载
 /// 会阻塞或长时间编码的文件事务，避免 UI 每帧等待的短任务排在文件任务之后。
 class AppThreadPool final
 {

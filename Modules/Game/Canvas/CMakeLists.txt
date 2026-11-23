@@ -11,7 +11,7 @@
 # - Basic2DCanvas 与 TimelineCanvas 的交互、渲染和弹窗实现保持分文件登记，避免单个翻译单元继续扩大。
 # - PreviewCanvas 复用逻辑快照但拥有独立视口，依赖调整时不能把预览生命周期重新绑定到主画布窗口显隐。
 # - AnnotationTableWindow 拥有独立数据缓存，不应因为表格测试方便而重新依赖 TimelineCanvas 的窗口或快照消费状态。
-# - BackgroundVideoPlayer 的耗时解码位于共享线程池，CMake 只链接 Runtime 接口，不为播放器单独创建平台线程目标。
+# - BackgroundVideoPlayer 按需启用独立解码线程，空白画布不占用共享线程池。
 # - 所有纯计算测试使用 mmm_add_test_executable 登记对象目标，配置隔离仍按原用例划分。
 # - 测试只链接其直接依赖，禁止为了省略 target_link_libraries 而统一链接完整 Canvas，防止传递依赖掩盖头文件问题。
 # - 新增测试必须同时调用 mmm_register_test_case，保持每条 CTest 用例独立进程运行。

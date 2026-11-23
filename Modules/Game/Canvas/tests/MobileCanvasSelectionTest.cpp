@@ -1,3 +1,4 @@
+#include "canvas/BackgroundVideoPlayer.h"
 #include "canvas/Basic2DCanvasInteraction.h"
 #include "common/LogicCommands.h"
 #include "common/SelectionOperation.h"
@@ -18,13 +19,17 @@
 #include "presentation/CanvasInteractionPresentation.h"
 #include "presentation/mobile/MobileCanvasInteractionPresentation.h"
 #include "presentation/mobile/MobileNoteHandles.h"
+#include "runtime/AppThreadPool.h"
 #include "ui/interaction/EditorInteraction.h"
 #include <entt/entity/entity.hpp>
+#include <ice/thread/ThreadPool.hpp>
 #include <imgui.h>
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <future>
 #include <initializer_list>
 #include <memory>
 #include <string_view>
@@ -909,11 +914,54 @@ void testInspectionPolicy()
               "hover inspection follows presentation without changing desktop");
     }
 }
+/// @brief 无视频的画布超过线程池容量时，两个连续帧批次仍须完成。
+/// @details 画布数量来自运行时池容量，不能写死某个测试机的核数。
+/// 测试不需要 GPU 或 ImGui 渲染，因为主线程等待批次的进展条件只取决于
+/// 同一执行器能否获得工作者；窗口、帧数据和录制内容不影响这一条件。
+/// 两批任务的 future 分别观察，不能因偶然只完成每批一个任务而通过。
+void testEmptyVideoDoesNotOccupyFrameWorkers()
+{
+    // 真实应用同一单例提供任务池。先初始化，再创建播放器，覆盖旧实现
+    // 能成功提交永久循环而不是因运行时缺失提前退出的行为。
+    auto& runtime = Runtime::AppThreadPool::instance();
+    runtime.init();
+    {
+        // 每个对象对应一个画布的播放器；旧实现构造即向通用池投递常驻任务。
+        std::vector<std::unique_ptr<Canvas::BackgroundVideoPlayer>> players;
+        for ( int index = 0; index <= runtime.requestedWorkerCount();
+              ++index ) {
+            players.push_back(
+                std::make_unique<Canvas::BackgroundVideoPlayer>());
+        }
+
+        // 两次各提交多个有限任务，模拟 UI 数据准备及离屏录制的任务批次。
+        // 超时只为记录失败，不允许生产帧在任务尚未结束时继续使用引用。
+        // 销毁播放器之前，回归复制了它们等待新请求的真实生命周期。
+        for ( int batch = 0; batch < 2; ++batch ) {
+            auto       first  = runtime.get()->enqueue([] {});
+            auto       second = runtime.get()->enqueue([] {});
+            const bool ready  = first.wait_for(std::chrono::seconds(2)) ==
+                                   std::future_status::ready &&
+                               second.wait_for(std::chrono::seconds(2)) ==
+                                   std::future_status::ready;
+            check(ready, "empty video players never starve frame tasks");
+            if ( !ready ) {
+                // 先释放常驻任务，回收 future 时不能让失败测试永久挂起。
+                players.clear();
+                break;
+            }
+        }
+    }
+    // 播放器退出先于关闭通用池，确保即使走回归失败路径也能完整清理。
+    // 不保留任何持有该测试执行器队列的对象给下一场景。
+    runtime.shutdown();
+}
 }  // namespace
 /// @brief 返回所有语义断言结果，不把某个计数成功当作整组通过。
 /// @post 所有场景均已解除订阅和销毁上下文，不保留设备或文件句柄。
 int main()
 {
+    testEmptyVideoDoesNotOccupyFrameWorkers();
     testInspectionPolicy();
     testObject();
     testHandles();
