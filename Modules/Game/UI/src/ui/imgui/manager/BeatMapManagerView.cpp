@@ -20,14 +20,13 @@
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/layout/LayoutContext.h"
 #include "ui/layout/box/CLayBox.h"
+#include "ui/utils/FileModifiedTime.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <ctime>
 #include <filesystem>
 #include <fmt/format.h>
 #include <imgui_internal.h>
@@ -189,46 +188,6 @@ std::string formatFileSize(std::uintmax_t size)
     return TR_FMT("ui.file_manager.size_gib", value / gibi);
 }
 
-/// @brief 将文件系统时间转换为本地时间文本。
-/// @param time 文件系统时间。
-/// @return 本地时间文本，格式为 yyyy/mm/dd HH:MM。
-///
-/// filesystem clock 与 system clock 的基准可能不同，先利用两种 clock 的当前时刻
-/// 估算对应系统时间，再调用平台线程安全的本地时间转换函数。
-/// @details 转换结果只面向即时 UI 展示，不写回项目或参与排序。
-/// 排序仍使用原始 file_time_type，不受时区、本地夏令时或格式化精度影响。
-///
-/// 采用分钟精度以保持列宽稳定；精确诊断应查看文件属性，而不是扩大这个显示字段。
-std::string formatModifiedTime(std::filesystem::file_time_type time)
-{
-    // 通过“文件时刻到文件当前时刻的偏移”映射到 system_clock。
-    const auto systemTime =
-        std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-            time - std::filesystem::file_time_type::clock::now() +
-            std::chrono::system_clock::now());
-    // C 时间格式化接口接收 time_t。
-    const std::time_t timeValue =
-        std::chrono::system_clock::to_time_t(systemTime);
-
-    std::tm localTime{};
-#ifdef _WIN32
-    // Windows 使用目标在前的安全 localtime_s 签名。
-    localtime_s(&localTime, &timeValue);
-#else
-    // POSIX 使用可重入 localtime_r，避免共享静态 tm。
-    localtime_r(&timeValue, &localTime);
-#endif
-
-    // 固定缓冲足以容纳日期、空格、时间和结尾空字符。
-    char buffer[32]{};
-    if ( std::strftime(buffer, sizeof(buffer), "%Y/%m/%d %H:%M", &localTime) ==
-         0 ) {
-        // 格式化失败时不展示未初始化或截断文本。
-        return TR("ui.file_manager.value_unknown").data();
-    }
-    return buffer;
-}
-
 /// @brief 生成文件大小列文本。
 /// @param metadata 文件元数据缓存。
 /// @return 大小或未知占位。
@@ -246,14 +205,24 @@ std::string formatSizeColumn(const BeatMapManagerView::FileMetadata& metadata)
 /// @param metadata 文件元数据缓存。
 /// @return 修改时间或未知占位。
 ///
-/// 转换只在有效元数据上执行，避免默认构造时间被误显示为历史日期。
+/// @details 转换只在有效元数据上执行，避免默认构造时间被误显示为历史日期。
+/// 扫描结果以有效位同时表示“属性无法读取”，保持列表能显示仍可打开的谱面。
+/// 排序直接使用扫描留下的绝对时刻，夏令时回拨时的同名分钟仍区分前后顺序。
+/// 展示文本不写回谱面元数据，界面所在时区变化不会导致谱面被标记为已编辑。
+/// 格式化失败时沿用文件属性查询失败的翻译键，使各管理视图的占位一致。
+/// 分钟是展示精度，不参与比较同一分钟内不同文件的修改先后。
 std::string formatModifiedColumn(
     const BeatMapManagerView::FileMetadata& metadata)
 {
     if ( !metadata.hasLastWriteTime ) {
         return TR("ui.file_manager.value_unknown").data();
     }
-    return formatModifiedTime(metadata.lastWriteTime);
+    // 显示使用本地时间。原始 file_time_type 和有效位继续用于排序，
+    // 避免夏令时重复的分钟或日期显示精度改变各行的时间顺序。
+    auto text = Utils::formatFileModifiedTime(metadata.lastWriteTime);
+    // 平台无法表达该时刻时，与读取文件属性失败共用同一个本地化占位。
+    if ( text.empty() ) return TR("ui.file_manager.value_unknown").data();
+    return text;
 }
 
 /// @brief 生成谱面 Version 列文本。
