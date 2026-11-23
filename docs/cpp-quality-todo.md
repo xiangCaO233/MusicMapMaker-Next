@@ -104,7 +104,7 @@
   - 整改：把 locale 初始化收入启动平台实现，定义失败回退和日志，明确只初始化真正需要的 category；不要依赖一个平台名称覆盖所有系统。
   - 验收：Windows、Linux（含 `LC_ALL=C`）、macOS 上检查成功/失败返回与最终 category，中文路径和数值解析不依赖宿主 locale；失败有明确诊断。
 
-- [ ] **PLAT-02（P2）文本协议浮点语法随平台变化**
+- [x] **PLAT-02（P2）文本协议浮点语法随平台变化**
 
   - 位置：`Modules/Game/Logic/src/logic/EditorClipboardProtocol.cpp:240-249`；相关实现 `Modules/MMM/include/mmm/SafeParse.h:40-71`。
   - 行为：剪贴板协议 `parseDoubleField` 只检查完整消费与有限值，Apple 分支由 `strtod_l` 解析，其余平台由默认格式 `from_chars` 解析。输入 `0x1p2` 的十六进制语法在 Apple 可被完整消费，默认 `from_chars` 不会按该语法完整消费；于是同一外部协议文本在平台间的合法性不同。
@@ -112,6 +112,10 @@
   - 可复用先例：`Modules/MMM/src/beatmap/BmsFormat.hpp:69-80` 已用十进制字符白名单隔离平台扩展语法。
   - 整改：给协议明确十进制语法并在该边界验证，或定义统一 helper 语法；不修改兼容性解析器的所有调用方。
   - 验收：同一组正负号、科学计数、十六进制、NaN/Inf、尾随垃圾和溢出输入，在 Apple 低部署目标与 Linux/Windows 上得到相同协议结果；保留合法历史剪贴板往返。
+
+  - 已实现剪贴板字段的十进制字符和完整消费校验，保留合法指数、历史版本以及可往返的非零次正规数。Linux RelWithDebInfo 全量构建及 5 项相关 CTest 通过；Linux 上的两种数值后端对照探针覆盖 28 个输入，结果一致。
+  - 在 `debsrv` 固定 Runner 的原工作区，以 clang-cl 23、MSVC 14.52 和 Windows SDK 10.0.26100.0 完成 x64 RelWithDebInfo 交叉构建。两份 Windows 测试程序传回后经 SHA-256 校验，并在 Wine 10.0 下运行 5 项回归，全部通过。Runner 已恢复原 `ci` 提交及测试配置。
+  - 在现有原生 Apple Silicon Runner 上针对 macOS 11.0 部署目标全量构建，5 项回归在宿主 macOS 26.5.1 通过。Windows 与 macOS 验证使用同一源提交 `4a0298f8`。注释／代码为 EditorClipboardProtocol.cpp 423/978、EditorClipboardProtocolTest.cpp 220/509，逐文件均达到 30%。
 
 - [x] **PLAT-03（P2）三个 UI 时间格式化分支遗漏失败判断**
 
