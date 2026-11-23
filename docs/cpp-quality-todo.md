@@ -50,7 +50,7 @@
   - 整改：复用已有 `CanvasTimeFormatContext` 重载（`:207-211`）；按会话/BPM 修订构建归一化节点与前缀累计拍数，普通帧仅二分并格式化。不要按每帧 RenderSnapshot 地址失效缓存，否则播放发布会持续重建。
   - 验收：Beat preference 下用大量 BPM 节点谱面同时打开状态栏、时间线、预览、频谱/波形；统计 collect/sort 次数，时间推进/悬停时应为零，BPM 修改后每修订重建一次；与原结果对照负时间、同时间 BPM、分拍边界。
 
-- [ ] **PERF-04 P2 Shift 持续按下时，快捷键扫描仍会等待完整会话 update 的递归锁**
+- [x] **PERF-04 P2 Shift 持续按下时，快捷键扫描仍会等待完整会话 update 的递归锁**
 
   - `Modules/Game/UI/src/ui/imgui/menu/actions/edit/TogglePlaybackAction.cpp:194-199` 即使播放快捷键未命中，只要 Shift 按下且绑定无 Shift，就调用 `service->isDrawingBrush()`，之后才检测临时组合快捷键。
   - 适配链：`Modules/Game/src/EditorApplicationService.cpp:121-123` → `Modules/Game/Logic/src/logic/EditorEngine.cpp:3235-3238` 阻塞获取 SessionRegistry 锁。
@@ -58,6 +58,20 @@
   - 同类入口：`EditorEngine.cpp:3196-3199`、`:3215-3218` 的框选/拖拽查询，快捷键命中且 ImGui 项目活动时 `TogglePlaybackAction.cpp:225-227` 连续调用三次。
   - 整改：逻辑更新发布一个带活动会话身份的轻量 interaction-state 快照/位掩码，UI 单次读取；或将当前 profile、按键命中判断提前以减少不必要查询，但仅提前检查不能替代最终去除热路径长锁等待。不得直接无锁读取可变 SessionContext。
   - 验收：相同实际谱面与播放区间，对比持续 Shift、画笔/框选/拖动与普通播放；记录 `onUpdateUI` 和该锁等待，确认查询不获取会话长锁，且允许/禁止播放快捷键的现有策略不变。
+
+  - 已验证。逻辑侧在现有会话锁下计算手势位，只在变化时发布；快捷键只在命中后读取一次，持 Shift 且无主键的帧没有读取。切换在恢复最终工具后发布，关闭或新建会话同步更新状态。
+  - Linux RelWithDebInfo 全量构建与 5 项 CTest 通过。锁占用回归证明读取在注册表锁释放前完成。真实键盘帧覆盖 Shift 兼容和活动控件限制，并验证每次命中只读取一次。本批验证锁等待和功能契约，实际谱面播放的帧时间未采样。
+  - 修改文件注释率
+    - `Modules/Game/Common/include/common/EditorGestureState.h` · 5 注释行 / 9 代码行 · 35.71%
+    - `Modules/Game/Logic/include/logic/EditorEngine.h` · 357 注释行 / 238 代码行 · 60.00%
+    - `Modules/Game/Logic/src/logic/EditorEngine.cpp` · 1696 注释行 / 3951 代码行 · 30.03%
+    - `Modules/Game/Logic/src/logic/EditorEngine_Impl.h` · 74 注释行 / 72 代码行 · 50.68%
+    - `Modules/Game/Logic/tests/BrushPaletteSessionStateTest.cpp` · 257 注释行 / 598 代码行 · 30.06%
+    - `Modules/Game/UI/include/ui/IEditorApplicationService.h` · 31 注释行 / 48 代码行 · 39.24%
+    - `Modules/Game/UI/src/ui/imgui/menu/actions/edit/TogglePlaybackAction.cpp` · 80 注释行 / 185 代码行 · 30.19%
+    - `Modules/Game/UI/tests/WorkspaceDockRestoreTest.cpp` · 602 注释行 / 1403 代码行 · 30.02%
+    - `Modules/Game/include/game/EditorApplicationService.h` · 12 注释行 / 24 代码行 · 33.33%
+    - `Modules/Game/src/EditorApplicationService.cpp` · 57 注释行 / 106 代码行 · 34.97%
 
 - [ ] **PERF-05 P2 SessionContext 与 EditorEngine 的公开面跨越多职责，锁与生命周期契约暴露到 UI**
 

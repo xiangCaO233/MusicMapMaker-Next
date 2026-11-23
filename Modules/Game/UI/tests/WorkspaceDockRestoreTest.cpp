@@ -1,4 +1,5 @@
 #include "ui/imgui/WorkspaceDockRestore.h"
+#include "common/EditorGestureState.h"
 #include "common/LogicCommands.h"
 #include "config/EditorConfig.h"
 #include "config/EditorSettings.h"
@@ -568,9 +569,9 @@ bool checkToolbarResize()
     auto* window = ImGui::FindWindowByName(" ###Toolbar");
     // 竖排调大的高度必须生效，宽度应保持单列，而非错误开放两个轴。
     // 额外核对实际窗口标志，确保拖动角落时不会被 NoResize 拦截。
-    bool        valid      = window && window->DockId == 0 &&
-                             !(window->Flags & ImGuiWindowFlags_NoResize) &&
-                             window->Size.x < 200 && window->Size.y == 400;
+    bool valid = window && window->DockId == 0 &&
+                 !(window->Flags & ImGuiWindowFlags_NoResize) &&
+                 window->Size.x < 200 && window->Size.y == 400;
     const float fixedWidth = window->Size.x;
     drawFrame(ImVec2(280, 480));
     drawFrame(ImVec2(0, 0));
@@ -1098,10 +1099,10 @@ bool checkToolbarEdgeDocking()
             // 从当前树重新取根，不能沿用发出拖放请求前的观察指针。
             const auto* root = ImGui::DockBuilderGetNode(ROOT_ID);
             // 检查真实根节点扣除占位后的矩形，工具条不得覆盖原来的中心面积。
-            valid              = valid && root->Pos.x == geometry.m_dockPos.x &&
-                                 root->Pos.y == geometry.m_dockPos.y &&
-                                 root->Size.x == geometry.m_dockSize.x &&
-                                 root->Size.y == geometry.m_dockSize.y;
+            valid = valid && root->Pos.x == geometry.m_dockPos.x &&
+                    root->Pos.y == geometry.m_dockPos.y &&
+                    root->Size.x == geometry.m_dockSize.x &&
+                    root->Size.y == geometry.m_dockSize.y;
             const auto* first  = ImGui::FindWindowByName(PANEL_NAME);
             const auto* second = ImGui::FindWindowByName(SECOND_PANEL_NAME);
             // 合并空工具叶后再取画布基线，允许 ImGui 正常重命名相邻叶。
@@ -1156,7 +1157,7 @@ bool checkToolbarEdgeDocking()
             // 长轴必须真实缩短，短轴必须精确保持标题栏恢复后的单列或单行厚度。
             const bool resized = window->Size[horizontal ? 0 : 1] < length &&
                                  window->Size[horizontal ? 1 : 0] == thickness;
-            valid              = valid && resized;
+            valid = valid && resized;
             if ( !valid )
                 XERROR(
                     "Toolbar auto pin failed: menu={}, edge={}, fixed={}, "
@@ -1358,6 +1359,8 @@ public:
     int m_updates{};
     /// @brief 播放快捷键场景只发布交互标量，不启动实际音频或逻辑线程。
     bool m_drawing{}, m_playing{};
+    /// @brief 记录动作请求手势快照的次数，由测试 UI 线程独占。
+    mutable int m_gestureReads{};
     /// @brief 工具状态由测试服务发布，不直接操纵工具栏私有成员。
     MMM::Logic::EditTool m_tool{ MMM::Logic::EditTool::Move };
     /// @brief 测试不加载项目。
@@ -1388,12 +1391,14 @@ public:
     }
     /// @brief 使用最近一次播放命令的目标，验证连续两次空格分别播放与暂停。
     bool isPlaybackPlaying() const override { return m_playing; }
-    /// @brief 没有会话框选。
-    bool isSelectingMarquee() const override { return false; }
-    /// @brief 没有物件拖动。
-    bool isDraggingNote() const override { return false; }
-    /// @brief 普通工具栏测试默认空闲，快捷键测试显式持有画笔。
-    bool isDrawingBrush() const override { return m_drawing; }
+    /// @brief 工具栏夹具默认无手势，快捷键用例可显式持有画笔。
+    /// @return 单次读取返回全部状态，模拟实际应用端口的发布契约。
+    MMM::Common::EditorGestureState activeGestureState() const override
+    {
+        // 查询观测不返回不同手势，避免测试计数改变真实快捷键许可条件。
+        ++m_gestureReads;
+        return { .m_drawingBrush = m_drawing };
+    }
     /// @brief 测试不保存谱面。
     void requestAutoSave(MMM::UI::EditorAutoSaveReason) override {}
     /// @brief 无渲染线程消费者。
@@ -1419,11 +1424,11 @@ bool checkDrawingPlaybackShortcut()
     // 独立测试显式使用默认空格，用户重绑定不应改变本场景的输入含义。
     // 退出时恢复绑定与方案，避免影响同进程后续 UI 回归。
     const std::string savedProfile(MMM::UI::Interaction::activeProfile().id());
-    auto&             binding      = MMM::Config::AppConfig::instance()
-                                         .getEditorSettings()
-                                         .shortcutConfig.togglePlayback;
-    const auto        savedBinding = binding;
-    binding = MMM::Config::ShortcutConfig{}.togglePlayback;
+    auto&             binding = MMM::Config::AppConfig::instance()
+                        .getEditorSettings()
+                        .shortcutConfig.togglePlayback;
+    const auto savedBinding = binding;
+    binding                 = MMM::Config::ShortcutConfig{}.togglePlayback;
     // 两次按键分别验证播放和暂停，不能以一个被消费但无命令的返回值通过。
     // 所有组合累积结果，最后成功的方案不得覆盖先前失败的经典对照。
     bool passed = true;
@@ -1499,7 +1504,10 @@ bool checkDrawingPlaybackShortcut()
             for ( const bool shift : { false, true } ) {
                 // 两种物理 Shift 状态覆盖纯鼠标原始空格和既有 Shift 兼容路径。
                 io.AddKeyEvent(ImGuiMod_Shift, shift);
+                const int readsBefore = service.m_gestureReads;
                 draw(false);
+                // 用户持续按 Shift 时不会查询会话；物理主键才进入手势判定。
+                passed &= service.m_gestureReads == readsBefore;
                 // 未按 Shift 的经典画笔仍应被拦截，纯鼠标无需额外修饰键。
                 // 两次空格之间释放主键但保持鼠标按住，验证不是仅首播可用。
                 const int  before  = commands;
@@ -1507,6 +1515,8 @@ bool checkDrawingPlaybackShortcut()
                 // 使用 &= 保留所有断言的执行，早期失败不能跳过后续输入收尾。
                 passed &= draw(true) == allowed;
                 passed &= service.m_playing == allowed;
+                // 真实活跃项必须查询一次。Shift 画笔兼容和白名单裁决复用它。
+                passed &= service.m_gestureReads == readsBefore + 1;
                 draw(false);
                 passed &= draw(true) == allowed;
                 passed &= !service.m_playing && service.m_drawing;
@@ -1680,9 +1690,9 @@ bool checkMouseOnlyTimelineZoom()
                 // 取非预设位置并连续移动，避免恰好命中整点造成假阳性。
                 const int   beforeDrag = service.m_updates;
                 const float sliderY    = popup->Pos.y + style.WindowPadding.y +
-                                         ImGui::GetTextLineHeight() +
-                                         style.ItemSpacing.y * 2 + 1 +
-                                         ImGui::GetFrameHeight() / 2;
+                                      ImGui::GetTextLineHeight() +
+                                      style.ItemSpacing.y * 2 + 1 +
+                                      ImGui::GetFrameHeight() / 2;
                 ImGui::GetIO().AddMousePosEvent(x + 53 * dpi, sliderY);
                 draw();
                 ImGui::GetIO().AddMouseButtonEvent(0, true);
@@ -1894,8 +1904,8 @@ bool checkMouseDrawingOptions()
             // 主目标远离选项圆点，不能靠主亮区偶然覆盖弹窗而令测试通过。
             // 伴随区域必须由正式工具栏在 BeginPopup 内上报。
             spotlight.reportTarget("compose.lesson.practice",
-                                   { 400, 200 },
-                                   { 600, 400 },
+                                                { 400, 200 },
+                                                { 600, 400 },
                                    ImGui::GetMainViewport());
             spotlight.keepAlive();
             spotlight.render(dpi, "Got it");

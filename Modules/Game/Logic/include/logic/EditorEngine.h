@@ -35,6 +35,7 @@ namespace MMM::Common
 {
 struct AsciiFontAtlasMetrics;
 struct UnicodeFontMetrics;
+struct EditorGestureState;
 }  // namespace MMM::Common
 
 namespace MMM::Common::Render
@@ -469,20 +470,9 @@ public:
     /// 菜单可用性允许至多一轮逻辑更新的延迟，编辑命令仍由会话自身校验。
     bool hasActiveChartObjectSelection() const;
 
-    /// @brief 判断当前活跃 Session 是否正在拖拽框选区域。
-    /// @warning UI 热路径：全局快捷键处理会在 ImGui 项激活时调用；会短暂锁定
-    /// SessionRegistry，只读取常量状态，且不复制 shared_ptr 所有权。
-    bool isActiveSessionSelectingMarquee() const;
-
-    /// @brief 判断当前活跃 Session 是否正在拖拽物件。
-    /// @warning UI 热路径：全局快捷键处理会在 ImGui 项激活时调用；会短暂锁定
-    /// SessionRegistry，只读取常量状态，且不复制 shared_ptr 所有权。
-    bool isActiveSessionDraggingNote() const;
-
-    /// @brief 判断当前活跃 Session 是否正在使用画笔绘制。
-    /// @warning UI 热路径：全局快捷键处理会在 ImGui 项激活时调用；会短暂锁定
-    /// SessionRegistry，只读取常量状态，且不复制 shared_ptr 所有权。
-    bool isActiveSessionDrawingBrush() const;
+    /// @brief 读取最近发布的活动会话手势状态。
+    /// @warning UI 热路径：只做一次 relaxed 原子读取，不获取会话锁。
+    [[nodiscard]] Common::EditorGestureState activeGestureState() const;
 
     /**
      * @brief 获取逻辑线程实时刷新率 (UPS - Updates Per Second)
@@ -589,6 +579,12 @@ public:
     bool saveDirtyBeatmapsForPackaging();
 
 private:
+    /// @brief 从已稳定的活动上下文发布三个手势位，空指针清空状态。
+    /// @pre 调用者持有会话注册表锁。
+    /// @warning 逻辑热路径：每次活动会话更新后调用，只在变化时发布 relaxed
+    /// 原子。
+    void publishGestureStateUnsafe(const SessionContext* context);
+
     /// @brief 消费画布切换请求并在资源准备完毕后提交。
     /// @warning 每轮逻辑调用，只有待办或已完成结果才进入低频提交路径。
     void processActiveCanvasRequest();

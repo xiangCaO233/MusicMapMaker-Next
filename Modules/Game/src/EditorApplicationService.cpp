@@ -2,6 +2,7 @@
 #include "config/EditorConfig.h"
 
 #include "audio/AudioManager.h"
+#include "common/EditorGestureState.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/EditorEngine.h"
@@ -99,28 +100,11 @@ bool EditorApplicationService::isPlaybackPlaying() const
     return Logic::EditorEngine::instance().isPlaybackPlaying();
 }
 
-/// @brief 查询活动会话是否正在执行框选交互。
-/// @return 框选状态机处于活动阶段时返回 true。
-/// @warning UI 热路径：用于快捷键隔离，不得遍历实体。
-bool EditorApplicationService::isSelectingMarquee() const
+/// @brief 读取逻辑线程发布的活动会话手势快照。
+/// @warning UI 热路径：只读取一份标量状态，不访问会话可变对象。
+Common::EditorGestureState EditorApplicationService::activeGestureState() const
 {
-    return Logic::EditorEngine::instance().isActiveSessionSelectingMarquee();
-}
-
-/// @brief 查询活动会话是否正在拖动音符。
-/// @return 拖动状态机处于活动阶段时返回 true。
-/// @warning UI 热路径：用于输入路由判定，只读取已有状态。
-bool EditorApplicationService::isDraggingNote() const
-{
-    return Logic::EditorEngine::instance().isActiveSessionDraggingNote();
-}
-
-/// @brief 查询活动会话是否正在使用画笔绘制。
-/// @return 画笔状态机处于活动阶段时返回 true。
-/// @warning UI 热路径：不得在查询中创建命令或修改画笔。
-bool EditorApplicationService::isDrawingBrush() const
-{
-    return Logic::EditorEngine::instance().isActiveSessionDrawingBrush();
+    return Logic::EditorEngine::instance().activeGestureState();
 }
 
 /// @brief 把 UI 层自动保存原因映射为逻辑层触发类型并排队请求。

@@ -32,14 +32,9 @@ public:
     /// @copydoc UI::IEditorApplicationService::isPlaybackPlaying
     [[nodiscard]] bool isPlaybackPlaying() const override;
 
-    /// @copydoc UI::IEditorApplicationService::isSelectingMarquee
-    [[nodiscard]] bool isSelectingMarquee() const override;
-
-    /// @copydoc UI::IEditorApplicationService::isDraggingNote
-    [[nodiscard]] bool isDraggingNote() const override;
-
-    /// @copydoc UI::IEditorApplicationService::isDrawingBrush
-    [[nodiscard]] bool isDrawingBrush() const override;
+    /// @copydoc UI::IEditorApplicationService::activeGestureState
+    [[nodiscard]] Common::EditorGestureState
+    activeGestureState() const override;
 
     /// @copydoc UI::IEditorApplicationService::requestAutoSave
     void requestAutoSave(UI::EditorAutoSaveReason reason) override;

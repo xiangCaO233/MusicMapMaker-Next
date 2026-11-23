@@ -1,3 +1,4 @@
+#include "common/EditorGestureState.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
 #include "ui/IEditorApplicationService.h"
@@ -12,6 +13,7 @@
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/interaction/EditorInteraction.h"
 #include <imgui.h>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -193,16 +195,22 @@ public:
         // 常规快捷键已通过命名目录解析；此处只保留画笔所需的兼容分支。
         bool playbackShortcutPressed =
             ShortcutUtils::isActionShortcutPressed("togglePlayback");
-        // 画笔绘制期间 Shift 是交互修饰键，继续允许它叠加在用户绑定上。
-        if ( !playbackShortcutPressed &&
-             Interaction::modifier(Interaction::Modifier::Shift) &&
-             !playbackBinding.shift && service->isDrawingBrush() ) {
-            // 复制单个轻量绑定并仅修改临时 Shift 位，不污染持久化配置。
-            // 只为当前帧画笔创建临时值，不把 Shift 叠加保存到应用设置。
+        // 先验证按键，再读手势；仅持续按 Shift 时不会查询活动会话。
+        // 临时 Shift 绑定沿用原先的主键及修饰键校验，不写入配置。
+        // 常规键命中但没有活跃 ImGui 控件时也不需要手势门禁。
+        // 仅兼容路径读取画笔位，之后的活跃控件判定复用同一个快照。
+        // ImGui 活动项拥有优先级，手势读取仅决定是否允许播放切换穿过该限制。
+        std::optional<Common::EditorGestureState> gestures;
+        const bool                                shiftPressed =
+            Interaction::modifier(Interaction::Modifier::Shift);
+        if ( !playbackShortcutPressed && shiftPressed &&
+             !playbackBinding.shift ) {
             auto shiftedBinding  = playbackBinding;
             shiftedBinding.shift = true;
-            playbackShortcutPressed =
-                ShortcutUtils::isShortcutPressed(shiftedBinding);
+            if ( ShortcutUtils::isShortcutPressed(shiftedBinding) ) {
+                gestures                = service->activeGestureState();
+                playbackShortcutPressed = gestures->m_drawingBrush;
+            }
         }
         // 未命中时不消费输入，允许其他菜单动作继续判断。
         if ( !playbackShortcutPressed ) {
@@ -218,13 +226,15 @@ public:
             const bool timelineTimingDragging =
                 context.sourceManager &&
                 context.sourceManager->isTimelineTimingDragging();
+            // 已为 Shift 画笔读取过则复用，避免同一次判定混用两代手势。
+            if ( !gestures ) gestures = service->activeGestureState();
             const bool allowPlaybackToggle =
                 // 策略函数明确列出允许播放切换的连续编辑手势。
                 shouldAllowPlaybackToggleWhileItemActive(
-                    Interaction::modifier(Interaction::Modifier::Shift),
-                    service->isSelectingMarquee(),
-                    service->isDraggingNote(),
-                    service->isDrawingBrush(),
+                    shiftPressed,
+                    gestures->m_selectingMarquee,
+                    gestures->m_draggingNote,
+                    gestures->m_drawingBrush,
                     timelineTimingDragging,
                     timelineMarqueeSelecting,
                     // 只扩展画笔分支；框选、Timing 与文本输入仍使用原有规则。

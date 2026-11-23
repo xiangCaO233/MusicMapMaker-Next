@@ -1,4 +1,5 @@
 // 配色回归用例按值构造编辑配置，显式包含对应定义以固定测试输入。
+#include "common/EditorGestureState.h"
 #include "config/EditorSettings.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
@@ -792,6 +793,87 @@ bool testLatestCanvasFocusRequest()
     return true;
 }
 
+/// @brief 验证活动手势读取独立于会话长锁，关闭及切换时不会继承错误状态。
+/// @details 在逻辑线程停止时设置夹具手势，使用正式活动会话切换路径发布状态。
+/// 另一条线程模拟快捷键侧，在注册表锁不可用时也必须完成读取。
+/// @return 发布内容、快速读取和活动身份切换都正确时返回 true。
+/// 直接设置夹具输入使锁竞争顺序可重复，真实快捷键的按键语义由 UI 套件验证。
+/// 该用例不构造渲染快照，避免一帧延迟或缓存更新偶然掩盖会话锁依赖。
+bool testPublishedActiveGestureState()
+{
+    using namespace MMM;
+    auto&      engine       = Logic::EditorEngine::instance();
+    const auto originalTool = engine.getCurrentTool();
+    // 正式会话切换恢复全局工具，因此夹具通过同一命令设置该值。
+    engine.pushCommand(Logic::CmdChangeTool{ Logic::EditTool::Draw });
+    const auto first  = engine.createSession(nullptr, "Gesture source", false);
+    const auto second = engine.createSession(nullptr, "Gesture target", false);
+    auto&      firstContext =
+        engine.getSessionEntry(first)->session->getContextMutable();
+    // 无真实音频或 GPU，本用例仅模拟已发生的画布手势。
+    // 活动画布必须带着一个非零状态完成跨线程读取；只检查空值会漏掉恒零错误。
+    firstContext.currentTool         = Logic::EditTool::Draw;
+    firstContext.brushState.isActive = true;
+    engine.setActiveSessionIndex(first);
+
+    // 异步读取必须在锁释放以前完成；故障路径也释放锁再回收任务。
+    std::unique_lock sessionLock(engine.getSessionMutex());
+    auto             reader = std::async(std::launch::async,
+                             [&] { return engine.activeGestureState(); });
+    const bool       ready =
+        reader.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+    sessionLock.unlock();
+    // 结果使用普通值，测试不在两个线程间分享 SessionContext 中的引用。
+    const auto brush = reader.get();
+
+    auto& secondContext =
+        engine.getSessionEntry(second)->session->getContextMutable();
+    // 第二个目标的旧工具与全局配置故意不同，确保发布在切换完成之后。
+    engine.pushCommand(Logic::CmdChangeTool{ Logic::EditTool::Marquee });
+    secondContext.currentTool = Logic::EditTool::Draw;
+    secondContext.isSelecting = true;
+    secondContext.isDragging  = true;
+    // 没有实体的拖动不成立。一次读应同时保留选区并排除上一画笔。
+    engine.setActiveSessionIndex(second);
+    const auto marquee = engine.activeGestureState();
+    // 新建真实实体后再次发布同一画布，单独区分有命中与空白拖动。
+    // 在独占测试线程分配实体，跳过真正拖拽所需的输入设备。
+    secondContext.draggedEntity = secondContext.noteRegistry.create();
+    engine.setActiveSessionIndex(second);
+    // 两个 Marquee 位可以同代出现，不能用互斥枚举覆盖其中一个。
+    const auto drag = engine.activeGestureState();
+    // 删除活动槽时可能回到第一个会话，必须依照真实目标重新取样。
+    engine.closeSession(second, false);
+    // 回退到原画布时，该会话的手势恢复；只清零也不能通过该断言。
+    const auto restored = engine.activeGestureState();
+    engine.closeSession(first, false);
+    // 最后一个槽关闭之后，发布值必须完全脱离此前的注册表条目。
+    const auto empty = engine.activeGestureState();
+    engine.pushCommand(Logic::CmdChangeTool{ originalTool });
+    // 每组分别验证读取是否进展、工具切换是否及时及销毁时的失效规则。
+    // 对只剩最后一个会话的清理也有断言，防止后续用例误读已销毁状态。
+    // 发布位在渲染开始前已经可读，因此本回归无需推进 ImGui 或渲染快照。
+    // 取样值跨越会话关闭保持独立，断言不借用已经释放的谱面对象。
+    const bool lockBypassed = ready && brush.m_drawingBrush &&
+                              !brush.m_selectingMarquee &&
+                              !brush.m_draggingNote;
+    const bool switchPublished =
+        marquee.m_selectingMarquee && !marquee.m_draggingNote &&
+        !marquee.m_drawingBrush && drag.m_selectingMarquee &&
+        drag.m_draggingNote && !drag.m_drawingBrush;
+    const bool closePublished =
+        restored.m_drawingBrush && !empty.m_drawingBrush &&
+        !empty.m_selectingMarquee && !empty.m_draggingNote;
+    // 逐个报告阶段，避免多重断言合并后找不到发布边界。
+    if ( !lockBypassed || !switchPublished || !closePublished ) {
+        XERROR("gesture state regression: lock={}, switch={}, close={}",
+               lockBypassed,
+               switchPublished,
+               closePublished);
+    }
+    return lockBypassed && switchPublished && closePublished;
+}
+
 }  // namespace
 
 /// @brief 运行画笔调色盘跨会话恢复测试。
@@ -808,6 +890,7 @@ int main()
                    testAudioResourceRestoredAfterSessionClose() &&
                    testBackgroundCanvasMousePositionRouting() &&
                    testLatestCanvasFocusRequest() &&
+                   testPublishedActiveGestureState() &&
                    testCameraConfigSnapshot() &&
                    testConcurrentEditorConfigSnapshots()
                ? 0
