@@ -210,7 +210,7 @@
 
 - [x] **ICE-01 · P1 · 重新准备同采样率、不同声道数时同步压缩器状态。** `3rdpty/sources/IonCachyEngine/src/ice/core/effect/IEffectNode.cpp:19` 的 prepare 更新输入缓冲；`Compresser.cpp:33、47、70` 仅在脏标记或采样率改变时调整 envelope_db，却按新输出声道逐个索引。增加声道时可超过旧状态范围。把声道状态尺寸纳入控制侧准备契约。验收覆盖重新 prepare、增减声道、相同块长和保留旧声道状态的约定。独立 ICE 源码全量构建及 IonTimeStretcherRealtimeTest 已通过，新增基类接口声道切换、保留已有声道包络及回调零分配回归。
 - [x] **ICE-02 · P2 · 消除压缩器逐样本读取共享参数。** 同文件第 43、92 行计算了补偿倍率缓存，样本循环仍反复读取原子 dB 值。头文件 `Compresser.hpp:22–47、96` 的 setter 又写普通布尔脏位。先确定是否允许播放中调参；若允许，在块边界取得一致参数，控制侧完成可预计算的部分。若要求停机修改，收紧 API 并检查调用方。验收固定参数 PCM、切参边界、回调内分配次数和耗时，不将原子读取一律改成裸读。 独立 ICE 源码构建与 IonTimeStretcherRealtimeTest 通过。setter 仅在接入音频图前或停止后调用；演示程序与测试调用符合此约束。处理块读取一次补偿并复用压缩系数。新增双声道停机调参用例，逐样本验证 6 dB 补偿及回调零分配。Compresser.hpp 注释/代码为 31/46 行（40.26%），Compresser.cpp 为 26/59 行（30.59%），TimeStretcherRealtimeTest.cpp 为 566/1319 行（30.03%）。
-- [ ] **ICE-03 · P2 · 让 PitchAlter 遵守准备容量。** `3rdpty/sources/IonCachyEngine/src/ice/core/effect/PitchAlter.cpp:46` 的 process 每块调用 resize，绕过 `IEffectNode.cpp:47` 的预备容量检查。核对支持的最大块长和格式切换协议，稳定路径只切有效长度；分别测同尺寸、短块、超限块和重新准备后的分配计数。调用 resize 不等于每块均发生分配。
+- [x] **ICE-03 · P2 · 让 PitchAlter 遵守准备容量。** `3rdpty/sources/IonCachyEngine/src/ice/core/effect/PitchAlter.cpp:46` 的 process 每块调用 resize，绕过 `IEffectNode.cpp:47` 的预备容量检查。核对支持的最大块长和格式切换协议，稳定路径只切有效长度；分别测同尺寸、短块、超限块和重新准备后的分配计数。调用 resize 不等于每块均发生分配。 已复用基类容量检查和活动帧数，变调后端按固定倍率在控制侧构造并预热；倍率只可停机修改。独立 ICE 源码全量构建和 IonTimeStretcherRealtimeTest 通过，覆盖满块、短块、超限、格式重配、首次变调、断开上游及回调零堆操作。主仓使用既有预编译依赖全量构建，PlaybackRestartTest、CanvasTouchNavigationTest 和 AudioManagerTimelineIntegrationTest 通过。PitchAlter.hpp 注释／代码为 23/29 行、PitchAlter.cpp 为 38/84 行、TimeStretcherRealtimeTest.cpp 为 603/1405 行，均达到 30%。
 
 ## 编辑器、临时实现与标准库
 
