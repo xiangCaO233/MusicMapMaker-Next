@@ -51,6 +51,8 @@ struct PreparedAudioTimeline;
 namespace MMM::Logic
 {
 
+struct ActiveAnnotationTableRead;
+
 class BeatmapSession;
 struct ClipboardItem;
 struct SampleClipboardItem;
@@ -681,6 +683,9 @@ private:
 
     /// @brief 判断打开新项目前是否需要先关闭当前谱面画布。
     bool needsCanvasCloseBeforeProjectOpen() const;
+
+    /// @brief 仅允许批注表窄接口访问已发布的注册表快照。
+    friend std::optional<ActiveAnnotationTableRead> readActiveAnnotationTable();
 
     /// @brief 隔离注册表、配置缓存和线程生命周期的稳定私有状态。
     struct Impl;

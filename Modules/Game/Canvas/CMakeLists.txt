@@ -516,6 +516,9 @@ if(NOT ANDROID)
 endif()
 mmm_register_test_case(NAME MobileAnnotationTableTest COMMAND
                        MobileAnnotationTableTest)
+# 播放权限回归使用真实回调，静音调度及虚拟输出无需系统设备或音频文件。 只对此用例设置驱动，其他使用同一套件入口的测试维持原运行环境。
+set_tests_properties(MobileAnnotationTableTest
+                     PROPERTIES ENVIRONMENT "SDL_AUDIODRIVER=dummy")
 
 # 本批测试入口只读取源码语言文件，不在测试资源目录生成文件。 移动平台工厂与桌面平台工厂互斥，避免改变宿主生产布局。
 # 属性草稿、选择和正式命令分别验证，构建通过不替代设备验收。 CPU 测试无图形及音频设备，设备证据继续集中存入外置工作树。

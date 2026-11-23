@@ -381,6 +381,8 @@ void SessionRegistry::publishSnapshotUnsafe()
     // 分离快照也防止 UI 持有标签元数据时阻止旧谱面会话释放。
     auto snapshot   = std::make_shared<PublishedSessionSnapshot>();
     auto uiSnapshot = std::make_shared<PublishedSessionUiSnapshot>();
+    // 消费者必须在同一代列表中解析活动项，避免删除时用新索引匹配旧条目。
+    snapshot->activeIndex = activeIndex();
     snapshot->sessions.reserve(m_entries.size());
     uiSnapshot->entries.reserve(m_entries.size());
     for ( int32_t index = 0; index < static_cast<int32_t>(m_entries.size());
