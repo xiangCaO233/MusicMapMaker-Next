@@ -124,7 +124,9 @@ mmm_add_test_executable(MMM MalodyEdgeCaseTest tests/MalodyEdgeCaseTest.cpp)
 target_link_libraries(MalodyEdgeCaseTest PRIVATE MMM Log)
 target_include_directories(MalodyEdgeCaseTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-mmm_register_test_case(NAME Test_Malody_Edge_Case COMMAND MalodyEdgeCaseTest)
+# 预算夹具写入构建目录，大小超限测试不会修改源树谱面。
+mmm_register_test_case(NAME Test_Malody_Edge_Case COMMAND MalodyEdgeCaseTest
+                       "${TEST_OUTPUT_DIR}/malody_import_budget.mc")
 
 # 密集函数 SV 的采样副本必须保留折线引用，不能把子长条和滑键重复写为顶层物件。 程序化 MMM 夹具只写构建目录，同时覆盖原生重开、文档输出与 MC
 # 文件往返。

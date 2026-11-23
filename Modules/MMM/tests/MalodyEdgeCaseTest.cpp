@@ -4087,6 +4087,77 @@ void testMalodyTimelineUsesFixedHighPrecisionFractions()
     XINFO("PASS: Malody timeline preserves fixed 1920 precision fractions");
 }
 
+/// @brief 用正式载入入口验证 Malody 文本大小和结构预算。
+/// @param path 测试构建目录中的源文件，同一测试顺序重用。
+/// @details
+/// 预算值是对外导入约束，在测试中单独固定，避免生产常量变动导致断言漂移。
+/// 拒绝通过默认谱面与源路径为空来确认，日志仅用于区分触发的预算。
+void testMalodyImportBudgets(const std::filesystem::path& path)
+{
+    /// @brief 生成带 Malody 扩展字段的嵌套谱面夹具。
+    auto writeNestedChart = [&path](std::size_t arrayCount) {
+        std::ofstream chart(path, std::ios::binary | std::ios::trunc);
+        // 两组深度夹具有相同的字段和叶值，只改变嵌套层数。
+        // 将 BOM、注释和 extra
+        // 保留在临界输入中，让两次解析都经过旧格式兼容分支。
+        chart
+            << "\xef\xbb\xbf"
+            << R"({ /* 旧版谱面可含注释 */ "meta":{"version":"budget"}, "extra":)"
+            << std::string(arrayCount, '[') << "null"
+            << std::string(arrayCount, ']') << '}';
+        // 检查关闭阶段的写入失败，避免把坏夹具的拒绝误计为预算命中。
+        chart.close();
+        return static_cast<bool>(chart);
+    };
+
+    // 根对象占用一层，允许恰好 64 层且保留顶层扩展字段。
+    TEST_ASSERT(writeNestedChart(63), "write Malody depth boundary");
+    const auto accepted = MMM::BeatMap::loadFromFile(path);
+    // 深度允许通过还不够，额外字段必须保留完整数组层数和叶值供后续导出。
+    const auto& properties = accepted.m_metadata.map_properties;
+    const auto  malody     = properties.find(MMM::MapMetadataType::MALODY);
+    TEST_ASSERT(malody != properties.end() &&
+                    accepted.m_baseMapMetadata.version == "budget",
+                "Malody should load metadata at the exact depth limit");
+    const auto extra = malody->second.find("extra");
+    TEST_ASSERT(extra != malody->second.end() &&
+                    extra->second ==
+                        std::string(63, '[') + "null" + std::string(63, ']'),
+                "Malody should preserve the complete extension data");
+
+    // 只增加一个容器，文件字节和节点总量仍远低于其他预算。
+    TEST_ASSERT(writeNestedChart(64), "write Malody input beyond depth budget");
+    TEST_ASSERT(
+        MMM::BeatMap::loadFromFile(path).m_baseMapMetadata.map_path.empty(),
+        "Malody must reject input beyond the depth limit");
+
+    {
+        // 空容器也占预算，避免只统计标量而漏掉宽数组。
+        // 所有子数组保持同一深度，测试不依赖先撞到层数上限。
+        std::ofstream chart(path, std::ios::binary | std::ios::trunc);
+        chart << R"({"extra":[[])";
+        for ( std::size_t i = 0; i < 2'000'000; ++i ) chart << ",[]";
+        chart << "]}";
+        chart.close();
+        TEST_ASSERT(chart, "write Malody input beyond structure budget");
+    }
+    TEST_ASSERT(
+        MMM::BeatMap::loadFromFile(path).m_baseMapMetadata.map_path.empty(),
+        "Malody must reject excess empty containers");
+
+    // 将合法前缀扩展到字节上限之外，拒绝依据整个文件的字节长度。
+    TEST_ASSERT(writeNestedChart(1), "write Malody prefix for file size test");
+    std::error_code error;
+    // 让文件系统扩展尾部，测试代码无需写入或保留同等大小的内存缓冲。
+    std::filesystem::resize_file(path, 64 * 1024 * 1024 + 1, error);
+    TEST_ASSERT(!error, "extend Malody fixture beyond the file size budget");
+    TEST_ASSERT(
+        MMM::BeatMap::loadFromFile(path).m_baseMapMetadata.map_path.empty(),
+        "Malody must reject files beyond the byte limit");
+    // 校验完成后回收放大过的文件，避免每个构建目录保留一份大夹具。
+    std::filesystem::remove(path, error);
+}
+
 /**
  * @brief 依次执行全部 Malody 边界场景并汇总失败数量。
  *
@@ -4094,12 +4165,14 @@ void testMalodyTimelineUsesFixedHighPrecisionFractions()
  * 局部物件字段逐渐扩展到时间轴相位，再以缺字段、内部键和精度场景收尾，
  * 日志可以保留一次运行中的多个独立失败。
  *
- * main 不接收资源路径；所有夹具均由场景写入系统临时目录。最终退出码是
+ * @param argc 参数数量。
+ * @param argv CTest 传入构建目录下的预算夹具路径，手工执行可省略。
+ * 既有场景使用系统临时目录。最终退出码是
  * 自动化判断的权威结果，个别预期拒绝产生的 error 日志不代表测试失败。
  *
  * @return g_failed 为零时返回 0，否则返回 1。
  */
-int main()
+int main(int argc, char** argv)
 {
     // 统一标题便于从完整构建日志中定位本测试的开始位置。
     XINFO("========================================");
@@ -4145,6 +4218,8 @@ int main()
     test_hold_stay_at_head_creates_valid_seg();
     testPolylineSubnoteSampleBindingRejected();
     testMalodyTimelineUsesFixedHighPrecisionFractions();
+    // 预算测试独占 CTest 分配的夹具路径，不占用现有临时谱面文件名。
+    if ( argc == 2 ) testMalodyImportBudgets(argv[1]);
 
     XINFO("========================================");
     // 只以累计断言结果决定进程状态，保持与 CTest 的退出码约定一致。
