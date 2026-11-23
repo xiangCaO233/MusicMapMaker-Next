@@ -1,6 +1,7 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 
 #include "MetadataEditorWindowRenderers.h"
+#include "MetadataJsonDocument.h"
 #include "common/LogicCommands.h"
 #include "common/render/RenderSnapshot.h"
 #include "config/AppConfig.h"
@@ -79,9 +80,9 @@ struct MetadataJsonEditorState {
     /// @brief 展示给用户看的完整路径。
     /// @note 由 scopeId 和 key 组合，仅用于弹窗标题区域。
     std::string displayPath;
-    /// @brief 原生 JSON 编辑缓冲区。
-    /// @note 随输入扩容，格式化结果和外部导入字段使用同一个完整文本。
-    std::string jsonBuffer;
+    /// @brief 原生 JSON 文本及解析缓存，所有编辑入口通过它提交变更。
+    /// @note 空闲帧只读缓存；写回谱面仍等待显式确认。
+    MetadataJsonDocument m_document;
     /// @brief 子字段键名输入缓冲区。
     /// @note 成功添加字段后清空，便于连续录入。
     std::array<char, 128> childKeyBuffer{};
@@ -259,26 +260,6 @@ void renderCollaborationOfflineReadOnlyNotice(Logic::BeatmapSession& session)
         session.pushCommand(
             Logic::LogicCommand(Logic::CmdMarkBeatmapMetadataDirty{}));
     }
-}
-
-/// @brief 解析 JSON 文本，不使用 C++ 异常。
-/// @param text NUL 终止的 JSON 文本。
-/// @return 合法 JSON 值；失败时返回 discarded 值。
-/// @note allow_exceptions=false 保持项目禁异常约束。
-nlohmann::json parseJsonNoThrow(const char* text)
-{
-    // 回调为空表示使用默认解析器，错误通过返回值表达。
-    return nlohmann::json::parse(text, nullptr, false);
-}
-
-/// @brief 将 JSON 规整为缩进文本。
-/// @param value 已解析 JSON 值。
-/// @return 使用四空格缩进的稳定文本表示。
-/// @note 只在用户交互或弹窗打开路径调用，不位于渲染主循环常态分支。
-/// @warning 输出会分配与 JSON 文本大小成比例的字符串。
-std::string dumpPrettyJson(const nlohmann::json& value)
-{
-    return value.dump(4);
 }
 
 /// @brief 将子字段输入解析为 JSON 值，非法 JSON 时按字符串保存。
@@ -1134,6 +1115,24 @@ std::string buildMetadataJsonWarnings(const std::string&    key,
     return result;
 }
 
+/// @brief 在文档变更后更新语法错误和结构警告。
+/// @param state 仍由弹窗独占且 DOM 已同步的编辑状态。
+/// @warning 只在打开或编辑发生时调用；空闲帧复用既有诊断。
+void refreshMetadataJsonValidation(MetadataJsonEditorState& state)
+{
+    // 字段名仅在打开时变化，结构诊断只依赖这个字段名与最新解析值。
+    const auto& value = state.m_document.value();
+    if ( value.is_discarded() ) {
+        // 错误文本可以原样修改；非法值既没有结构诊断也不能提交。
+        state.errorText = "当前内容不是合法 JSON。";
+        state.warningText.clear();
+    } else {
+        state.errorText.clear();
+        // 成功恢复语法后复用已有字段规则，避免将诊断状态与编辑缓冲分离。
+        state.warningText = buildMetadataJsonWarnings(state.key, value);
+    }
+}
+
 /// @brief 打开某个元数据字段的 JSON 编辑器。
 /// @param scopeId 调用页面稳定作用域标识。
 /// @param key 待编辑字段名。
@@ -1163,15 +1162,11 @@ void openMetadataJsonEditor(const std::string& scopeId, const std::string& key,
 
     // 空字段默认以对象开始，便于直接添加子字段。
     // 格式化可能产生比原始输入更长的结果，必须与未格式化文本一样允许增长。
-    std::string    initialValue = value.empty() ? "{}" : value;
-    nlohmann::json parsed       = parseJsonNoThrow(initialValue.c_str());
-    if ( parsed.is_discarded() ) {
-        // 保留非法原文，用户可以在弹窗中看到并修正。
-        state.jsonBuffer = initialValue;
-    } else {
-        // 合法值统一四空格缩进，提高嵌套结构可读性。
-        state.jsonBuffer = dumpPrettyJson(parsed);
-    }
+    // 新字段不能继承上一弹窗的解析结果；先载入后格式化，以便保留非法原文。
+    state.m_document.replaceText(value.empty() ? "{}" : value);
+    // 合法值格式化，非法输入则保留原文供用户修复。
+    state.m_document.format();
+    refreshMetadataJsonValidation(state);
 }
 
 /// @brief 绘制用于打开 JSON 编辑器的字段操作按钮。
@@ -1259,17 +1254,17 @@ std::optional<MetadataJsonEditResult> takeMetadataJsonEditResult(
 
 /// @brief 渲染元数据字段 JSON 编辑弹窗。
 /// @param dpiScale 当前窗口内容缩放。
-/// @warning UI 每帧绘制路径：仅弹窗打开时解析当前缓冲区并绘制 JSON 辅助工具。
+/// @warning UI 每帧绘制路径：只在原始文本变化时解析，否则借用已缓存的 DOM。
 /// @note 语法错误阻止完成；结构警告允许用户确认并保留自定义内容。
 /// @details 原始文本区支持任意 JSON 类型；对象值额外显示子字段表，并支持
 /// 删除、添加和覆盖成员。所有结构操作都会重新生成格式化主缓冲。
-/// @details 弹窗每帧无异常解析当前缓冲以提供即时错误。完成时再次解析并把
-/// 格式化文本连同作用域路由信息保存为一次性结果。
+/// @details 文本控件确认变化后立即同步缓存，后面的按钮消费同一次编辑的值。
+/// 完成时把已验证的格式化文本连同作用域路由信息保存为一次性结果。
 /// @details 重建为空对象只修改尚未提交的缓冲；取消或标题栏关闭不会向属性表
 /// 产生任何结果，因此调用方数据保持不变。
 void renderMetadataJsonEditorPopup(float dpiScale)
 {
-    // 全局状态保存目标字段、固定缓冲和待消费结果。
+    // 弹窗独占编辑文档，调用方只消费带作用域的确认结果。
     auto& state = metadataJsonEditorState();
     if ( state.requestOpen ) {
         // 一次性请求转换为 ImGui 弹窗栈状态。
@@ -1296,21 +1291,6 @@ void renderMetadataJsonEditorPopup(float dpiScale)
                            "可直接编辑合法 JSON，也可以向对象字段添加子字段。");
         ImGui::Separator();
 
-        // 每帧解析当前文本，以即时更新错误和结构警告。
-        nlohmann::json parsed = parseJsonNoThrow(state.jsonBuffer.data());
-        if ( parsed.is_discarded() ) {
-            state.warningText.clear();
-            // 非法 JSON 没有可分析结构，先清除旧警告。
-            if ( state.errorText.empty() ) {
-                // 保留更具体的按钮操作错误，否则使用通用语法提示。
-                state.errorText = "当前内容不是合法 JSON。";
-            }
-        } else {
-            // 合法文本清除语法错误，并按字段名刷新结构提示。
-            state.errorText.clear();
-            state.warningText = buildMetadataJsonWarnings(state.key, parsed);
-        }
-
         if ( !state.errorText.empty() ) {
             ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
                                "%s",
@@ -1325,19 +1305,22 @@ void renderMetadataJsonEditorPopup(float dpiScale)
 
         ImGui::SetNextItemWidth(-1.0f);
         // 允许 Tab 输入方便手工维护嵌套 JSON 缩进。
-        dynamicInputTextMultiline("##MetadataJsonRawEditor",
-                                  state.jsonBuffer,
-                                  ImVec2(0.0f, 220.0f * dpiScale),
-                                  ImGuiInputTextFlags_AllowTabInput);
+        if ( dynamicInputTextMultiline("##MetadataJsonRawEditor",
+                                       state.m_document.text(),
+                                       ImVec2(0.0f, 220.0f * dpiScale),
+                                       ImGuiInputTextFlags_AllowTabInput) ) {
+            // 文本编辑与后续完成按钮可能发生在同一帧，须先同步校验。
+            state.m_document.acceptTextEdit();
+            refreshMetadataJsonValidation(state);
+        }
 
         if ( ::MMM::UI::FeedbackButton("格式化##FormatMetadataJson") ) {
-            // 点击时重新解析，避免依赖本帧早先可能已过时的 parsed。
-            parsed = parseJsonNoThrow(state.jsonBuffer.data());
-            if ( parsed.is_discarded() ) {
+            if ( state.m_document.value().is_discarded() ) {
                 state.errorText = "无法格式化：当前内容不是合法 JSON。";
             } else {
-                // 格式化只改变表示，不改变 JSON 值语义。
-                state.jsonBuffer = dumpPrettyJson(parsed);
+                // 格式化只改变表示，复用当前有效值及其结构警告。
+                // 更新文本不需要再次执行语法或结构检查，因为原始 JSON 值未变。
+                state.m_document.format();
                 state.errorText.clear();
             }
         }
@@ -1345,15 +1328,15 @@ void renderMetadataJsonEditorPopup(float dpiScale)
         if ( ::MMM::UI::FeedbackButton(
                  "重建为空对象##ResetMetadataJsonObject") ) {
             // 显式重建为对象会丢弃当前文本，但仍需用户点击完成才写回。
-            state.jsonBuffer = "{}";
-            state.errorText.clear();
+            state.m_document.resetObject();
+            refreshMetadataJsonValidation(state);
         }
 
         ImGui::Separator();
         // 子字段区域只对 JSON 对象提供枚举、删除和添加操作。
         ImGui::TextUnformatted("子字段");
-        // 原始编辑器可能刚修改缓冲，因此在进入子字段区域前重新解析。
-        parsed = parseJsonNoThrow(state.jsonBuffer.data());
+        // 结构操作可能已在同帧重建文档，表格直接读取同步后的 DOM。
+        const auto& parsed = state.m_document.value();
         if ( parsed.is_object() ) {
             // 三列表格分别展示键、序列化值和删除操作。
             if ( ImGui::BeginTable("MetadataJsonChildrenTable",
@@ -1392,8 +1375,9 @@ void renderMetadataJsonEditorPopup(float dpiScale)
                              fmt::format("删除##JsonChildDel_{}", childKey)
                                  .c_str()) ) {
                         // 删除后立即把新对象规整写回原始编辑缓冲。
-                        parsed.erase(childKey);
-                        state.jsonBuffer = dumpPrettyJson(parsed);
+                        // 当前表格按键快照遍历，可以在点击后替换缓存而不借用被删值。
+                        state.m_document.eraseField(childKey);
+                        refreshMetadataJsonValidation(state);
                         // 一帧只处理一次结构变更，避免继续使用旧键列表。
                         break;
                     }
@@ -1428,15 +1412,12 @@ void renderMetadataJsonEditorPopup(float dpiScale)
                 // 空键不能提供可辨识字段，保留当前输入等待修正。
                 state.errorText = "子字段键名不能为空。";
             } else {
-                // 当前值不是对象时从空对象开始，操作语义与按钮名称一致。
-                parsed = parseJsonNoThrow(state.jsonBuffer.data());
-                if ( parsed.is_discarded() || !parsed.is_object() ) {
-                    parsed = nlohmann::json::object();
-                }
                 // 值优先保留 JSON 类型，普通文本自动转换为字符串。
-                parsed[childKey] =
-                    parseChildValueOrString(state.childValueBuffer.data());
-                state.jsonBuffer = dumpPrettyJson(parsed);
+                // 此按钮明确改变文档结构，保留非法原文的兜底规则只用于纯文本编辑。
+                state.m_document.setField(
+                    childKey,
+                    parseChildValueOrString(state.childValueBuffer.data()));
+                refreshMetadataJsonValidation(state);
                 // 成功后清空两项子字段输入，支持连续添加。
                 state.childKeyBuffer.fill('\0');
                 state.childValueBuffer.fill('\0');
@@ -1447,15 +1428,12 @@ void renderMetadataJsonEditorPopup(float dpiScale)
         ImGui::Separator();
         // 完成与取消是唯一关闭并结束当前编辑会话的按钮。
         if ( ::MMM::UI::FeedbackButton("完成##ApplyMetadataJson") ) {
-            // 最终提交前再次解析，确保最后一次文本输入已经纳入校验。
-            parsed = parseJsonNoThrow(state.jsonBuffer.data());
+            // 所有编辑入口已同步文档，最后一次输入也在本帧提交前纳入校验。
             if ( parsed.is_discarded() ) {
                 state.errorText = "无法完成：当前内容不是合法 JSON。";
             } else {
-                // 结构警告保留用于最终展示，但不阻止合法 JSON 写回。
-                state.warningText =
-                    buildMetadataJsonWarnings(state.key, parsed);
                 // 结果携带打开时的作用域和键，调用方下一帧按范围消费。
+                // 结果拥有独立文本与路由信息，弹窗回收缓存后调用方仍可安全消费。
                 state.result = MetadataJsonEditResult{ state.scopeId,
                                                        state.key,
                                                        dumpPrettyJson(parsed) };
@@ -1477,6 +1455,10 @@ void renderMetadataJsonEditorPopup(float dpiScale)
     if ( !popupOpen ) {
         // 标题栏关闭和取消按钮统一落到 open=false。
         state.open = false;
+    }
+    if ( !state.open ) {
+        // 确认结果已独立保存。关闭后释放缓存 DOM，避免大字段常驻到下次打开。
+        state.m_document = MetadataJsonDocument{};
     }
 }
 }  // namespace

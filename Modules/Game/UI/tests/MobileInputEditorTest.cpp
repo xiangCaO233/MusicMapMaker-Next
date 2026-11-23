@@ -6,6 +6,7 @@
  * 源字段、Changed 次数与弹窗边界共同判断结果，截图或成功打开不算提交成功。
  */
 #include "ui/workspace/MobileInputEditor.h"
+#include "../src/ui/imgui/menu/actions/edit/MetadataJsonDocument.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
 #include "config/skin/translation/Translation.h"
@@ -486,6 +487,59 @@ void longMetadataTextInput()
               "metadata edit keeps bytes across old fixed limit");
     }
 }
+/// @brief 验证弹窗文本和缓存值同步同一轮的实际编辑与结构操作。
+/// @details 静止时读取同一 DOM，最后一次输入同步后即可检查并生成提交内容。
+/// @note 用例只观察文档值，不依赖 GUI 后端或帧率。
+/// 保留多字节字符串用于验证打开与规整过程中借用的是完整值。
+void metadataJsonDocumentReusesParsedValue()
+{
+    MMM::UI::MetadataJsonDocument document;
+    document.replaceText("{\"label\":\"谱面\",\"delay\":2}");
+    document.format();
+    // 从已解析对象取成员地址，可观察空闲阶段连续两个消费者的借用关系。
+    const auto* label = &document.value().at("label");
+    check(*label == "谱面", "metadata JSON keeps UTF-8 when formatting");
+
+    // 重复读取模拟静止的辅助表与提交读者。它们应复用内部成员而不是生成新 DOM。
+    for ( int frame = 0; frame < 4; ++frame ) {
+        check(&document.value().at("label") == label,
+              "idle metadata views borrow the cached value");
+    }
+
+    // 模拟输入控件回传非法文本，缓存不得继续保留旧合法值。
+    // 错误输入的原文必须留给用户修复，是否有效只能根据本次编辑决定。
+    document.text() = "{broken";
+    document.acceptTextEdit();
+    document.format();
+    check(document.value().is_discarded() && document.text() == "{broken",
+          "invalid edit blocks submission and preserves raw input");
+
+    // 重建、添加和删除直接更新同一缓存，序列化结果反映实际结构。
+    // 重建是显式用户操作，要同时清除错误 DOM 与此前的未提交文本。
+    document.resetObject();
+    document.setField("label", "新增");
+    document.setField("delay", 12);
+    // 删除一个成员后确认另一字段未丢失，区分增量修改与无条件重置。
+    document.eraseField("label");
+    check(document.value().at("delay") == 12 &&
+              !document.value().contains("label") &&
+              document.text() == MMM::UI::dumpPrettyJson(document.value()),
+          "structured metadata edits synchronize value and text");
+
+    // 最后一次文字编辑代替结构值，随后读取的内容可直接作为确认结果。
+    // 编辑器接受非对象根，提交路径不能依赖子字段表认为值必为对象。
+    document.text() = "[1,2]";
+    document.acceptTextEdit();
+    check(document.value().is_array() && document.value().size() == 2U,
+          "metadata submission sees the final text edit");
+    // 在数组上明确添加字段保持旧弹窗契约，替换为包含该字段的对象。
+    // 仅结构操作转换根类型，普通输入或格式化会保留原始 JSON 类型。
+    document.setField("enabled", true);
+    check(
+        document.value().is_object() && document.value().at("enabled") == true,
+        "adding a field to a non-object starts a new object");
+}
+
 }  // namespace
 /// @brief 场景各自拥有 UI 上下文，不以新建对象掩盖同一场景内的取消行为。
 /// @details 每个失败累计到退出码，不能依赖日志级别或测试运行顺序。
@@ -499,5 +553,6 @@ int main()
     longFormFooter();
     longFormFooter(2.7625f);
     longMetadataTextInput();
+    metadataJsonDocumentReusesParsedValue();
     return failures ? 1 : 0;
 }
