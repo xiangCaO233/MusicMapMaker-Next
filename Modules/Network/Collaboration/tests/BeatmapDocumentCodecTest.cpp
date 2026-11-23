@@ -977,6 +977,73 @@ bool testInvalidPayloads()
            malformedResult.error() == BeatmapDocumentError::InvalidPayload;
 }
 
+/// @brief 验证发送端在 CBOR 字节上限处收发，并在拒绝超限后保留旧基线。
+/// @details 使用单个大标题控制字节数，避免把对象数量或压缩尺寸误作协议上限。
+/// 校准快照和临界快照使用同一个空白谱面，仅改变标题大小。
+/// 这样即使新增协议字段，临界用例也会根据当前线格式计算准确的剩余空间。
+/// 上限为解压后的大小，重复文本可把网络数据控制在正常测试规模。
+/// 用独立接收端应用临界快照，同时覆盖头内大小字段和压缩数据的一致性。
+/// @return 临界快照、超限错误和拒绝后的基线均符合约定时返回真。
+bool testDocumentEncodingBudget()
+{
+    /// @brief 测试独立定义的协议预算，避免跟随实现改动而放宽断言。
+    constexpr std::uint32_t MAX_DOCUMENT_BYTES = 64U * 1024U * 1024U;
+    /// @brief 第一个使用四字节内容长度的标题，临界标题的长度字段大小不变。
+    constexpr std::size_t CALIBRATION_TITLE_BYTES = 64U * 1024U;
+    BeatMap               beatmap;
+    BeatmapDocumentCodec  encoder;
+    auto&                 title = beatmap.m_baseMapMetadata.title;
+
+    /// @brief 读取外层 8 到 11 字节中的未压缩长度，调用前确认头存在。
+    /// @param payload 已通过头部长度检查的原始协作负载。
+    const auto readRawSize = [](const auto& payload) {
+        std::uint32_t size = 0;
+        for ( std::uint32_t index = 0; index < 4U; ++index ) {
+            size |= static_cast<std::uint32_t>(payload[8U + index])
+                    << (8U * index);
+        }
+        return size;
+    };
+    // 标题和临界标题共用 CBOR 的四字节长度表示，差量只来自标题内容。
+    title.assign(CALIBRATION_TITLE_BYTES, 'x');
+    const auto calibration =
+        encoder.encode(beatmap, BeatmapMutationFlags::All, true);
+    if ( !calibration || calibration->size() < 12U ) return false;
+    const auto calibrationSize = readRawSize(*calibration);
+    // 除标题之外的字段形成固定开销，异常校准结果不得继续用于减法。
+    if ( calibrationSize < CALIBRATION_TITLE_BYTES ||
+         calibrationSize >= MAX_DOCUMENT_BYTES )
+        return false;
+    const auto limit =
+        MAX_DOCUMENT_BYTES - (calibrationSize - CALIBRATION_TITLE_BYTES);
+
+    title.resize(static_cast<std::size_t>(limit) + 1U, 'x');
+    // 压缩后的数据很小，仍必须按未压缩大小拒绝。
+    const auto tooLarge =
+        encoder.encode(beatmap, BeatmapMutationFlags::All, true);
+    if ( tooLarge || tooLarge.error() != BeatmapDocumentError::InvalidDocument )
+        return false;
+
+    // 截短后保留同样的字符，恢复标题值而无需重建整个谱面。
+    title.resize(CALIBRATION_TITLE_BYTES);
+    // 失败的快照不能推进发送基线，恢复旧内容后就没有元数据增量。
+    const auto unchanged =
+        encoder.encode(beatmap, BeatmapMutationFlags::Metadata, false);
+    if ( unchanged || unchanged.error() != BeatmapDocumentError::EmptyPayload )
+        return false;
+
+    title.resize(limit, 'x');
+    const auto exact = encoder.encode(beatmap, BeatmapMutationFlags::All, true);
+    // 最后验证上限本身仍可通过，并实际用接收端解压确认协议兼容。
+    // 压缩标志也是断言的一部分，避免误走到未压缩正文分支。
+    if ( !exact || exact->size() < 12U ||
+         readRawSize(*exact) != MAX_DOCUMENT_BYTES || ((*exact)[5] & 1U) == 0 )
+        return false;
+    BeatmapDocumentCodec receiver;
+    const auto           restored = receiver.apply(*exact);
+    return restored && restored->isSnapshot;
+}
+
 /// @brief 校验大谱面快照经过压缩后仍能在单条协作消息上限内往返。
 /// @details
 /// 基准谱面扩展为两万个结构相似但稳定 ID 唯一的 Note，用于验证完整快照压缩
@@ -1136,6 +1203,7 @@ bool testMemberHistoryDeltaConflict()
 /// - payload inspection 验证授权前只读分类。
 /// - member history delta 验证定向撤回与源值冲突保护。
 /// - invalid payloads 验证错误类型边界。
+/// - encoding budget 验证上限处的接受、超限拒绝和基线事务。
 /// - large snapshot compression 验证消息规模上限。
 /// @par 诊断约束
 /// 每个场景名称保持稳定，失败日志可直接映射到上述契约；入口不捕获异常，
@@ -1195,6 +1263,7 @@ int main()
                    check(testPayloadInspectionIsNonMutating(),
                          "payload inspection") &&
                    check(testInvalidPayloads(), "invalid payloads") &&
+                   check(testDocumentEncodingBudget(), "encoding budget") &&
                    check(testLargeSnapshotCompression(),
                          "large snapshot compression") &&
                    check(testMemberHistoryDeltaConflict(),
