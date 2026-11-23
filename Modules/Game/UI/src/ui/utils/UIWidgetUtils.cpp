@@ -15,7 +15,40 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <cstring>
 #include <optional>
+
+namespace MMM::UI
+{
+/// @brief 将多行输入框的编辑结果同步到 UI 持有的字符串。
+/// @warning UI 热路径：仅输入提交回调可调整容量。
+/// @param label 文本控件显示名和 ImGui ID。
+/// @param text 调用窗口跨帧拥有的可变 UTF-8 缓冲，指针仅供本次调用。
+/// @param size 多行区域的显示宽高；滚动范围由 ImGui 根据全文计算。
+/// @param flags 调用方选择的输入行为，扩容回调由包装器独占。
+/// @return 仅本帧文本确有编辑时返回 true。
+bool dynamicInputTextMultiline(const char* label, std::string& text,
+                               const ImVec2& size, ImGuiInputTextFlags flags)
+{
+    const bool changed = ImGui::InputTextMultiline(
+        label,
+        text.data(),
+        text.capacity() + 1,
+        size,
+        flags | ImGuiInputTextFlags_CallbackResize,
+        // 扩容时旧 data 地址可能失效，必须把新地址交还给 ImGui。
+        [](ImGuiInputTextCallbackData* data) {
+            auto& value = *static_cast<std::string*>(data->UserData);
+            value.resize(static_cast<std::size_t>(data->BufTextLen));
+            data->Buf = value.data();
+            return 0;
+        },
+        &text);
+    // 即使编辑落在现有容量内，提交端也应看到正确的逻辑长度。
+    if ( changed ) text.resize(std::strlen(text.c_str()));
+    return changed;
+}
+}  // namespace MMM::UI
 
 namespace MMM::UI::Utils
 {
@@ -152,7 +185,7 @@ float updateTooltipAnimationAmount(ImGuiID itemId, bool isHovered)
     // 负 DeltaTime 防御性钳制，速度由全局审美配置换算。
     const float step = std::max(0.0f, ImGui::GetIO().DeltaTime) *
                        getUiAnimationTransitionSpeed();
-    amount           = std::min(1.0f, amount + step);
+    amount = std::min(1.0f, amount + step);
 
     // 写回进度与帧号供下一帧连续推进。
     storage->SetFloat(amountKey, amount);
@@ -523,10 +556,10 @@ void prepareCenteredModalWindow(ImVec2                desiredSize,
     // 移动弹窗使用外壳扣除键盘与常驻工具栏后的区域，桌面保持既有中心。
     const bool   touchLayout = !workspaceAllowsHoverFeedback();
     const auto   area        = workspaceTextInputWindowArea();
-    const ImVec2 center = touchLayout
-                              ? ImVec2(area.m_origin.x + area.m_size.x * .5f,
+    const ImVec2 center      = touchLayout
+                                   ? ImVec2(area.m_origin.x + area.m_size.x * .5f,
                                        area.m_origin.y + area.m_size.y * .5f)
-                              : viewport->GetCenter();
+                                   : viewport->GetCenter();
     // 手动缩放由窗口边角修改位置及尺寸；只给首次出现的帧设置初值。
     const ImGuiCond condition =
         minimumResizeSize ? ImGuiCond_Appearing : ImGuiCond_Always;
@@ -1401,8 +1434,8 @@ float updateMenuPopupAmount(ImGuiID id, ImGuiStorage* storage, bool open)
         wasDrawnLastFrame ? storage->GetFloat(amountKey, 0.0f) : 0.0f;
     const float target = open ? 1.0f : 0.0f;
     const float step   = std::min(1.0f,
-                                  std::max(0.0f, ImGui::GetIO().DeltaTime) *
-                                      Utils::getUiAnimationTransitionSpeed());
+                                std::max(0.0f, ImGui::GetIO().DeltaTime) *
+                                    Utils::getUiAnimationTransitionSpeed());
 
     if ( amount < target ) {
         amount = std::min(target, amount + step);
@@ -1509,7 +1542,7 @@ void renderDockTabCloseHover(ImGuiWindow* window, ImGuiID closeButtonId)
     }
 
     const bool  centralTab = (tab->Flags & (ImGuiTabItemFlags_Leading |
-                                            ImGuiTabItemFlags_Trailing)) == 0;
+                                           ImGuiTabItemFlags_Trailing)) == 0;
     const float tabX =
         tabBar->BarRect.Min.x +
         (centralTab ? std::trunc(tab->Offset - tabBar->ScrollingAnim)

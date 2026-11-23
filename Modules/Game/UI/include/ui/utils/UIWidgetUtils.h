@@ -11,6 +11,13 @@ struct Clay_BoundingBox;
 namespace MMM::UI
 {
 
+/// @brief 绘制以完整字符串作为缓冲区的多行编辑框。
+/// @param flags 调用方的输入标志，扩容回调由此函数管理。
+/// @return 用户本帧修改文本时为 true。
+/// @warning UI 热路径：仅输入发生变化时同步文本长度或扩容。
+bool dynamicInputTextMultiline(const char* label, std::string& text,
+                               const ImVec2& size, ImGuiInputTextFlags flags);
+
 /// @brief 绘制带统一音效反馈和悬浮色过渡的 ImGui 按钮。
 /// @param label 按钮显示文本和 ImGui ID。
 /// @param size 按钮尺寸，语义与 ImGui::Button 保持一致。

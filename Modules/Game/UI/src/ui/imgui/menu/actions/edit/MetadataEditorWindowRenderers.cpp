@@ -34,6 +34,7 @@
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <unordered_map>
@@ -63,7 +64,6 @@ struct MetadataJsonEditResult {
 /// 校验反馈和待消费结果，调用方通过 scopeId 隔离不同页面。
 struct MetadataJsonEditorState {
     /// @warning 全部字段只允许 UI 线程读写，后台线程不得持有缓冲区指针。
-    /// @note 固定缓冲容量属于界面限制，不代表底层元数据格式上限。
     /// @brief 当前弹窗是否处于打开状态。
     /// @note 用户确认、取消或关闭窗口时复位。
     bool open = false;
@@ -80,8 +80,8 @@ struct MetadataJsonEditorState {
     /// @note 由 scopeId 和 key 组合，仅用于弹窗标题区域。
     std::string displayPath;
     /// @brief 原生 JSON 编辑缓冲区。
-    /// @note 固定 32KiB 上限避免每帧动态缓冲重建。
-    std::array<char, 32768> jsonBuffer{};
+    /// @note 随输入扩容，格式化结果和外部导入字段使用同一个完整文本。
+    std::string jsonBuffer;
     /// @brief 子字段键名输入缓冲区。
     /// @note 成功添加字段后清空，便于连续录入。
     std::array<char, 128> childKeyBuffer{};
@@ -120,8 +120,8 @@ struct OsuMetadataTextEditorState {
     /// @note 用于把业务请求转换为下一帧 ImGui OpenPopup 调用。
     bool requestOpen = false;
     /// @brief 纯文本编辑缓冲区。
-    /// @note 固定 64KiB 容量覆盖常见 OSU 头部和 Events 元数据。
-    std::array<char, 65536> textBuffer{};
+    /// @note 保留完整头部与 Events 内容，包括原固定缓冲之后的记录。
+    std::string textBuffer;
     /// @brief 最近一次解析错误。
     /// @note 包含行号和具体语法原因，成功解析后清空。
     std::string errorText;
@@ -259,24 +259,6 @@ void renderCollaborationOfflineReadOnlyNotice(Logic::BeatmapSession& session)
         session.pushCommand(
             Logic::LogicCommand(Logic::CmdMarkBeatmapMetadataDirty{}));
     }
-}
-
-/// @brief 将字符串安全复制进固定 ImGui 输入缓冲区。
-/// @tparam N 缓冲区容量，必须至少能容纳终止符。
-/// @param buffer 目标 NUL 终止字符数组。
-/// @param text 待复制 UTF-8 文本。
-/// @warning UI 每帧/交互路径：只做固定上限内存复制。
-/// @note 超长文本按字节截断，调用方应为预期字段配置足够容量。
-/// @details 固定数组由状态对象或栈帧拥有，函数不会保存 text 视图；复制完成
-/// 后缓冲始终至少保留一个终止符，可直接交给 ImGui InputText 系列接口。
-template<size_t N>
-void copyToInputBuffer(std::array<char, N>& buffer, std::string_view text)
-{
-    // 预清零移除旧长字符串尾部并保证最终 NUL 终止。
-    buffer.fill('\0');
-    // 最后一字节保留为终止符，不读取 string_view 边界之外内容。
-    const size_t copyLen = std::min(text.size(), N - 1);
-    std::copy_n(text.data(), copyLen, buffer.data());
 }
 
 /// @brief 解析 JSON 文本，不使用 C++ 异常。
@@ -996,8 +978,10 @@ void openOsuMetadataTextEditor(const MetadataPropertyMap& props,
     state.requestOpen = true;
     // 新编辑会话不继承旧语法错误。
     state.errorText.clear();
-    // 使用稳定序列化顺序预填固定输入缓冲区。
-    copyToInputBuffer(state.textBuffer, buildOsuMetadataText(props, beatmap));
+    // 使用稳定序列化顺序预填完整输入文本。
+    // 使用完整序列是写回属性表的前置条件，尾部可能仍含有效 Events 记录。
+    // 焦点只是打开文本；未经确认时编辑缓冲与领域模型独立。
+    state.textBuffer = buildOsuMetadataText(props, beatmap);
 }
 
 /// @brief 消费 OSU 纯文本编辑器的写回结果。
@@ -1056,9 +1040,8 @@ void renderOsuMetadataTextEditorPopup(float dpiScale)
 
         ImGui::SetNextItemWidth(-1.0f);
         // 允许 Tab 输入以便用户整理较长事件或自定义字段。
-        ImGui::InputTextMultiline("##OsuMetadataTextBuffer",
-                                  state.textBuffer.data(),
-                                  state.textBuffer.size(),
+        dynamicInputTextMultiline("##OsuMetadataTextBuffer",
+                                  state.textBuffer,
                                   ImVec2(0.0f, 430.0f * dpiScale),
                                   ImGuiInputTextFlags_AllowTabInput);
 
@@ -1066,7 +1049,7 @@ void renderOsuMetadataTextEditorPopup(float dpiScale)
             // 先解析到局部表，失败时弹窗和原属性都保持不变。
             MetadataPropertyMap parsedProps;
             if ( parseOsuMetadataText(
-                     state.textBuffer.data(), parsedProps, state.errorText) ) {
+                     state.textBuffer, parsedProps, state.errorText) ) {
                 // 成功结果交由外层谱面窗口在同一 UI 线程消费。
                 state.result = std::move(parsedProps);
                 state.open   = false;
@@ -1179,14 +1162,15 @@ void openMetadataJsonEditor(const std::string& scopeId, const std::string& key,
     state.childValueBuffer.fill('\0');
 
     // 空字段默认以对象开始，便于直接添加子字段。
+    // 格式化可能产生比原始输入更长的结果，必须与未格式化文本一样允许增长。
     std::string    initialValue = value.empty() ? "{}" : value;
     nlohmann::json parsed       = parseJsonNoThrow(initialValue.c_str());
     if ( parsed.is_discarded() ) {
         // 保留非法原文，用户可以在弹窗中看到并修正。
-        copyToInputBuffer(state.jsonBuffer, initialValue);
+        state.jsonBuffer = initialValue;
     } else {
         // 合法值统一四空格缩进，提高嵌套结构可读性。
-        copyToInputBuffer(state.jsonBuffer, dumpPrettyJson(parsed));
+        state.jsonBuffer = dumpPrettyJson(parsed);
     }
 }
 
@@ -1294,7 +1278,7 @@ void renderMetadataJsonEditorPopup(float dpiScale)
         state.requestOpen = false;
     }
 
-    // 关闭时不反复解析 32KiB 缓冲。
+    // 关闭时无需解析编辑文本。
     if ( !state.open ) return;
 
     // 标题栏关闭通过 popupOpen 在 EndPopup 后同步。
@@ -1341,9 +1325,8 @@ void renderMetadataJsonEditorPopup(float dpiScale)
 
         ImGui::SetNextItemWidth(-1.0f);
         // 允许 Tab 输入方便手工维护嵌套 JSON 缩进。
-        ImGui::InputTextMultiline("##MetadataJsonRawEditor",
-                                  state.jsonBuffer.data(),
-                                  state.jsonBuffer.size(),
+        dynamicInputTextMultiline("##MetadataJsonRawEditor",
+                                  state.jsonBuffer,
                                   ImVec2(0.0f, 220.0f * dpiScale),
                                   ImGuiInputTextFlags_AllowTabInput);
 
@@ -1354,7 +1337,7 @@ void renderMetadataJsonEditorPopup(float dpiScale)
                 state.errorText = "无法格式化：当前内容不是合法 JSON。";
             } else {
                 // 格式化只改变表示，不改变 JSON 值语义。
-                copyToInputBuffer(state.jsonBuffer, dumpPrettyJson(parsed));
+                state.jsonBuffer = dumpPrettyJson(parsed);
                 state.errorText.clear();
             }
         }
@@ -1362,7 +1345,7 @@ void renderMetadataJsonEditorPopup(float dpiScale)
         if ( ::MMM::UI::FeedbackButton(
                  "重建为空对象##ResetMetadataJsonObject") ) {
             // 显式重建为对象会丢弃当前文本，但仍需用户点击完成才写回。
-            copyToInputBuffer(state.jsonBuffer, "{}");
+            state.jsonBuffer = "{}";
             state.errorText.clear();
         }
 
@@ -1410,8 +1393,7 @@ void renderMetadataJsonEditorPopup(float dpiScale)
                                  .c_str()) ) {
                         // 删除后立即把新对象规整写回原始编辑缓冲。
                         parsed.erase(childKey);
-                        copyToInputBuffer(state.jsonBuffer,
-                                          dumpPrettyJson(parsed));
+                        state.jsonBuffer = dumpPrettyJson(parsed);
                         // 一帧只处理一次结构变更，避免继续使用旧键列表。
                         break;
                     }
@@ -1454,7 +1436,7 @@ void renderMetadataJsonEditorPopup(float dpiScale)
                 // 值优先保留 JSON 类型，普通文本自动转换为字符串。
                 parsed[childKey] =
                     parseChildValueOrString(state.childValueBuffer.data());
-                copyToInputBuffer(state.jsonBuffer, dumpPrettyJson(parsed));
+                state.jsonBuffer = dumpPrettyJson(parsed);
                 // 成功后清空两项子字段输入，支持连续添加。
                 state.childKeyBuffer.fill('\0');
                 state.childValueBuffer.fill('\0');
@@ -3500,8 +3482,8 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
                                 const auto&     refProps =
                                     (it !=
                                      firstNc.m_metadata.note_properties.end())
-                                        ? it->second
-                                        : emptyMap;
+                                            ? it->second
+                                            : emptyMap;
 
                                 // 操作列更宽，以容纳 JSON 与清除两个按钮。
                                 ImGuiTableFlags tableFlags =
@@ -3723,8 +3705,8 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
                                 const auto&     refProps =
                                     (it !=
                                      firstNc.m_metadata.note_properties.end())
-                                        ? it->second
-                                        : emptyMap;
+                                            ? it->second
+                                            : emptyMap;
 
                                 // 单字段仍使用标准三列表格保持页面一致。
                                 ImGuiTableFlags tableFlags =
