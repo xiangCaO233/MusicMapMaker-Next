@@ -9,6 +9,7 @@
 #include "mmm/note/HoldScrollSemantics.h"
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -17,6 +18,7 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <set>
+#include <string>
 #include <vector>
 
 using json = nlohmann::json;
@@ -334,6 +336,146 @@ inline std::int64_t readMalodyJsonInt64(const json& object, const char* key,
     return static_cast<std::int64_t>(std::llround(value));
 }
 
+namespace MalodyImport
+{
+
+/// @brief 谱面 JSON 文本的字节上限，读取前检查。
+inline constexpr std::streamoff MAX_FILE_BYTES = 64 * 1024 * 1024;
+/// @brief 容器、标量与对象键共享的预算，兼顾大量短键和空容器。
+inline constexpr std::size_t MAX_JSON_ENTRIES = 2'000'000;
+/// @brief 同时打开的 JSON 容器上限，包含根对象。
+inline constexpr std::size_t MAX_JSON_DEPTH = 64;
+
+/// @brief 在构建 DOM 前检查结构预算，达到边界时直接停止 SAX 读取。
+/// @details 所有值（含容器）和键都消耗预算，即使键随后被覆盖。
+class JsonBudget
+{
+public:
+    /// @brief 记录一个空值。
+    bool null() { return countEntry(); }
+    /// @brief 记录一个布尔值。
+    bool boolean(bool) { return countEntry(); }
+    /// @brief 记录一个有符号整数。
+    bool number_integer(json::number_integer_t) { return countEntry(); }
+    /// @brief 记录一个无符号整数。
+    bool number_unsigned(json::number_unsigned_t) { return countEntry(); }
+    /// @brief 记录一个实数，原始数字词元无需保存。
+    bool number_float(json::number_float_t, const json::string_t&)
+    {
+        return countEntry();
+    }
+    /// @brief 记录一个字符串，所有字符串的来源字节已计入文件预算。
+    bool string(json::string_t&) { return countEntry(); }
+    /// @brief 文本 JSON 没有二进制词元。
+    bool binary(json::binary_t&) { return false; }
+    /// @brief 进入对象并检查可用深度。
+    bool start_object(std::size_t) { return beginContainer(); }
+    /// @brief 记录对象键，用于约束关联容器的额外开销。
+    bool key(json::string_t&) { return countEntry(); }
+    /// @brief 关闭对象，深度由语法解析器的成对事件保证。
+    bool end_object() { return endContainer(); }
+    /// @brief 进入数组并检查可用深度。
+    bool start_array(std::size_t) { return beginContainer(); }
+    /// @brief 关闭数组并归还一层深度。
+    bool end_array() { return endContainer(); }
+    /// @brief 词法或语法失败后停止扫描。
+    bool parse_error(std::size_t, const std::string&, const json::exception&)
+    {
+        return false;
+    }
+
+    /// @brief 失败是否由预算耗尽引起，用于区分格式错误。
+    bool exceeded() const { return m_exceeded; }
+
+private:
+    /// @brief 消耗一个结构项的预算。
+    bool countEntry()
+    {
+        m_exceeded = ++m_entries > MAX_JSON_ENTRIES;
+        return !m_exceeded;
+    }
+
+    /// @brief 一个容器同时占用一层深度和一个结构项。
+    bool beginContainer()
+    {
+        if ( ++m_depth > MAX_JSON_DEPTH ) {
+            m_exceeded = true;
+            return false;
+        }
+        return countEntry();
+    }
+
+    /// @brief 归还一层深度，结构项预算按总量累计。
+    bool endContainer()
+    {
+        --m_depth;
+        return true;
+    }
+
+    /// @brief 已观察到的结构项总数。
+    std::size_t m_entries{ 0 };
+    /// @brief 解析器当前尚未关闭的容器数量。
+    std::size_t m_depth{ 0 };
+    /// @brief 最近一次失败是否来自结构项或深度上限。
+    bool m_exceeded{ false };
+};
+
+/// @brief 读取有字节及结构预算的 Malody JSON 根对象。
+/// @param path 谱面路径，使用二进制模式按实际字节数应用同一上限。
+/// @return 空值表示读失败、语法错误或输入超限，具体原因写入日志。
+inline std::optional<json> readDocument(const std::filesystem::path& path)
+{
+    std::ifstream input{ path, std::ios::binary | std::ios::ate };
+    if ( !input.is_open() ) {
+        XERROR("无法打开 malody 谱面文件: {}", Config::pathToUtf8(path));
+        return std::nullopt;
+    }
+
+    const std::streamoff size = input.tellg();
+    // 在为文本分配内存之前拦截不可定位或超出产品上限的文件。
+    if ( size < 0 || size > MAX_FILE_BYTES ) {
+        XERROR("无法确定 malody 文件大小或超出字节上限（{} 字节）: {}",
+               MAX_FILE_BYTES,
+               Config::pathToUtf8(path));
+        return std::nullopt;
+    }
+
+    std::string content(static_cast<std::size_t>(size), '\0');
+    // 必须读到快照长度且到达 EOF，避免文件在读取中缩短或增长导致部分导入。
+    if ( !input.seekg(0) || !input.read(content.data(), size) ||
+         input.peek() != std::char_traits<char>::eof() || input.bad() ) {
+        XERROR("读取 malody 谱面文件失败或文件大小已变化: {}",
+               Config::pathToUtf8(path));
+        return std::nullopt;
+    }
+
+    JsonBudget budget;
+    // SAX 遇到预算边界立即中止；通过后才对同一份文本建树，避免两次读取文件。
+    // 两个阶段都保留既有的 UTF-8 BOM 和注释兼容行为。
+    if ( !json::sax_parse(
+             content, &budget, json::input_format_t::json, true, true) ) {
+        if ( budget.exceeded() ) {
+            XERROR("malody 谱面 JSON 超出结构预算（{} 项，{} 层）: {}",
+                   MAX_JSON_ENTRIES,
+                   MAX_JSON_DEPTH,
+                   Config::pathToUtf8(path));
+        } else {
+            XERROR("解析 malody 谱面 JSON 失败: {}", Config::pathToUtf8(path));
+        }
+        return std::nullopt;
+    }
+
+    // 内容缓冲只在本函数内存活，转换领域对象时仅保留 DOM。
+    auto document = json::parse(content, nullptr, false, true);
+    if ( !document.is_object() ) {
+        XERROR("malody 谱面 JSON 必须以对象为根: {}", Config::pathToUtf8(path));
+        return std::nullopt;
+    }
+    return document;
+}
+
+}  // namespace MalodyImport
+
 /// @brief 从 Malody `.mc` JSON 文件加载谱面。
 /// @param path 待加载的谱面路径。
 /// @return 加载后的谱面；文件或 JSON 无效时返回空谱面。
@@ -356,24 +498,10 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
     XINFO("加载malody谱面路径:{}", Config::pathToUtf8(basemeta.map_path));
 
-    std::ifstream fs{ path };
-    if ( !fs.is_open() ) {
-        XERROR("无法打开 malody 谱面文件: {}", Config::pathToUtf8(path));
-        return {};
-    }
-
-    // 先读完整文本再解析，允许 JSON 解析器忽略 UTF-8 BOM。
-    json        fileData;
-    std::string fileContent((std::istreambuf_iterator<char>(fs)),
-                            std::istreambuf_iterator<char>());
-    // allow_exceptions=false 将语法错误表示为 discarded，避免异常控制流。
-    fileData = json::parse(fileContent, nullptr, false, true);
-
-    if ( fileData.is_discarded() ) {
-        XERROR("解析 malody 谱面 JSON 失败，可能存在严重的编码错误: {}",
-               Config::pathToUtf8(path));
-        return {};
-    }
+    // 超限或读失败时整体拒绝，避免把部分构造的领域模型交给调用方。
+    auto document = MalodyImport::readDocument(path);
+    if ( !document ) return {};
+    auto& fileData = *document;
 
     // 第一阶段提取公共元数据，并同时保留 Malody 专属字段。
     if ( fileData.contains("meta") ) {
