@@ -17,8 +17,8 @@ target_include_directories(Network PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 # curl、miniz、JSON 与项目基础模块构成公开同步接口依赖。
 target_link_libraries(Network PUBLIC 3rd_curl 3rd_miniz 3rd_nlohmann_json
                                      Config Log Event)
-# Runtime 仅用于内部后台任务调度，不向上层传播。
-target_link_libraries(Network PRIVATE Runtime)
+# Runtime 负责内部任务调度；资产校验仅在实现中使用 mbedTLS 的分块摘要。
+target_link_libraries(Network PRIVATE Runtime 3rd_mbedtls)
 
 if(WIN32)
   # 更新替换使用 Shell API；后台选路通过系统 Winsock 解析当前地址。

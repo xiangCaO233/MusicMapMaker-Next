@@ -9,7 +9,9 @@
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 
+#include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -17,6 +19,7 @@
 #include <miniz.h>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -1027,12 +1030,193 @@ int testSyncHonorsCancellationRequest()
                       "asset sync honors cancellation request");
 }
 
+/// @brief 验证 SHA-256 填充边界、读取块边界及不可读路径的摘要语义。
+/// @return 与独立的固定向量不一致或读取失败语义错误的断言数。
+/// @details 期望由独立计算生成，避免复用生产计算生成自洽但错误的清单。
+/// 每个向量独立调用公开入口，验证更新器与资产同步使用的摘要文本格式相同。
+int testStreamedAssetSha256()
+{
+    /// @brief 由独立实现计算的纯 ASCII 'a' 测试向量。
+    struct DigestCase {
+        /// @brief 重复字节数，包含零字节和不足整块的尾部。
+        std::size_t m_size;
+        /// @brief 对应完整输入的 64 位小写十六进制 SHA-256。
+        std::string_view m_expected;
+    };
+    // 56 字节是 SHA-256 是否追加额外填充块的边界。
+    // 32 KiB 是文件读取边界，应与摘要算法自身的 64 字节分组相互独立。
+    constexpr std::array cases{
+        // 空文件有正常摘要，和后面不可读路径返回的空字符串严格区分。
+        DigestCase{ 0,
+                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b78"
+                    "52b855" },
+        // 55 字节还可在原末块容纳填充标记和长度；56 字节必须再追加一块。
+        DigestCase{ 55,
+                    "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f"
+                    "734318" },
+        DigestCase{ 56,
+                    "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686e"
+                    "c6738a" },
+        // 63/64 字节检查接近算法块结束时标记的位置及满块结束语义。
+        DigestCase{ 63,
+                    "7d3e74a05d7db15bce4ad9ec0658ea98e3f06eeecf16b4c6fff2da457d"
+                    "dc2f34" },
+        DigestCase{ 64,
+                    "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df15"
+                    "4668eb" },
+        // 流读取边界左右各取一字节，覆盖短尾、刚好 EOF 与后续短块。
+        // 这三个值跨越读取块，但不应该改变算法独立处理 64 字节分组的结果。
+        DigestCase{ 32767,
+                    "e3ab7df365190d116dd32400a57dd4a1506ac167156b8aa770d29b086c"
+                    "c1cfb4" },
+        DigestCase{ 32768,
+                    "b217b65e6f205f41b3fb8ef90cf7c44da93f630ca03965273485bbb21a"
+                    "5cccf5" },
+        DigestCase{ 32769,
+                    "94c9394bd6ee8fcad7b37332529186fd12354dc39b0109db7e1bce510e"
+                    "25048d" },
+    };
+
+    // 独占一个临时根。持续覆盖同名文件用于检查读取不会带上上一个样例的后缀。
+    const auto root  = createTempRoot();
+    const auto asset = root / "hash.dat";
+    int        fail  = 0;
+    // 一个边界失败后继续核查其余输入，以便诊断问题在填充还是跨块读取。
+    for ( const auto& sample : cases ) {
+        // 保留原始字节及固定期望，不调用被测实现生成基线。
+        if ( !writeTextFile(asset, std::string(sample.m_size, 'a')) ||
+             AssetSyncService::sha256File(asset) != sample.m_expected ) {
+            XERROR("Asset SHA-256 mismatch for {} bytes", sample.m_size);
+            ++fail;
+        }
+    }
+    // 不存在的文件或目录都不应获得空文件的合法摘要。
+    // 两个场景分别覆盖目录项查询失败与输入类型不适用，不依赖进程权限。
+    fail += expectTrue(AssetSyncService::sha256File(root / "missing").empty() &&
+                           AssetSyncService::sha256File(root).empty(),
+                       "unreadable asset has no digest");
+    // 写入只在临时根，回归失败也不能留下需要维护的测试资源。
+    std::error_code cleanup;
+    std::filesystem::remove_all(root, cleanup);
+    return fail;
+}
+
+/// @brief 经由已有资源的启动同步入口验证摘要执行中途响应取消。
+/// @return 取消没有推进资源版本、开始下载或报告完成时为零。
+/// @details 通过启动同步的真实精确校验路径进入，不直接调用内部摘要函数。
+/// POSIX 用同一入口验证读取前后文件长度不一致时的拒绝语义。
+int testCancelDuringAssetSha256()
+{
+    // 先有有效的本地目录，确保同步进入逐文件校验，而非初次安装包路径。
+    const auto root     = createTempRoot();
+    const auto assets   = root / "assets";
+    const auto asset    = assets / "hash.dat";
+    const auto manifest = root / "manifest.json";
+    int        fail     = 0;
+    // 三个完整读取块保证返回取消时摘要尚未完成。
+    fail += expectTrue(writeTextFile(asset, std::string(98304, 'a')),
+                       "write multi-block asset for cancellation");
+    // 使用外部固定摘要，若取消失效则正常流程会发布这个版本。
+    // 输入长度指向整个文件，让同步确实进入摘要，而不是先因清单大小不符退出。
+    fail +=
+        expectTrue(writeTextFile(manifest, R"json({"version":"after","files":[
+        {"path":"hash.dat","url":"hash.dat","size":98304,
+         "sha256":"6e03ec5e819aa1579fd8d3e35ea4a88cddbedc2707f1bae3fd3c08710a515831"}]})json"),
+                   "write manifest for asset checksum cancellation");
+
+    // 清单和下载根均走 file URL；外部网络状态不影响中途退出的判定。
+    AssetSyncOptions options;
+    options.assetsRootPath = assets;
+    options.baseUrl        = fileUrlFor(root);
+    options.manifestUrl    = fileUrlFor(manifest);
+    // 确定性回调在同一线程运行，用普通计数和标志即可控制注入时机。
+    bool checkingAsset       = false;
+    bool advanced            = false;
+    int  hashChecks          = 0;
+    options.progressCallback = [&](const AssetSyncProgress& progress) {
+        // 在单文件的检查进度之后才武装取消，清单读取不受干扰。
+        if ( progress.stage == AssetSyncProgressStage::kCheckingFiles &&
+             progress.currentFileIndex == 1 )
+            checkingAsset = true;
+        // 相对清单检查的阶段边界证明没有把取消后的部分结果拿去更新资源。
+        if ( progress.stage == AssetSyncProgressStage::kDownloadingFile ||
+             progress.stage == AssetSyncProgressStage::kFinished )
+            advanced = true;
+    };
+    // 首次检查在打开文件前，第二次在首块返回时；只在第三次报告取消，
+    // 证明调用方传播已经发生的取消，不依赖下一次重复询问仍然为真。
+    options.cancellationCallback = [&]() {
+        return checkingAsset && ++hashChecks == 3;
+    };
+    // 第三次询问发生在第二块读取，首块已进入摘要但整个文件尚未完成。
+    const auto result = AssetSyncService::sync(options);
+    // 下载和完成都不应出现；单看返回值无法发现已启动但随后取消的 I/O。
+    fail +=
+        expectTrue(result.status == AssetSyncStatus::kCancelled &&
+                       hashChecks == 3 && !advanced &&
+                       !std::filesystem::exists(assets / ".mmm-assets-version"),
+                   "cancel partial hash without publishing assets");
+
+#ifndef _WIN32
+    // POSIX 可以在读取流打开时调整文件长度。清单条目的摘要故意只对应前一块，
+    // 这样错误接受意外 EOF 得到的前缀摘要时会写入目标版本。
+    // 把 size 设为未知，确保原文件不在哈希前就被独立的大小快路径拒绝。
+    fail +=
+        expectTrue(writeTextFile(manifest, R"json({"version":"after","files":[
+        {"path":"hash.dat","url":"missing-hash.dat","size":0,
+         "sha256":"b217b65e6f205f41b3fb8ef90cf7c44da93f630ca03965273485bbb21a5cccf5"}]})json"),
+                   "write manifest with the digest of the truncation prefix");
+    // 缺失的下载源使同步只能走保留已有资源的降级策略。
+    // 验收以下载阶段、错误详情和未推进版号为准，不只看最终 Ready 状态。
+    // 重用前一轮的配置和回调观察边界，清除上一轮已捕获的检查事件。
+    checkingAsset = false;
+    advanced      = false;
+    hashChecks    = 0;
+    std::error_code resizeError;
+    options.cancellationCallback = [&]() {
+        // 第二次查询在首块读取后，此时初始大小已经记录。
+        // 返回 false 允许摘要继续读到 EOF，专门触发实际短读而非取消路径。
+        if ( checkingAsset && ++hashChecks == 2 )
+            std::filesystem::resize_file(asset, 32768, resizeError);
+        return false;
+    };
+    const auto interrupted = AssetSyncService::sync(options);
+    // 不允许用降级继续运行的返回值来证明摘要成功，因此额外检查版本标记。
+    // 检查截短真的发生；前缀哈希不能让同步跳过重新下载。
+    fail +=
+        expectTrue(!resizeError && hashChecks >= 3 && advanced &&
+                       !interrupted.errorMessage.empty() &&
+                       !std::filesystem::exists(assets / ".mmm-assets-version"),
+                   "reject digest of file truncated during verification");
+#endif
+
+    // 两轮共用受控根目录，所有断言都记录后再回收资源夹具。
+    std::error_code cleanup;
+    std::filesystem::remove_all(root, cleanup);
+    return fail;
+}
+
 }  // namespace
 
 /// @brief 依次运行全部本地资源同步场景并汇总失败数。
+/// @param argc 测试入口参数数目，由套件剔除路由名称。
+/// @param argv 可选传入 --hash-file 和现有文件路径，用于独立的内存规模验证。
 /// @return 所有断言通过时返回 0，否则返回 1。
-int main()
+int main(int argc, char** argv)
 {
+    // 多 GiB 探针复用生产接口，由调用者准备文件，不把大资源加入普通 CTest。
+    // 调用方可分别用小文件和稀疏大文件测 RSS，再与独立 SHA-256 工具对比。
+    // 探针只读现有文件，RSS 测量不包含创建夹具或启动网络同步。
+    if ( argc == 3 && std::string_view(argv[1]) == "--hash-file" ) {
+        // 与正常 Windows 资源路径一样，从命令行 UTF-8 转入原生路径类型。
+        const auto hash =
+            AssetSyncService::sha256File(MMM::Config::utf8ToPath(argv[2]));
+        // 失败使用进程退出码，外部基准不从日志文本猜测是否拿到了有效摘要。
+        if ( hash.empty() ) return 1;
+        XINFO("Asset SHA-256: {}", hash);
+        return 0;
+    }
+
     // 测试不初始化个人配置或应用资源路径，所有写入都在临时目录。
     // 每个测试返回断言失败数，累加但不因前一场景失败而短路。
     int fail = 0;
@@ -1041,6 +1225,8 @@ int main()
     fail += testResolveDownloadUrl();
     fail += testDefaultOptionsUsesCdnAndHonorsEnvironment();
     fail += testCollectOutdatedFiles();
+    fail += testStreamedAssetSha256();
+    fail += testCancelDuringAssetSha256();
     // ZIP 安全测试位于同步策略前，失败也不阻止后续临时场景清理自身。
     fail += testExtractZipArchive();
     // 同步策略按离线降级、版本快速路径、强制修复和进度顺序执行。
