@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <future>
 #include <glm/vec4.hpp>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -142,13 +143,17 @@ struct EditorEngine::Impl {
     /// 菜单和工具栏只需标量，不能为此等待会话注册表长锁。
     std::atomic<int32_t> m_activeBeatmapTrackCount{ 0 };
 
-    /// @brief 保护活动谱面展示状态的短锁，锁内仅允许读写标量。
-    /// @warning 移动工具栏与音效弹层每帧读取，锁内不执行会话操作。
+    /// @brief 同步发布活动谱面展示值及播放命令的会话目标。
+    /// @warning 每帧只读取展示值；实际输入才锁定弱引用，锁内不访问会话状态。
     mutable std::mutex m_activeEditorStateMutex;
     /// @brief 同一代发布的完整轨道布局，避免三个范围分开读取时跨谱面混合。
     Common::EditorTrackLayout m_activeTrackLayout;
     /// @brief 播放状态与目标代次一起发布，供移动弹层核对来源。
     Common::EditorPlaybackState m_activePlaybackState;
+    /// @brief 播放命令的活动会话，与代次由同一个短锁发布。
+    /// @warning 弱引用只在会话变更时写入、有播放命令时锁定。临时强引用用于
+    /// 保证并发关闭时投递到原会话队列，且在发布锁外释放，展示路径不复制它。
+    std::weak_ptr<BeatmapSession> m_activePlaybackTarget;
 
     /// @brief 活动会话是否选中了 Note 或 Sample，供菜单显示可用状态。
     /// @warning 逻辑线程每 update 写入、UI 每帧读取 relaxed；选择只在
