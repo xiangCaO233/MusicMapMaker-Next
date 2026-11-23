@@ -1,17 +1,15 @@
 /// @file MobilePlaybackControls.cpp
 /// @brief 触屏播放参数控件，界面意图与编辑器权威状态分开维护。
 /// @details 五个入口不持有谱面对象，也不执行桌面工具栏的完整更新流程。
-/// 播放开关经应用服务读取，实际动作统一进入已有命令通道。
+/// 播放开关与键数一起发布，实际动作统一进入已有命令通道。
 /// 分拍属于软件编辑配置，未打开谱面时也允许预先选择。
 /// 键数和速度绑定真实谱面，欢迎占位会话不能接受这些操作。
 /// 键数修改复用可撤销轨道迁移，不覆盖其他元数据字段。
 /// 倍速复用当前个人音频预设，不改变原始资源文件的采样速度。
 ///
-/// 会话观察约束：
-/// 与逻辑更新共用的会话锁只能尝试获取，不能等待完整播放更新。
-/// 观察指针只在成功持锁期间解引用，离开作用域仅留下整数轨数。
-/// 不缓存 Session、BeatMap 或字体的共享所有权，避免每帧引用计数复制。
-/// 标签索引变化先清除显示缓存，弹层另存打开时的会话身份。
+/// 活动会话的播放位、键数与代次来自一次标量复制。
+/// 标签索引可能因关闭而复用，弹层应比较活动目标代次。
+/// 播放、键数和倍速命令带上本次 UI 看到的代次，由逻辑入口核验归属。
 /// 拖动草稿只覆盖手指仍在操作的数值，空闲后恢复权威状态。
 /// 输入与布局约束：
 /// 普通弹层由 ImGui 处理外部点击和返回，关闭释放由本组件继续拦截。
@@ -21,26 +19,25 @@
 #include "ui/workspace/MobilePlaybackControls.h"
 
 #include "audio/AudioManager.h"
+#include "common/EditorPlaybackState.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/AudioPresets.h"
 #include "config/EditorConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
-#include "logic/BeatmapSession.h"
+#include "event/logic/LogicCommandEvent.h"
 #include "logic/EditorEngine.h"
-#include "logic/session/context/SessionContext.h"
 #include "ui/IEditorApplicationService.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
-#include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/workspace/MobileButton.h"
 
 #include <algorithm>
 #include <cmath>
 #include <fmt/format.h>
-#include <mutex>
 #include <utility>
 
 namespace MMM::UI
@@ -113,13 +110,14 @@ float MobilePlaybackControls::buttonWidth(float scale)
 
 /// @brief 只改变弹层意图，实际 OpenPopup 始终使用同一父窗口 ID。
 /// @param popup 参数类型，不保存打开前的业务值。
+/// @param generation 开启时的活动目标代次，全局配置弹层忽略该值。
 /// @details 只登记请求，真正 OpenPopup 在固定父窗口中执行。
-void MobilePlaybackControls::open(Popup popup)
+void MobilePlaybackControls::open(Popup popup, std::uint64_t generation)
 {
     // 只登记意图，避免在按钮窗口的 ID 栈中打开另一父窗口的弹层。
     // 此刻固定会话身份；之后切换标签只能关闭弹层，不能静默改绑。
-    m_popup             = popup;
-    m_popupSessionIndex = m_sessionIndex;
+    m_popup           = popup;
+    m_popupGeneration = generation;
     // 重新打开不恢复上次拖动草稿，滑块首先读取本次权威值。
     m_editingTracks = m_editingSpeed = false;
     // 首次按住滑块但数值未改变时也需要有效草稿，不能沿用默认的 1x。
@@ -130,52 +128,23 @@ void MobilePlaybackControls::open(Popup popup)
     m_openRequested = true;
 }
 
-/// @brief 读取已发布播放状态及非阻塞轨数缓存，绘制五个直接操作入口。
-/// @warning 每帧只尝试一次会话锁，忙时沿用标量，不复制会话共享所有权。
-/// @param manager 提供寿命覆盖当前帧的应用服务观察指针。
+/// @brief 读取同一活动目标的展示状态，绘制五个直接操作入口。
+/// @warning 每帧只复制状态值，独立短锁不包含会话更新、资源加载或命令投递。
 /// @param width 已扣除主题留白与滚动条的实际内容宽度。
 /// @param scale 仅缩放交互尺寸，不改变参数的合法范围。
-void MobilePlaybackControls::drawButtons(UIManager& manager, float width,
-                                         float scale)
+void MobilePlaybackControls::drawButtons(float width, float scale)
 {
-    auto&     engine = Logic::EditorEngine::instance();
-    const int index  = engine.getActiveSessionIndex();
-    if ( index != m_sessionIndex ) {
-        // 标签切换后宁可暂时显示占位，也不复用上一谱面的键数。
-        m_sessionIndex = index;
-        m_trackCount   = 0;
-    }
-    // 加载完成状态由引擎发布，不靠每帧遍历会话列表推断。
-    // 它只决定入口可用性，命令执行时仍由会话自身验证对象。
-    const bool hasBeatmap = engine.hasActiveBeatmap();
-    if ( hasBeatmap ) {
-        // 同一把锁也用于整轮逻辑更新，因此这里只尝试一次，绝不阻塞 UI。
-        // 成功后借用 SessionEntry，只复制一个整数，不延长会话的共享所有权。
-        std::unique_lock<std::recursive_mutex> lock(engine.getSessionMutex(),
-                                                    std::try_to_lock);
-        // try_lock 前标签可能刚被切换，持锁后再次核对索引。
-        // 锁内 getter 的递归加锁立即成功，不引入第二次跨线程等待。
-        if ( lock.owns_lock() && index == engine.getActiveSessionIndex() ) {
-            // 注册表条目与上下文只在当前锁作用域内有效。
-            // 实际复制仅有轨数，音符、采样和媒体元数据不参与 UI 查询。
-            const auto* entry = engine.getSessionEntry(index);
-            if ( entry && entry->session &&
-                 entry->session->getContext().currentBeatmap )
-                if ( !m_editingTracks )
-                    m_trackCount = entry->session->getContext().trackCount;
-        }
-    } else {
-        m_trackCount = 0;
-    }
-    // 初始化时没有虚构的播放状态，服务观察指针不跨帧持有。
-    // 播放显示与菜单共用权威来源，按钮不自行维护播放计时器。
-    // 紧凑导航高度保证手机横屏下左侧三个工具与底部五个播放参数按钮无需滚动即可同屏显示。
-    const auto*  service = manager.getEditorApplicationService();
-    const bool   playing = service && service->isPlaybackPlaying();
+    const auto playback = Logic::EditorEngine::instance().activePlaybackState();
+    const bool hasBeatmap = playback.playerTracks > 0;
+    // 播放图标与按钮门禁均来自同一份值，不能混用独立发布的桌面标量。
+    const bool playing = playback.playing;
+    // 紧凑导航高度让横屏下五个播放参数按钮与三个工具按钮同时可达。
     const ImVec2 size{ width, 52.0f * scale };
     // 空白工作区不能通过占位入口启动音频，但保留固定按钮位置。
     // 图标及文字变化不改变内部 ID，也不重置反馈动画。
     ImGui::BeginDisabled(!hasBeatmap);
+    // 这里沿用交互方案分发入口。绘制与提交之间可能恰好完成切换，
+    // 所以反转的是所见播放位，提交也携带同一份状态的代次。
     if ( MobileNavigationButton(
              "playback",
              playing ? ICON_MMM_PAUSE : ICON_MMM_PLAY,
@@ -183,7 +152,8 @@ void MobilePlaybackControls::drawButtons(UIManager& manager, float width,
                      : TR_CACHE("ui.toolbar.short.play_pause").data(),
              size,
              playing) )
-        MenuUtil::dispatchCommand(Logic::CmdSetPlayState{ !playing });
+        Interaction::dispatchCommand(Event::LogicCommandEvent(
+            Logic::CmdSetPlayState{ !playing }, playback.generation));
     ImGui::EndDisabled();
 
     ImGui::BeginDisabled(!hasBeatmap);
@@ -199,19 +169,22 @@ void MobilePlaybackControls::drawButtons(UIManager& manager, float width,
                                 speedText.c_str(),
                                 size,
                                 m_popup == Popup::Speed) )
-        open(Popup::Speed);
+        open(Popup::Speed, playback.generation);
     ImGui::EndDisabled();
-    // 尚未读到新会话轨数时保持禁用，不能把默认 4K 冒充元数据。
-    // 已有缓存但逻辑繁忙时仍能操作，命令只携带目标轨数。
-    ImGui::BeginDisabled(!hasBeatmap || m_trackCount <= 0);
-    const auto keyText =
-        m_trackCount > 0 ? fmt::format("{}K", m_trackCount) : "--";
+    // 拖动时只在同一目标上使用草稿，切换后的按钮即时显示新谱面权威值。
+    // 关闭后旧草稿可能还存在一个释放帧。检查代次可直接显示新目标的键数。
+    const int shownTracks =
+        m_editingTracks && m_popupGeneration == playback.generation
+            ? m_trackDraft
+            : playback.playerTracks;
+    ImGui::BeginDisabled(!hasBeatmap);
+    const auto keyText = hasBeatmap ? fmt::format("{}K", shownTracks) : "--";
     if ( MobileNavigationButton("key-count",
                                 ICON_MMM_KEYBOARD,
                                 keyText.c_str(),
                                 size,
                                 m_popup == Popup::Keys) )
-        open(Popup::Keys);
+        open(Popup::Keys, playback.generation);
     ImGui::EndDisabled();
     // 分拍与桌面一样属于编辑配置，无活动谱面时仍可预先调整。
     const int divisor =
@@ -224,7 +197,7 @@ void MobilePlaybackControls::drawButtons(UIManager& manager, float width,
                                 divisorText.c_str(),
                                 size,
                                 m_popup == Popup::Divisor) )
-        open(Popup::Divisor);
+        open(Popup::Divisor, playback.generation);
     // 放大镜下常驻当前百分比，让触屏用户不打开弹层也能确认缩放状态。
     // 缩放属于全局视觉配置，无谱面时同样允许预先调整。
     const auto zoomText = fmt::format(
@@ -237,13 +210,13 @@ void MobilePlaybackControls::drawButtons(UIManager& manager, float width,
                                 zoomText.c_str(),
                                 size,
                                 m_popup == Popup::Zoom) )
-        open(Popup::Zoom);
+        open(Popup::Zoom, playback.generation);
 }
 
 /// @brief 在屏幕内居中组合标题、可滚动正文与常驻关闭入口。
 /// @details 分拍沿用皮肤预设，键数与倍速使用桌面相同范围及预设。
 /// @warning 每帧只绘制当前参数；文件持久化仅在明确点击或拖动结束时执行。
-/// @param manager 与按钮共用的应用服务，不创建新的配置所有者。
+/// @param manager 提供分拍与缩放使用的配置服务，播放状态由逻辑引擎发布。
 /// @param scale 当前缩放，视口上限在本次绘制重新计算。
 /// @param enabled 工具栏隐藏时也推进所属弹层的关闭流程。
 void MobilePlaybackControls::drawPopup(UIManager& manager, float scale,
@@ -284,14 +257,17 @@ void MobilePlaybackControls::drawPopup(UIManager& manager, float scale,
     if ( ImGui::BeginPopup(id,
                            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                                ImGuiWindowFlags_NoSavedSettings) ) {
-        auto& engine = Logic::EditorEngine::instance();
+        // 弹层可能比工具栏晚绘制，此处重新取值。背景删除可让索引左移，
+        // 只有目标代次变化才表示弹层必须停止编辑当前草稿。
+        const auto playback =
+            Logic::EditorEngine::instance().activePlaybackState();
         // 隐藏工具栏或失去原会话时，只关闭组件自己的弹层。
         // 分拍和缩放属于全局配置，不因活动谱面变化取消选择。
-        if ( !enabled ||
-             (m_popup != Popup::Divisor && m_popup != Popup::Zoom &&
-              (!engine.hasActiveBeatmap() ||
-               engine.getActiveSessionIndex() != m_popupSessionIndex)) ) {
-            // 打开期间切换或关闭谱面时，不能把旧弹层中的参数应用到另一张谱面。
+        if ( !enabled || (m_popup != Popup::Divisor && m_popup != Popup::Zoom &&
+                          (playback.playerTracks <= 0 ||
+                           playback.generation != m_popupGeneration)) ) {
+            // 失效分支不进入可交互正文，当前帧收到的预设点击也不能投递。
+            // 仍由原有弹层结束路径处理此次触点释放，避免手势落到画布。
             ImGui::CloseCurrentPopup();
         } else {
             const char* title =
@@ -463,7 +439,8 @@ void MobilePlaybackControls::drawPopup(UIManager& manager, float scale,
                         Config::AppConfig::instance().saveLayoutChanges();
                     }
                 } else if ( m_popup == Popup::Keys ) {
-                    int  value   = m_trackCount;
+                    int value =
+                        m_editingTracks ? m_trackDraft : playback.playerTracks;
                     bool changed = FeedbackSliderInt(
                         "##Keys", &value, 1, 32, "%dK", flags);
                     // 手指按住期间沿用本地整数，旧快照不会把滑块拉回。
@@ -471,6 +448,7 @@ void MobilePlaybackControls::drawPopup(UIManager& manager, float scale,
                     // 这里只记录 UI
                     // 捕获状态，不暂停播放或等待逻辑消费上一条命令。
                     m_editingTracks = ImGui::IsItemActive();
+                    m_trackDraft    = value;
                     ImGui::PopStyleVar();
                     // 常用 4K 到 8K 与桌面一致，滑条仍能到达完整的 1 到 32。
                     // 列数受内容宽度约束，字体放大也不会强制挤成三列。
@@ -487,9 +465,11 @@ void MobilePlaybackControls::drawPopup(UIManager& manager, float scale,
                     if ( changed ) {
                         // 同一轨道迁移动作同时回写元数据并保留自动采样相对轨道，支持撤销。
                         // 只发送目标轨数，逻辑线程处理最新谱面，不复制或覆盖其他元数据字段。
-                        m_trackCount = value;
-                        MenuUtil::dispatchCommand(
-                            Logic::CmdUpdateTrackCount{ value });
+                        // 保留打开代次；若点击后恰好关闭了目标，入队前会再次核对。
+                        m_trackDraft = value;
+                        Interaction::dispatchCommand(Event::LogicCommandEvent(
+                            Logic::CmdUpdateTrackCount{ value },
+                            m_popupGeneration));
                     }
                 } else {
                     float value =
@@ -521,12 +501,16 @@ void MobilePlaybackControls::drawPopup(UIManager& manager, float scale,
                     if ( changed ) {
                         // 个人音频预设与桌面共用；连续调整立即提交播放命令，释放时才写盘。
                         // 草稿仅服务本次拖动，不作为后台音频速度的第二个权威来源。
+                        // 预设本身属于账户配置，只有作用于当前 transport
+                        // 的命令绑定谱面。
                         m_speedDraft = value;
                         auto& app    = Config::AppConfig::instance();
                         app.getAudioPresets().current().m_speed =
                             std::clamp<double>(value, .25, 2.0);
-                        MenuUtil::dispatchCommand(Logic::CmdSetPlaybackSpeed{
-                            std::clamp<double>(value, .25, 2.0) });
+                        Interaction::dispatchCommand(Event::LogicCommandEvent(
+                            Logic::CmdSetPlaybackSpeed{
+                                std::clamp<double>(value, .25, 2.0) },
+                            m_popupGeneration));
                     }
                     if ( commit || presetClicked )
                         Config::AppConfig::instance().save();

@@ -1,8 +1,11 @@
 // 配色回归用例按值构造编辑配置，显式包含对应定义以固定测试输入。
 #include "common/EditorGestureState.h"
+#include "common/EditorPlaybackState.h"
 #include "common/EditorTrackLayout.h"
 #include "common/LogicCommands.h"
 #include "config/EditorSettings.h"
+#include "event/core/EventBus.h"
+#include "event/logic/LogicCommandEvent.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/NoteColorUtils.h"
@@ -105,7 +108,7 @@ bool testPaletteRestoredAfterSessionClose()
     // 零时间步只消费状态，不依赖播放时间推进或等待固定帧数。
     // 读取目标会话落地后的画笔状态，而非仅检查编辑器暂存的命令或配置。
     const auto& restored = session->getContext().brushState.customColors;
-    const bool  matches  = colorMatches(restored.tap, colors[0]) &&
+    const bool matches = colorMatches(restored.tap, colors[0]) &&
                          colorMatches(restored.head, colors[1]) &&
                          colorMatches(restored.hold, colors[2]) &&
                          colorMatches(restored.end, colors[3]) &&
@@ -298,7 +301,7 @@ bool testBackgroundCanvasMousePositionRouting()
     const auto& activeContext = activeSession->getContext();
     // 同时检查目标收到事件、非目标未被污染，比只检查后台坐标更严格。
     const auto& backgroundContext = backgroundSession->getContext();
-    const bool  routed            = activeContext.mouseCameraId.empty() &&
+    const bool routed = activeContext.mouseCameraId.empty() &&
                         // 空相机标识是初始状态，用作活动会话未接收输入的证据。
                         backgroundContext.mouseCameraId == backgroundCameraId &&
                         backgroundContext.isMouseInCanvas &&
@@ -415,7 +418,7 @@ bool testSkinSelectionSurvivesPaletteRefresh()
         // 写入后清除内存选择，读取结果必须真正来自持久化文件。
         ok                                            = app.save();
         app.getEditorSettings().selectedSkinDirectory = "mmm-default";
-        ok                                            = app.load() && ok &&
+        ok = app.load() && ok &&
              app.getEditorSettings().selectedSkinDirectory == "rm";
     }
     // 测试结束恢复单例，后续会话及并发测试不继承本场景状态。
@@ -821,9 +824,9 @@ bool testPublishedActiveGestureState()
 
     // 异步读取必须在锁释放以前完成；故障路径也释放锁再回收任务。
     std::unique_lock sessionLock(engine.getSessionMutex());
-    auto             reader = std::async(std::launch::async,
-                             [&] { return engine.activeGestureState(); });
-    const bool       ready =
+    auto       reader = std::async(std::launch::async,
+                                   [&] { return engine.activeGestureState(); });
+    const bool ready =
         reader.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
     sessionLock.unlock();
     // 结果使用普通值，测试不在两个线程间分享 SessionContext 中的引用。
@@ -1005,6 +1008,97 @@ bool testToolbarTrackLayoutPublication()
     return usableWhileLocked && editsApplied && switchedCleanly;
 }
 
+/// @brief 核对移动工具栏播放状态发布与同索引替换后的命令归属。
+/// @return 长锁期间仍能读取状态，且只有当前活动代次的编辑命令被接受。
+/// @note 作用域内逐个关闭会话，避免把活动状态留给随后使用引擎单例的测试。
+/// @note 使用正式的逻辑事件订阅路由，覆盖 UI 载荷中的代次跨层传递。
+bool testActivePlaybackStatePublication()
+{
+    auto& engine = MMM::Logic::EditorEngine::instance();
+    // 前面场景已逐个关闭会话。本夹具使用两张内存谱面复现零号索引被复用，
+    // 不依赖真实音频设备或工作区写盘。
+    auto firstMap                            = std::make_shared<MMM::BeatMap>();
+    auto secondMap                           = std::make_shared<MMM::BeatMap>();
+    firstMap->m_baseMapMetadata.track_count  = 5;
+    secondMap->m_baseMapMetadata.track_count = 8;
+    // 两张谱面的键数不同，错误返回某个固定默认值不能通过读模型检查。
+    const auto first = engine.createSession(firstMap, "Mobile source", false);
+    const auto firstSession = engine.getActiveSession();
+    firstSession->update(0, engine.getEditorConfig(), true);
+    engine.setActiveSessionIndex(first);
+
+    // 把首次载入后的快照保留下来，后面用它区分创建和切回原谱面的两次发布。
+    const auto original = engine.activePlaybackState();
+    const auto second = engine.createSession(secondMap, "Mobile target", false);
+    // 新活动谱面的加载命令还未消费，按钮应同时撤回旧轨数和旧播放位。
+    const auto loading       = engine.activePlaybackState();
+    const auto secondSession = engine.getActiveSession();
+    // 先让邻接谱面载入，关闭活动首项后应立即显示邻接谱面的真实键数。
+    secondSession->update(0, engine.getEditorConfig(), true);
+    engine.setActiveSessionIndex(first);
+    // 移动弹层和逻辑事件都以这个代次为基准，之前的初始快照只用于比较载入过程。
+    // 此刻引擎已经切回首项，所见状态必须属于首项，即使第二张谱面已经可以播放。
+    const auto openedPopup = engine.activePlaybackState();
+
+    // 读状态期间故意占有会话锁；超时后解锁以允许回收任务和报告错误。
+    std::unique_lock holdSessionLock(engine.getSessionMutex());
+    auto reader = std::async(std::launch::async,
+                             [&] { return engine.activePlaybackState(); });
+    // 完成条件在持锁期间观察；解锁后读取结果不能掩盖错误的长锁等待。
+    const bool returned =
+        reader.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+    holdSessionLock.unlock();
+    const auto whileLocked = reader.get();
+
+    // 删除活动首项后，相邻谱面成为零号项。如果继续比较索引就会误投旧命令。
+    engine.closeSession(first, false);
+    const auto replacement = engine.activePlaybackState();
+    const bool reusedIndex = engine.getActiveSessionIndex() == first &&
+                             engine.getActiveSession() == secondSession &&
+                             second != first;
+    // 夹具持有两张原会话的引用，索引相同和对象相同仍是可分辨的条件。
+    auto& events = MMM::Event::EventBus::instance();
+    events.publish(MMM::Event::LogicCommandEvent(
+        MMM::Logic::CmdUpdateTrackCount{ 3 }, openedPopup.generation));
+    // 旧代次只应拒绝本次触屏命令，不能影响新会话队列及原有可撤销迁移。
+    secondSession->update(0, engine.getEditorConfig(), true);
+    const bool ignoredOld = secondSession->getContext().trackCount == 8;
+    // 以当前代次再次经过同一事件入口作阳性对照，不能通过丢弃所有触屏命令过关。
+    events.publish(MMM::Event::LogicCommandEvent(
+        MMM::Logic::CmdUpdateTrackCount{ 7 }, replacement.generation));
+    secondSession->update(0, engine.getEditorConfig(), true);
+    // 检查消费后的权威轨数。队列中有请求与会话已实际执行编辑是两个条件。
+    const bool acceptedNew = secondSession->getContext().trackCount == 7;
+    // 最后关闭仍沿用被复用的零号槽，结果必须撤回谱面而非恢复到旧对象。
+    engine.closeSession(first, false);
+    // 关闭会话是同步入口，完整撤回应在它返回时可见，无需等一次逻辑轮询。
+    const auto empty = engine.activePlaybackState();
+
+    // 查验代次与状态一起切换，后台重索引时不能混入先前的谱面键数。
+    const bool published =
+        original.playerTracks == 5 && loading.playerTracks == 0 &&
+        !loading.playing && loading.generation != original.generation &&
+        openedPopup.playerTracks == 5 && !openedPopup.playing &&
+        replacement.playerTracks == 8 &&
+        replacement.generation != openedPopup.generation &&
+        empty.playerTracks == 0 && !empty.playing &&
+        empty.generation != replacement.generation;
+    // 及时返回和返回正确值独立检查，提前返回全零快照也算失败。
+    const bool readable = returned && whileLocked == openedPopup;
+    // 分开打印失败阶段，便于辨别读发布错误和代次路由错误。
+    if ( !published || !readable || !reusedIndex || !ignoredOld ||
+         !acceptedNew )
+        XERROR(
+            "Playback state regression: state={}, read={}, reuse={}, stale={}, "
+            "current={}",
+            published,
+            readable,
+            reusedIndex,
+            ignoredOld,
+            acceptedNew);
+    return published && readable && reusedIndex && ignoredOld && acceptedNew;
+}
+
 }  // namespace
 
 /// @brief 运行画笔调色盘跨会话恢复测试。
@@ -1023,6 +1117,7 @@ int main()
                    testLatestCanvasFocusRequest() &&
                    testPublishedActiveGestureState() &&
                    testToolbarTrackLayoutPublication() &&
+                   testActivePlaybackStatePublication() &&
                    testCameraConfigSnapshot() &&
                    testConcurrentEditorConfigSnapshots()
                ? 0
