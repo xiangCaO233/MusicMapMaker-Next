@@ -65,6 +65,9 @@ add_library(
   # 谱面设置按真实共享引用选择副本，预检不修改其他格式谱面。
   src/logic/SharedResourceRenameService.cpp
   # 音频时间描述和视觉时钟仍属于编辑逻辑，底层播放能力通过 Audio 依赖获得。
+  # 冷切换只在后台准备 PCM，活动结果由编辑逻辑提交。
+  # 准备任务的状态由 Logic 持有，复用现有 Runtime 与 Audio 的依赖目标。
+  src/logic/audio/CanvasAudioPreparation.cpp
   src/logic/audio/AudioTimelineDescriptor.cpp
   src/logic/audio/PlaybackVisualClock.cpp
   src/logic/PreviewDensity.cpp

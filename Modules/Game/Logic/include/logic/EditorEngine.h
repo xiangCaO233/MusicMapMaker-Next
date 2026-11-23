@@ -43,11 +43,6 @@ namespace MMM::Common::Render
 class RenderSnapshotBuffer;
 }
 
-namespace MMM::Audio
-{
-struct PreparedAudioTimeline;
-}
-
 namespace MMM::Common
 {
 struct EditorTrackLayout;

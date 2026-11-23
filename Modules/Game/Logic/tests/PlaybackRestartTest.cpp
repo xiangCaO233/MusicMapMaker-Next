@@ -6,16 +6,20 @@
 #include "config/EditorSettings.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "logic/audio/CanvasAudioPreparation.h"
 #include "logic/session/PlaybackController.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <ice/thread/ThreadPool.hpp>
 #include <limits>
 #include <memory>
+#include <thread>
 
 namespace
 {
@@ -40,6 +44,100 @@ bool nearGain(float lhs, float rhs)
 {
     // 不能使用时间比较的微秒级容差要求量化增益逐位一致。
     return std::abs(lhs - rhs) < 4e-5F;
+}
+
+/// @brief 在测试中等待后台准备结果可由逻辑侧消费。
+/// @param preparation 受测的单项任务状态。
+/// @return 在测试截止时间前观察到就绪时返回 true。
+/// @note 截止时间只用于避免失败测试永久等待，生产推进不等待工作线程。
+/// @pre 测试已推进一次请求并发起准备，此时就绪表示后台结果返回。
+/// @details 不使用固定延时猜测后台任务是否完成，测试线程独占结果消费权。
+bool waitForCanvasAudioResult(
+    const MMM::Logic::CanvasAudioPreparation& preparation)
+{
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    // 工作线程只返回描述事件的准备结果，不会写测试持有的 SessionContext。
+    do {
+        if ( preparation.needsAdvance() ) return true;
+        std::this_thread::yield();
+    } while ( std::chrono::steady_clock::now() < deadline );
+    return false;
+}
+
+/// @brief 验证切换代次和资源指纹能分别使后台结果失效。
+/// @details 使用正式线程池与准备函数，空事件表不依赖设备或音频文件。
+/// 每次修改目标后才允许测试显式提交结果，工作线程完成快慢不影响顺序。
+/// @note 即使 AudioManager 尚未初始化，它也返回包含错误的准备结果，
+/// 因此测试仍覆盖拒绝旧结果以及消费当前任务的完整分支。
+/// @return 两种旧结果均被跳过，最终可结束等待并回收工作线程时返回 true。
+bool testCanvasAudioPreparationRejectsStaleResults()
+{
+    // 测试采用独立最小工作池，不更改应用的共享池或单例启动顺序。
+    ice::ThreadPool                    pool(4);
+    MMM::Logic::CanvasAudioPreparation preparation;
+    MMM::Logic::SessionContext         first, second;
+    first.currentBeatmap  = std::make_shared<MMM::BeatMap>();
+    second.currentBeatmap = std::make_shared<MMM::BeatMap>();
+    // 指纹相同的两张谱面只在目标代次上有区别，必须拒绝前一张的结果。
+    first.audioTimelineDescriptor.m_fingerprint  = "same-resource";
+    second.audioTimelineDescriptor.m_fingerprint = "same-resource";
+    first.isAudioTimelineDescriptorDirty         = false;
+    second.isAudioTimelineDescriptorDirty        = false;
+    // 直接提供构造好的描述而非依赖谱面路径，避免重建指纹掩盖代次断言。
+    second.isActiveSession = true;
+
+    preparation.defer(first, true);
+    // 首次推进只有待办，提交阶段不应在准备前就结束等待。
+    const bool firstDeferred = !preparation.advance(&first, nullptr, &pool) &&
+                               first.m_waitingForCanvasAudio;
+    // 模拟换谱。旧任务仍然占用工作槽，下一份请求只替换当前意图。
+    preparation.invalidate(&first);
+    preparation.defer(second, true);
+    // 第一份结果的有效标志如果泄漏到第二份请求，第二张谱面会过早解除等待。
+    const bool waitedFirst = waitForCanvasAudioResult(preparation);
+    const bool rejectedOldCanvas =
+        waitedFirst && !preparation.advance(&second, nullptr, &pool) &&
+        second.m_waitingForCanvasAudio && !first.m_waitingForCanvasAudio &&
+        !first.m_playWhenCanvasAudioReady;
+
+    // 第一份就绪结果被消费后才提交第二份。此时只编辑资源身份，
+    // 不切换活动画布，因而只能靠指纹比较拦住第二份旧结果。
+    second.audioTimelineDescriptor.m_fingerprint = "edited-resource";
+    // 等就绪后仍以同一个会话对象推进，确保拒绝只来自当前指纹变化。
+    const bool waitedSecond =
+        rejectedOldCanvas && waitForCanvasAudioResult(preparation);
+    const bool rejectedOldFingerprint =
+        waitedSecond && !preparation.advance(&second, nullptr, &pool) &&
+        second.m_waitingForCanvasAudio;
+    // 准备期间的最后一次暂停应覆盖进入画布时的续播意图。
+    MMM::Logic::PlaybackController controller(second);
+    controller.handleCommand(MMM::Logic::CmdSetPlayState{ false });
+    // 播放位保持关闭，独立的续播意图必须立即撤回，无需等待设备状态改变。
+    const bool pausedWhileWaiting = !second.m_playWhenCanvasAudioReady;
+    const bool waitedCurrent =
+        rejectedOldFingerprint && waitForCanvasAudioResult(preparation);
+    if ( waitedCurrent ) {
+        // 空音频后端可报告安装失败。当前任务仍必须解除等待和自动激活，
+        // 避免进入无限的重新调度或在下一轮改走同步解码。
+        (void)preparation.advance(&second, nullptr, &pool);
+    }
+    // 同时检查自动激活和任务槽，防止仅隐藏等待状态而留下下一轮重试。
+    const bool currentFinished =
+        waitedCurrent && !second.m_waitingForCanvasAudio &&
+        !second.isAudioTimelineActivationPending && !second.isPlaying &&
+        !preparation.needsAdvance();
+    // 即使前面的断言失败，也先结束可能仍在运行的任务再析构工作池。
+    preparation.finishWorker();
+    // 判定前已归还后台任务，失败不会让后续进程退出卡在同一工作槽。
+    if ( !firstDeferred || !rejectedOldCanvas || !rejectedOldFingerprint ||
+         !pausedWhileWaiting || !currentFinished ) {
+        XERROR(
+            "Canvas audio preparation used a stale result or left work "
+            "pending");
+        return false;
+    }
+    return true;
 }
 
 /// @brief 验证自然结束标志会在下一次播放请求前先回到零点。
@@ -781,6 +879,7 @@ int main()
     // 短路返回保留首个失败日志，不能从未执行的后续用例推断它们已经通过。
     return testZeroAndMultipleSampleDescriptors() &&
                    testTimelineSwitchUsesMainAudioSyncFingerprint() &&
+                   testCanvasAudioPreparationRejectsStaleResults() &&
                    testNaturalFinishSnapshotArmsRestart() &&
                    testNonFinishedStopDoesNotArmRestart() &&
                    testFollowerUsesRebasedSourceClock() &&

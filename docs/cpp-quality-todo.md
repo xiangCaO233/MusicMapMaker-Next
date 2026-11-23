@@ -140,7 +140,7 @@
     | `Modules/Game/UI/src/ui/workspace/MobilePlaybackControls.cpp` | 159 | 366 | 30.29% |
     | `Modules/Game/UI/src/ui/workspace/MobileWorkspacePresentation.cpp` | 372 | 866 | 30.05% |
 
-  - 已完成桌面播放命令路由批次。播放、定位、倍速与音高使用独立发布的活动会话目标，不获取会话更新锁。控件只有实际提交命令时才短暂保活目标，由原队列和播放控制器消费。代次与目标一起发布，关图及同索引更换后拒绝旧代次。移动端带代次的键数编辑继续经过项目写入门禁。画布切换中的音频准备职责仍待收敛。
+  - 已完成桌面播放命令路由批次。播放、定位、倍速与音高使用独立发布的活动会话目标，不获取会话更新锁。控件只有实际提交命令时才短暂保活目标，由原队列和播放控制器消费。代次与目标一起发布，关图及同索引更换后拒绝旧代次。移动端带代次的键数编辑继续经过项目写入门禁。
   - Linux Debug 32 线程构建、全部 218 项 CTest 及 Android ARM64 NDK 编辑引擎编译通过。回归检查会话锁占用时的四类命令投递、定位拖动阶段、试听倍速和音高生效、索引复用及最后一个会话关闭。Ninja 活动对象中 `SessionContext.h`、`BeatmapSession.h` 和 `EditorEngine.h` 的扇出仍为 70、51 和 97。
   - 桌面播放命令批次逐文件注释率
 
@@ -150,6 +150,20 @@
     | `Modules/Game/Logic/src/logic/EditorEngine.cpp` | 1731 | 4026 | 30.07% |
     | `Modules/Game/Logic/src/logic/EditorEngine_Impl.h` | 81 | 79 | 50.62% |
     | `Modules/Game/Logic/tests/BrushPaletteSessionStateTest.cpp` | 336 | 783 | 30.03% |
+
+  - 已完成画布切换音频准备批次。编辑引擎消费焦点意图，`CanvasAudioPreparation` 管理单项后台准备、提交和退出回收。活动目标改变或资源指纹变化使旧结果失效；播放定位和续播意图在提交时读取。关闭、重置或新建画布会撤销旧目标的等待和续播标记。同步工作区恢复继续使用现有激活入口。时间线弹层和设置页等仍有直接访问会话锁及上下文的路径。
+  - Linux Debug 32 线程构建、全部 218 项 CTest 及 Android ARM64 NDK 编辑引擎、准备组件编译通过。相关回归覆盖同指纹换画布、当前画布资源变化、等待期间暂停及不可用后端的收尾。Ninja 活动对象中 `SessionContext.h` 扇出由 70 增至 71，新增依赖来自准备组件的实现；`BeatmapSession.h` 与 `EditorEngine.h` 仍为 51 和 97。
+  - 画布切换音频准备批次逐文件注释率
+
+    | 文件 | 注释行 | 代码行 | 比例 |
+    | --- | ---: | ---: | ---: |
+    | `Modules/Game/Logic/CMakeLists.txt` | 146 | 339 | 30.10% |
+    | `Modules/Game/Logic/include/logic/EditorEngine.h` | 373 | 249 | 59.97% |
+    | `Modules/Game/Logic/include/logic/audio/CanvasAudioPreparation.h` | 29 | 41 | 41.43% |
+    | `Modules/Game/Logic/src/logic/EditorEngine.cpp` | 1709 | 3958 | 30.16% |
+    | `Modules/Game/Logic/src/logic/EditorEngine_Impl.h` | 76 | 73 | 51.01% |
+    | `Modules/Game/Logic/src/logic/audio/CanvasAudioPreparation.cpp` | 49 | 110 | 30.82% |
+    | `Modules/Game/Logic/tests/PlaybackRestartTest.cpp` | 255 | 593 | 30.07% |
 
 - [ ] **PERF-06 P3 离屏几何容量扩张在命令录制阶段等待全 GPU 空闲**
 
