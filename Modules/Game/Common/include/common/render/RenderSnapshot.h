@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -35,6 +36,9 @@ enum class CanvasComponentType : std::uint8_t;
 
 namespace MMM::Common::Render
 {
+/// @brief 格式化索引定义只供生成端和读取端使用。
+struct BeatTimeIndex;
+
 using Logic::ChartObjectKind;
 using Logic::EditTool;
 using Logic::NoteColorSlot;
@@ -145,8 +149,12 @@ struct RenderSnapshot {
     std::vector<TimingInterpolationElement> timingInterpolations;
     /// @brief 可选画布组件的逐实例渲染与布局边界。
     std::vector<CanvasComponentInstanceSnapshot> canvasComponentInstances;
-    /// @brief UI 时间换算使用的全量 ScrollCache 分段副本。
+    /// @brief 供部分交互视图定位任意滚动位置的分段副本。
     std::vector<ScrollSegment> scrollSegments;
+    /// @brief BPM 修订对应的独立拍号索引，可为空。
+    /// @warning 跨线程快照持有修订，使旧画面在编辑或关闭谱面后仍可读取。
+    /// 普通帧只借用索引；生产槽仅在换代时变更所有权，避免每帧原子引用计数。
+    std::shared_ptr<const BeatTimeIndex> m_beatTimeIndex;
 
     /// @brief 主画布玩家区本帧实际绘出的分拍线，不包含悬浮临时细分线。
     std::vector<PlayerBeatLineSnapshot> playerBeatLines;
@@ -329,7 +337,7 @@ struct RenderSnapshot {
     double  hoveredNoteTime{ 0.0 };  // 悬浮物件的精确时间戳
     int32_t hoveredNoteTrack{ 0 };   ///< 悬浮物件精确部件所在轨道
     int     hoveredBeatIndex{
-            0
+        0
     };  // 当前悬浮时间点所在的拍序 (从首个BPMTiming开始)
     int hoveredNoteBeatIndex{ 0 };  // 悬浮物件所在的拍序
     /// @brief 当前悬浮物件的结构化检视信息
@@ -497,9 +505,13 @@ struct RenderSnapshot {
     }
 
     /// @brief 清理当前快照业务数据并保留动态容器容量。
+    /// @param beatTimeIndex 新快照使用的 BPM 修订；清空快照时采用空值。
     /// @warning 逻辑热路径复用入口；只能由当前拥有该快照的线程调用。
-    void clear()
+    void clear(const std::shared_ptr<const BeatTimeIndex>& beatTimeIndex = {})
     {
+        // 同一修订在同一个快照槽中复用所有权，已发布的旧槽可独立存活。
+        if ( m_beatTimeIndex != beatTimeIndex ) m_beatTimeIndex = beatTimeIndex;
+
         // 首先清空 GPU 几何、绘制批次和交互几何，保留各 vector 容量。
         vertices.clear();
         indices.clear();

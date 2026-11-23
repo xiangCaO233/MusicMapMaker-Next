@@ -42,13 +42,17 @@
   - 已验证。焦点先交给逻辑线程，稳定相机身份与时间线指纹用于丢弃过期准备结果。后台执行解码和 DSP，焦点滚动走快照路由，停用旧调度无需等设备回调。仍由设备使用的旧调度留待后续调度提交或关闭时回收。
   - Linux RelWithDebInfo 主工程全量构建通过。BrushPaletteSessionStateTest 覆盖会话锁被占用时的非阻塞请求及快速请求合并。AudioManagerTimelineIntegrationTest 使用真实音频样本和 SDL 虚拟输出，覆盖后台 DSP、显式提交和非阻塞停用。PlaybackRestartTest 与 CanvasTouchNavigationTest 通过。
 
-- [ ] **PERF-03 P2 按拍号显示时间时，每帧多次重建并排序完整 BPM 数组**
+- [x] **PERF-03 P2 按拍号显示时间时，每帧多次重建并排序完整 BPM 数组**
 
   - 热路径入口：`Modules/Game/UI/src/ui/imgui/MainDockSpaceUI_StatusBar.cpp:289-291` 每帧格式化当前/总时间，`:313-315` 悬停再格式化一次；`Modules/Game/Canvas/src/PreviewCanvas.cpp:531`、`Modules/Game/Canvas/src/TimelineCanvas.cpp:650`、音频分析视图 `AudioSpectrumView.cpp:861` / `AudioWaveformView.cpp:592` 也调用快照重载。
   - 调用链：`Modules/Game/UI/src/ui/utils/TimeFormatUtils.cpp:286-292` pair 重复调用单值函数；Beat preference 在 `:228-229` 转发 `formatBeatTime`，`:198` 每次 `collectBpmPoints`；`:55-76` 扫描全部 `scrollSegments`、分配 vector、完整 sort 和 unique。
   - 后果：仅状态栏每帧至少两次 O(B log B)，悬停再加一次；多窗口叠加后与 BPM 数量和帧率相关。代码 warning 声称不是每帧批量路径，实际调用链违反该假设。
   - 整改：复用已有 `CanvasTimeFormatContext` 重载（`:207-211`）；按会话/BPM 修订构建归一化节点与前缀累计拍数，普通帧仅二分并格式化。不要按每帧 RenderSnapshot 地址失效缓存，否则播放发布会持续重建。
   - 验收：Beat preference 下用大量 BPM 节点谱面同时打开状态栏、时间线、预览、频谱/波形；统计 collect/sort 次数，时间推进/悬停时应为零，BPM 修改后每修订重建一次；与原结果对照负时间、同时间 BPM、分拍边界。
+
+  - 已验证。逻辑侧随 BPM 缓存修订构建一次不可变索引，按原有规则累计每段整拍；各视口的快照槽仅在换修订时接管索引。状态栏、时间线、预览、频谱和波形的拍号显示只二分查询，滚动映射及快照地址改变均不触发重建。
+  - Linux RelWithDebInfo 全量构建通过。BeatIndexTest、TimeFormatUtilsTest、CanvasCameraTest、ComparisonCanvasTest、CanvasTouchNavigationTest、PlaybackRestartTest、AnnotationTableBeatPositionTest、AnnotationExportTest 通过。8192 节点用例覆盖 128 轮复用、编辑后一次重建和旧快照保活；格式回归覆盖负时间、同刻、分拍及无滚动段的视口。未采集实际多窗口播放的帧耗时。
+  - 本项注释／代码行数：BeatTimeIndex.h 8/14，RenderSnapshot.h 179/375，SessionContext.h 134/253，BeatmapSession_Rendering.cpp 661/1523，SessionUtils.cpp 456/1065，BeatIndexTest.cpp 61/138，TimeFormatUtils.h 59/50，TimeFormatUtils.cpp 89/196，TimeFormatUtilsTest.cpp 48/111。各文件均达到 30%。
 
 - [x] **PERF-04 P2 Shift 持续按下时，快捷键扫描仍会等待完整会话 update 的递归锁**
 

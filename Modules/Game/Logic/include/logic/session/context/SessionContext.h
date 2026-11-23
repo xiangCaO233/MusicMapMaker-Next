@@ -38,6 +38,12 @@ class BeatMap;
 class Project;
 }  // namespace MMM
 
+namespace MMM::Common::Render
+{
+/// @brief 仅在发布及计算端需要 BPM 索引完整定义。
+struct BeatTimeIndex;
+}  // namespace MMM::Common::Render
+
 namespace MMM::Logic
 {
 
@@ -235,6 +241,9 @@ struct SessionContext {
     bool isBpmEventsDirty{ true };  ///< BPM 缓存脏标记
     /// @brief BPM 缓存每次重建后递增的版本，供跨控制器消费方识别变化。
     std::uint64_t bpmEventsRevision{ 0U };
+    /// @brief 与 BPM 缓存同批重建的只读拍号索引；没有可用节点时为空。
+    /// @warning 旧渲染快照独立持有上一修订；逻辑线程只在脏分支替换本句柄。
+    std::shared_ptr<const Common::Render::BeatTimeIndex> m_beatTimeIndex;
     bool isHitEventsDirty{ false };  ///< 打击事件序列是否需要按音符变更重建
     bool isNoteOrderDirty{ true };   ///< 音符排序缓存是否需要完整重建
     bool isNotePruneDirty{ false };  ///< 音符排序缓存是否只需剔除失效实体

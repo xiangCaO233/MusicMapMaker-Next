@@ -2,11 +2,14 @@
 /// @brief 验证四位秒小数、累计分钟及共享时钟格式的数值边界。
 #include "ui/utils/TimeFormatUtils.h"
 #include "common/ClockTimeText.h"
+#include "common/render/BeatTimeIndex.h"
+#include "common/render/RenderSnapshot.h"
 #include "config/EditorSettings.h"
 #include "log/colorful-log.h"
 
 #include <array>
 #include <limits>
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -106,6 +109,49 @@ bool testPreferences()
                                     TimeFormatPreference::Milliseconds,
                                     nullptr) == "12346 ms";
 }
+/// @brief 仅有 BPM 索引的快照仍能格式化前奏、变速边界和分拍。
+/// @return 所有标签与分拍配置均消费同一修订，且无需完整滚动数据时为真。
+/// @details 累计值由生产者提供，此用例只验证 UI 对区间的选择和格线量化。
+/// 构造不带 ScrollSegment 的快照，模拟预览等无需完整滚动映射的视口。
+bool testSnapshotBeatTime()
+{
+    using MMM::Common::Render::BeatTimeIndex;
+    using MMM::Common::Render::RenderSnapshot;
+    using MMM::UI::Utils::TimeFormatDetail::formatBeatTime;
+    auto index = std::make_shared<BeatTimeIndex>();
+    // 首段从负时间开始，三段分别用 120、60、240 BPM。
+    // 前一段完成三拍，第二段完成两拍；累计值来自生产端。
+    index->m_points = { { -0.5, 120.0, 0 },
+                        { 1.0, 60.0, 3 },
+                        { 3.0, 240.0, 5 } };
+    // 单个索引承载全部标签，输入时刻改变时仍共享相同的节点列表。
+    RenderSnapshot snapshot;
+    snapshot.m_beatTimeIndex    = index;
+    snapshot.currentBeatDivisor = 4;
+    // 首节点前的整拍、分拍进位、同刻进入新段及变化后的分数分别校验。
+    // 跨节点的期望值显式计算，用来区分选错区间与段内舍入错误。
+    // 接近负时间首段的拍尾时，分拍舍入仍要进到下一拍。
+    const std::array cases{
+        ClockCase{ -1.0, "-1 + 0/1" },  ClockCase{ -0.5, "1 + 1/1" },
+        ClockCase{ -0.375, "1 + 1/4" }, ClockCase{ -0.03, "2 + 1/1" },
+        ClockCase{ 1.0, "4 + 1/1" },    ClockCase{ 1.5, "4 + 1/2" },
+        ClockCase{ 3.0, "6 + 1/1" },    ClockCase{ 3.125, "6 + 1/2" },
+    };
+    for ( const auto& item : cases ) {
+        const auto text = formatBeatTime(item.m_seconds, &snapshot);
+        if ( text != item.m_expected ) {
+            XERROR("Beat format mismatch: {} / expected {}",
+                   text,
+                   item.m_expected);
+            return false;
+        }
+    }
+    // 分拍偏好独立于 BPM 修订，更新查询参数即可看到变化。
+    // 八分拍偏好不产生新 BPM 修订，仅改变段内格线的量化。
+    snapshot.currentBeatDivisor = 8;
+    return formatBeatTime(3.03125, &snapshot) == "6 + 1/8" &&
+           snapshot.scrollSegments.empty();
+}
 }  // namespace
 
 /// @brief 运行不依赖窗口、音频和文件系统的时间显示回归。
@@ -114,5 +160,5 @@ int main()
 {
     // 不写文件、不需要计时等待；返回值是本组回归的唯一成功依据。
     // 实际判定线绘制及批注导出另由各模块既有测试检查最终入口。
-    return testClock() && testPreferences() ? 0 : 1;
+    return testClock() && testPreferences() && testSnapshotBeatTime() ? 0 : 1;
 }

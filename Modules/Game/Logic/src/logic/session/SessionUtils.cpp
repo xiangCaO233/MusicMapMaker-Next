@@ -2,6 +2,7 @@
 
 #include "audio/AudioManager.h"
 #include "common/ComparisonCanvas.h"
+#include "common/render/BeatTimeIndex.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/NoteComponent.h"
@@ -15,6 +16,7 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <vector>
 
@@ -1400,7 +1402,61 @@ void syncHitIndex(SessionContext& ctx)
     ctx.nextBoundSoundPrefetchIndex = ctx.nextHitIndex;
 }
 
-/// @brief 仅在脏状态下重新收集 BPM 组件并按时间稳定排序。
+namespace
+{
+/// @brief 从有序 BPM 节点生成供所有渲染视口共享的拍号索引。
+/// @param events 当前修订的 BPM 组件，按时间升序排列。
+/// @return 独立于组件生命周期的索引；无有效节点或累计不可表示时为空。
+/// @warning 仅在 BPM 缓存标脏后调用。普通逻辑轮次不得重新遍历节点或分配索引。
+/// @note 分拍参数与节点无关，由 UI 使用当前帧配置即时换算。
+/// @note 数据源是实际 BPM，滚动缩放和普通播放不会改变已发布的拍号前缀。
+/// @pre 有限时间升序；同刻采用稳定的组件收集顺序。
+std::shared_ptr<const Common::Render::BeatTimeIndex> buildBeatTimeIndex(
+    const std::vector<const TimelineComponent*>& events)
+{
+    if ( events.empty() ) return {};
+
+    auto  index  = std::make_shared<Common::Render::BeatTimeIndex>();
+    auto& points = index->m_points;
+    // 每个组件最多生成一个节点，预留后只存数值，不借用 ECS 地址。
+    points.reserve(events.size());
+    for ( const auto* event : events ) {
+        const double time = event->m_timestamp;
+        // 非有限时间不能参与按时间二分，也不能用于累计拍数。
+        if ( !std::isfinite(time) ) continue;
+        const double bpm = ::MMM::normalizeBpmValue(event->m_value);
+        // ScrollCache 在同一时刻保留最后应用的真实 BPM 节点。
+        // 格式化原先在此基础上对近时刻节点去重，保留首个时刻及其有效值。
+        std::int64_t completedBeats = 0;
+        if ( !points.empty() ) {
+            auto&        previous = points.back();
+            const double elapsed  = time - previous.m_time;
+            if ( elapsed == 0.0 ) {
+                previous.m_bpm = bpm;
+                continue;
+            }
+            // 非同刻节点落入去重容差时，维持上一节点的时间及 BPM。
+            if ( elapsed < 1e-6 ) continue;
+            // 各段仍按自己的 BPM 和时长独立舍入，避免累计小数改变段首编号。
+            const double beats = std::round(elapsed / (60.0 / previous.m_bpm));
+            // 单段和全局前缀均需能表示；失败时显示端回退为普通秒数。
+            if ( beats >= 0x1p63 ) return {};
+            const auto segmentBeats = static_cast<std::int64_t>(beats);
+            if ( std::numeric_limits<std::int64_t>::max() -
+                     previous.m_completedBeats <
+                 segmentBeats )
+                return {};
+            completedBeats = previous.m_completedBeats + segmentBeats;
+        }
+        points.push_back({ time, bpm, completedBeats });
+    }
+    // 无有效节点时与无 BPM 同样回退普通秒数，不保留空索引的独立所有权。
+    if ( points.empty() ) return {};
+    return index;
+}
+}  // namespace
+
+/// @brief 仅在脏状态下收集并稳定排序 BPM 组件，同批发布拍号索引。
 /// @param ctx 提供时间线 Registry、借用指针缓存及其脏标记。
 /// @note 缓存借用注册表组件地址，组件生命周期变化必须同步标记此缓存失效。
 /// @pre 由会话串行访问，重建期间不可删除或搬移时间线组件。
@@ -1424,8 +1480,13 @@ void ensureBpmEvents(SessionContext& ctx)
         ctx.bpmEvents.begin(),
         ctx.bpmEvents.end(),
         [](const TimelineComponent* a, const TimelineComponent* b) {
-            return a->m_timestamp < b->m_timestamp;
+            // 非有限时间放在完整有序的有限区间之后，避免 NaN 破坏严格弱序。
+            const bool lhsFinite = std::isfinite(a->m_timestamp);
+            const bool rhsFinite = std::isfinite(b->m_timestamp);
+            return lhsFinite && (!rhsFinite || a->m_timestamp < b->m_timestamp);
         });
+    // 索引与这次排序共用节点来源。先构建新表，再替换会话持有的上一修订。
+    ctx.m_beatTimeIndex = buildBeatTimeIndex(ctx.bpmEvents);
     // 排序完成后再发布版本；即使其他工具先清了脏标记，播放调度仍可发现变化。
     // 版本只在真实重建时推进，普通逻辑轮次不会无端重置节拍器预约。
     ++ctx.bpmEventsRevision;
