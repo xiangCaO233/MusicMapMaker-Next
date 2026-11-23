@@ -7,13 +7,19 @@
 
 #include <array>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <curl/curl.h>
+#include <expected>
 #include <fstream>
+#include <functional>
+#include <limits>
+#include <mbedtls/sha256.h>
+#include <memory>
 #include <miniz.h>
 #include <nlohmann/json.hpp>
-#include <sstream>
 #include <string>
 #include <system_error>
 
@@ -43,30 +49,8 @@ constexpr const char* kLocalVersionFileName = ".mmm-assets-version";
 /// @note 固定标识便于服务端区分资源同步流量和普通浏览器请求。
 constexpr const char* kAssetUserAgent = "MusicMapMaker-AssetSync/1.0";
 
-/// @brief SHA256 初始哈希值。
-/// @note 八个 32 位常量来自 SHA-256 标准初始状态，顺序不可调整。
-constexpr std::array<std::uint32_t, 8> kSha256InitialState{
-    0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU,
-    0x510e527fU, 0x9b05688cU, 0x1f83d9abU, 0x5be0cd19U
-};
-
-/// @brief SHA256 轮常量。
-/// @note 每个 512 位消息块执行 64 轮时按索引使用，数值必须保持标准定义。
-constexpr std::array<std::uint32_t, 64> kSha256RoundConstants{
-    0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U, 0x3956c25bU,
-    0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U, 0xd807aa98U, 0x12835b01U,
-    0x243185beU, 0x550c7dc3U, 0x72be5d74U, 0x80deb1feU, 0x9bdc06a7U,
-    0xc19bf174U, 0xe49b69c1U, 0xefbe4786U, 0x0fc19dc6U, 0x240ca1ccU,
-    0x2de92c6fU, 0x4a7484aaU, 0x5cb0a9dcU, 0x76f988daU, 0x983e5152U,
-    0xa831c66dU, 0xb00327c8U, 0xbf597fc7U, 0xc6e00bf3U, 0xd5a79147U,
-    0x06ca6351U, 0x14292967U, 0x27b70a85U, 0x2e1b2138U, 0x4d2c6dfcU,
-    0x53380d13U, 0x650a7354U, 0x766a0abbU, 0x81c2c92eU, 0x92722c85U,
-    0xa2bfe8a1U, 0xa81a664bU, 0xc24b8b70U, 0xc76c51a3U, 0xd192e819U,
-    0xd6990624U, 0xf40e3585U, 0x106aa070U, 0x19a4c116U, 0x1e376c08U,
-    0x2748774cU, 0x34b0bcb5U, 0x391c0cb3U, 0x4ed8aa4aU, 0x5b9cca4fU,
-    0x682e6ff3U, 0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U,
-    0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U
-};
+/// @brief 资源校验的固定读取粒度，也是取消查询之间最多处理的字节数。
+constexpr std::size_t ASSET_HASH_READ_BYTES = 32U * 1024U;
 
 /// @brief libcurl 字符串写回调。
 /// @details 响应可能分多次到达，按显式字节数追加到调用方字符串；返回完整消费
@@ -379,152 +363,87 @@ bool readFileBytes(const std::filesystem::path& path,
     return file.good() || (bytes.empty() && file.eof());
 }
 
-/// @brief SHA256 右旋。
-/// @details SHA-256 的大写 Sigma 与小写 sigma 函数都由该 32 位循环右移构成。
-/// @param value 要旋转的工作字。
-/// @param bits 右旋位数，算法调用保证位于 1～31。
-/// @return 保留全部位的循环右移结果。
-std::uint32_t sha256RotateRight(std::uint32_t value, std::uint32_t bits)
+/// @brief 校验未完成时，区分读取或计算失败与主动取消。
+enum class AssetDigestError {
+    Failed,     ///< 文件或摘要无效，调用方需按校验失败处理。
+    Cancelled,  ///< 调用方请求中止，禁止生成更新计划或发布文件。
+};
+
+/// @brief 顺序读取普通文件并生成规范化 SHA-256；取消会丢弃部分摘要。
+/// @param path 待读取的文件。
+/// @param cancellationCallback 可选取消查询，在首块和各块之间执行。
+/// @return 完整小写摘要，或用于调用方区分取消与失败的错误。
+/// @warning 后台资源同步路径，执行文件读取及摘要计算；不在 UI 热路径使用。
+/// @note 不把未完成的摘要交给调用方；读取错误、意外短读和取消都不进入
+/// finalize。
+/// @note 一个固定 32 KiB 块在所有迭代间复用，不随文件大小增长。
+std::expected<std::string, AssetDigestError> hashAssetFile(
+    const std::filesystem::path& path,
+    const std::function<bool()>& cancellationCallback = {})
 {
-    return (value >> bits) | (value << (32U - bits));
-}
+    if ( cancellationCallback && cancellationCallback() )
+        return std::unexpected(AssetDigestError::Cancelled);
 
-/// @brief 从 4 个字节读取大端 32 位整数。
-/// @details SHA-256 消息字固定使用网络字节序，与主机端序无关。
-std::uint32_t readBigEndian32(const std::uint8_t* bytes)
-{
-    return (static_cast<std::uint32_t>(bytes[0]) << 24U) |
-           (static_cast<std::uint32_t>(bytes[1]) << 16U) |
-           (static_cast<std::uint32_t>(bytes[2]) << 8U) |
-           static_cast<std::uint32_t>(bytes[3]);
-}
+    // 记录读取前大小，只用来验证读取完整性，不据此申请内存。
+    // SHA-256 的原始长度字段最多 64 位，避免极端文件尺寸导致位数回卷。
+    std::error_code sizeError;
+    auto            remaining = std::filesystem::file_size(path, sizeError);
+    if ( sizeError ||
+         remaining > std::numeric_limits<std::uint64_t>::max() / 8U )
+        return std::unexpected(AssetDigestError::Failed);
 
-/// @brief 向输出缓冲区写入大端 32 位整数。
-/// @details 最终八个状态字按标准顺序序列化为 32 字节摘要。
-void writeBigEndian32(std::uint32_t value, std::uint8_t* bytes)
-{
-    bytes[0] = static_cast<std::uint8_t>((value >> 24U) & 0xffU);
-    bytes[1] = static_cast<std::uint8_t>((value >> 16U) & 0xffU);
-    bytes[2] = static_cast<std::uint8_t>((value >> 8U) & 0xffU);
-    bytes[3] = static_cast<std::uint8_t>(value & 0xffU);
-}
+    // 资源清单签的是原始字节，Windows 也必须绕开文本模式的换行转换。
+    std::ifstream input(path, std::ios::binary);
+    if ( !input ) return std::unexpected(AssetDigestError::Failed);
 
-/// @brief 计算内存数据的 SHA256。
-/// @details
-/// 按 SHA-256 标准追加 0x80、零填充和 64 位大端原始比特长度，再逐个 512 位块
-/// 扩展 64 个消息字并执行压缩轮。最终摘要转换为固定 64 位小写十六进制文本。
-/// 本实现服务资源清单和测试，不依赖平台加密库的可用性。
-/// @par 填充不变量
-/// - bitLength 始终记录原始输入而非填充后长度。
-/// - 0x80 是原始消息后的首个填充字节。
-/// - 长度字段开始位置在块内偏移 56。
-/// - 填充后总长度必为 64 的整数倍。
-/// @par 压缩不变量
-/// - 每块前 16 个消息字按大端读取。
-/// - 后 48 个字只依赖标准递推位置。
-/// - 八个工作变量使用 32 位无符号模加法。
-/// - 每块结果累加到上一块链状态。
-/// - 最终八个状态字按大端顺序输出。
-/// @param input 要哈希的完整字节序列。
-/// @return 规范化 SHA-256 摘要。
-std::string sha256Bytes(const std::vector<std::uint8_t>& input)
-{
-    // 在副本尾部填充，调用方原始资源内容保持不变。
-    std::vector<std::uint8_t> data = input;
-    // 长度字段记录填充前的比特数。
-    const std::uint64_t bitLength =
-        static_cast<std::uint64_t>(data.size()) * 8ULL;
+    mbedtls_sha256_context context;
+    mbedtls_sha256_init(&context);
+    // 上下文由本函数在栈上持有，释放器覆盖读取失败、取消和正常完成。
+    const std::unique_ptr<mbedtls_sha256_context,
+                          decltype(&mbedtls_sha256_free)>
+        cleanup(&context, &mbedtls_sha256_free);
+    // 参数零选择清单所需的 256 位模式；SHA-224 也使用同一套更新接口。
+    if ( mbedtls_sha256_starts(&context, 0) != 0 )
+        return std::unexpected(AssetDigestError::Failed);
 
-    data.push_back(0x80U);
-    // 每块最后八字节预留给原始长度，因此填充到模 64 等于 56。
-    while ( (data.size() % 64U) != 56U ) {
-        data.push_back(0U);
+    // 每轮只读一块，短尾块也用 gcount 输入；EOF 本身不代表文件完整。
+    // 比较预期剩余字节数可以识别读取期间截短或增长的文件。
+    std::array<unsigned char, ASSET_HASH_READ_BYTES> block;
+    // 整块文件也要再读取一次以确认 EOF；不能仅凭已读大小忽略后来追加的数据。
+    do {
+        input.read(reinterpret_cast<char*>(block.data()),
+                   static_cast<std::streamsize>(block.size()));
+        // 在处理本块之前查询，从而覆盖最后一次读取到摘要完成之间的取消。
+        if ( cancellationCallback && cancellationCallback() )
+            return std::unexpected(AssetDigestError::Cancelled);
+
+        // 错误与正常短尾块分开处理，防止对损坏输入只哈希前面连续可读的字节。
+        const auto count = static_cast<std::size_t>(input.gcount());
+        if ( input.bad() || (input.fail() && !input.eof()) ||
+             count > remaining )
+            return std::unexpected(AssetDigestError::Failed);
+        if ( count != 0 &&
+             mbedtls_sha256_update(&context, block.data(), count) != 0 )
+            return std::unexpected(AssetDigestError::Failed);
+        remaining -= count;
+    } while ( !input.eof() );
+
+    // 流可对被截短的文件报告正常 EOF；只有字节计数才能区分这种短读。
+    if ( remaining != 0 ) return std::unexpected(AssetDigestError::Failed);
+
+    // 只在完整消费输入后结束摘要。库在此追加末尾填充，不需要复制文件。
+    std::array<unsigned char, 32> digest;
+    if ( mbedtls_sha256_finish(&context, digest.data()) != 0 )
+        return std::unexpected(AssetDigestError::Failed);
+
+    // 两个十六进制字符固定对应一个摘要字节，不依赖进程区域设置。
+    constexpr char HEX_DIGITS[] = "0123456789abcdef";
+    std::string    result(digest.size() * 2U, '0');
+    for ( std::size_t index = 0; index < digest.size(); ++index ) {
+        result[index * 2U]      = HEX_DIGITS[digest[index] >> 4U];
+        result[index * 2U + 1U] = HEX_DIGITS[digest[index] & 0x0fU];
     }
-    for ( int shift = 56; shift >= 0; shift -= 8 ) {
-        // 从最高字节开始写入 64 位大端长度。
-        data.push_back(static_cast<std::uint8_t>((bitLength >> shift) & 0xffU));
-    }
-
-    auto state = kSha256InitialState;
-    // 每个块独立建立消息调度表，再累加到全局链状态。
-    for ( std::size_t offset = 0; offset < data.size(); offset += 64U ) {
-        std::array<std::uint32_t, 64> words{};
-        for ( std::size_t i = 0; i < 16U; ++i ) {
-            // 前 16 个字直接来自当前消息块的大端输入。
-            words[i] = readBigEndian32(data.data() + offset + i * 4U);
-        }
-        for ( std::size_t i = 16U; i < 64U; ++i ) {
-            // 后 48 个字按标准小 sigma 递推扩展。
-            const std::uint32_t s0 = sha256RotateRight(words[i - 15U], 7U) ^
-                                     sha256RotateRight(words[i - 15U], 18U) ^
-                                     (words[i - 15U] >> 3U);
-            const std::uint32_t s1 = sha256RotateRight(words[i - 2U], 17U) ^
-                                     sha256RotateRight(words[i - 2U], 19U) ^
-                                     (words[i - 2U] >> 10U);
-            words[i]               = words[i - 16U] + s0 + words[i - 7U] + s1;
-        }
-
-        std::uint32_t a = state[0];
-        // 工作变量复制当前链状态，64 轮结束后再整体累加。
-        std::uint32_t b = state[1];
-        std::uint32_t c = state[2];
-        std::uint32_t d = state[3];
-        std::uint32_t e = state[4];
-        std::uint32_t f = state[5];
-        std::uint32_t g = state[6];
-        std::uint32_t h = state[7];
-
-        for ( std::size_t i = 0; i < 64U; ++i ) {
-            // 计算选择函数、主函数及两组大 Sigma 的轮结果。
-            const std::uint32_t s1 = sha256RotateRight(e, 6U) ^
-                                     sha256RotateRight(e, 11U) ^
-                                     sha256RotateRight(e, 25U);
-            const std::uint32_t ch = (e & f) ^ ((~e) & g);
-            const std::uint32_t tmp1 =
-                h + s1 + ch + kSha256RoundConstants[i] + words[i];
-            const std::uint32_t s0   = sha256RotateRight(a, 2U) ^
-                                       sha256RotateRight(a, 13U) ^
-                                       sha256RotateRight(a, 22U);
-            const std::uint32_t maj  = (a & b) ^ (a & c) ^ (b & c);
-            const std::uint32_t tmp2 = s0 + maj;
-
-            h = g;
-            // 工作变量按标准管线移位，e 与 a 注入本轮临时和。
-            g = f;
-            f = e;
-            e = d + tmp1;
-            d = c;
-            c = b;
-            b = a;
-            a = tmp1 + tmp2;
-        }
-
-        state[0] += a;
-        // 当前块压缩结果与上一块链状态按 32 位模加法合并。
-        state[1] += b;
-        state[2] += c;
-        state[3] += d;
-        state[4] += e;
-        state[5] += f;
-        state[6] += g;
-        state[7] += h;
-    }
-
-    std::array<std::uint8_t, 32> digest{};
-    // 八个状态字按大端写入最终 32 字节摘要。
-    for ( std::size_t i = 0; i < state.size(); ++i ) {
-        writeBigEndian32(state[i], digest.data() + i * 4U);
-    }
-
-    std::ostringstream stream;
-    // 每个字节固定输出两位并以零补齐，得到可比较的小写文本。
-    stream << std::hex;
-    for ( const auto byte : digest ) {
-        stream.width(2);
-        stream.fill('0');
-        stream << static_cast<int>(byte);
-    }
-    return stream.str();
+    return result;
 }
 
 /// @brief 下载文本响应。
@@ -871,8 +790,10 @@ std::string readLocalVersionFile(const std::filesystem::path& assetsRootPath)
 /// @details
 /// 先验证清单相对路径和根目录边界，再检查普通文件、可选大小及最终 SHA-256。
 /// 任一文件系统错误都保守视为过期，避免跳过需要修复的资源。
-bool isAssetFileOutdated(const AssetFileEntry&        file,
-                         const std::filesystem::path& assetsRootPath)
+/// @return 文件是否需要更新；空值表示校验期间取消。
+std::optional<bool> isAssetFileOutdated(
+    const AssetFileEntry& file, const std::filesystem::path& assetsRootPath,
+    const std::function<bool()>& cancellationCallback = {})
 {
     if ( !isSafeRelativeAssetPath(file.path) ) return true;
 
@@ -893,22 +814,25 @@ bool isAssetFileOutdated(const AssetFileEntry&        file,
         if ( sizeError || localSize != file.size ) return true;
     }
 
-    const auto localSha256 = AssetSyncService::sha256File(localPath);
-    // 哈希读取失败返回空串，也自然判定为过期。
-    return localSha256 != file.sha256;
+    const auto localSha256 = hashAssetFile(localPath, cancellationCallback);
+    // 中途取消必须逐层传播，不能把它当成过期文件并开始下载。
+    if ( !localSha256 && localSha256.error() == AssetDigestError::Cancelled )
+        return std::nullopt;
+    return !localSha256 || *localSha256 != file.sha256;
 }
 
 /// @brief 收集本地缺失或变更文件，并向启动 UI 汇报校验进度。
 /// @details 按清单顺序逐项检查，每项开始前响应取消并发布当前文件索引；返回值
 /// 保持清单顺序，供后续下载进度使用稳定序号。
-std::vector<AssetFileEntry> collectOutdatedFilesWithProgress(
+/// @return 完整更新计划；取消后废弃任何部分结果。
+std::optional<std::vector<AssetFileEntry>> collectOutdatedFilesWithProgress(
     const AssetManifest& manifest, const std::filesystem::path& assetsRootPath,
     const AssetSyncOptions& options)
 {
     std::vector<AssetFileEntry> outdatedFiles;
     for ( std::size_t index = 0; index < manifest.files.size(); ++index ) {
-        // 取消后保留已收集内容但调用方会立即返回统一取消结果。
-        if ( isCancellationRequested(options) ) break;
+        // 取消是本次检查的终态，不需要调用方再次查询同一回调。
+        if ( isCancellationRequested(options) ) return std::nullopt;
 
         const auto& file = manifest.files[index];
         emitProgress(options,
@@ -920,9 +844,11 @@ std::vector<AssetFileEntry> collectOutdatedFilesWithProgress(
                          index + 1,
                          manifest.files.size(),
                      });
-        if ( isAssetFileOutdated(file, assetsRootPath) ) {
-            outdatedFiles.push_back(file);
-        }
+        const auto outdated = isAssetFileOutdated(
+            file, assetsRootPath, options.cancellationCallback);
+        // 取消后即使已找到其他过期文件，也不能发布部分更新计划。
+        if ( !outdated ) return std::nullopt;
+        if ( *outdated ) outdatedFiles.push_back(file);
     }
     return outdatedFiles;
 }
@@ -1012,11 +938,16 @@ AssetSyncResult downloadFullPackage(const AssetSyncOptions& options,
 
     if ( !packageSha256.empty() ) {
         // 摘要在 parseManifest 中已规范化，直接与实际小写 SHA-256 比较。
-        const auto actualSha256 = AssetSyncService::sha256File(tempZipPath);
-        if ( actualSha256 != packageSha256 ) {
+        const auto actualSha256 =
+            hashAssetFile(tempZipPath, options.cancellationCallback);
+        if ( !actualSha256 &&
+             actualSha256.error() == AssetDigestError::Cancelled )
+            return cancelledResult();
+        if ( !actualSha256 || *actualSha256 != packageSha256 ) {
             result.status       = AssetSyncStatus::kError;
             result.errorMessage = "Asset package checksum mismatch; expected " +
-                                  packageSha256 + ", got " + actualSha256;
+                                  packageSha256 + ", got " +
+                                  actualSha256.value_or("");
             return result;
         }
     }
@@ -1227,13 +1158,15 @@ AssetSyncResult updateFromManifest(const AssetSyncOptions& options,
                      0,
                      manifest.files.size(),
                  });
+    // 使用可取消的校验路径；已有匹配文件也可能在扫描大型内容时收到取消。
     auto outdatedFiles = collectOutdatedFilesWithProgress(
         manifest, options.assetsRootPath, options);
 
-    // 收集函数遇取消只提前停止遍历，外层必须在使用部分结果前检查。
-    if ( isCancellationRequested(options) ) return cancelledResult();
+    // 空 optional 表示已在检查中取消；空列表才代表校验成功且无需更新。
+    if ( !outdatedFiles || isCancellationRequested(options) )
+        return cancelledResult();
 
-    if ( outdatedFiles.empty() ) {
+    if ( outdatedFiles->empty() ) {
         // 全部摘要匹配时刷新版本标记，后续启动可以跳过精确哈希。
         writeLocalVersionFile(options.assetsRootPath, manifest.version);
         emitProgress(options,
@@ -1249,9 +1182,10 @@ AssetSyncResult updateFromManifest(const AssetSyncOptions& options,
         return result;
     }
 
-    XINFO("AssetSync: updating {} changed asset file(s)", outdatedFiles.size());
+    XINFO("AssetSync: updating {} changed asset file(s)",
+          outdatedFiles->size());
 
-    for ( const auto& file : outdatedFiles ) {
+    for ( const auto& file : *outdatedFiles ) {
         // 文件边界响应取消，避免开始下一项下载。
         if ( isCancellationRequested(options) ) return cancelledResult();
 
@@ -1268,7 +1202,7 @@ AssetSyncResult updateFromManifest(const AssetSyncOptions& options,
                          0,
                          static_cast<std::int64_t>(file.size),
                          currentFileIndex,
-                         outdatedFiles.size(),
+                         outdatedFiles->size(),
                      });
 
         if ( !downloadFile(
@@ -1277,7 +1211,7 @@ AssetSyncResult updateFromManifest(const AssetSyncOptions& options,
                  result.errorMessage,
                  [&options,
                   currentFileIndex,
-                  totalFiles = outdatedFiles.size(),
+                  totalFiles = outdatedFiles->size(),
                   path       = file.path](std::int64_t downloaded,
                                     std::int64_t total) {
                      emitProgress(options,
@@ -1300,9 +1234,13 @@ AssetSyncResult updateFromManifest(const AssetSyncOptions& options,
         // 下载完成后、哈希前再次响应取消，避免无意义的大文件读取。
         if ( isCancellationRequested(options) ) return cancelledResult();
 
-        const auto actualSha256 = AssetSyncService::sha256File(tempPath);
+        const auto actualSha256 =
+            hashAssetFile(tempPath, options.cancellationCallback);
+        if ( !actualSha256 &&
+             actualSha256.error() == AssetDigestError::Cancelled )
+            return cancelledResult();
         // 单文件必须无条件具备清单摘要，任何不匹配都不能覆盖现有资源。
-        if ( actualSha256 != file.sha256 ) {
+        if ( !actualSha256 || *actualSha256 != file.sha256 ) {
             result.status       = AssetSyncStatus::kError;
             result.errorMessage = "Asset file checksum mismatch: " + file.path;
             return result;
@@ -1674,7 +1612,7 @@ std::vector<AssetFileEntry> AssetSyncService::collectOutdatedFiles(
     std::vector<AssetFileEntry> outdatedFiles;
     // 不因单个错误中止，完整收集所有需要更新的条目。
     for ( const auto& file : manifest.files ) {
-        if ( isAssetFileOutdated(file, assetsRootPath) ) {
+        if ( isAssetFileOutdated(file, assetsRootPath).value_or(true) ) {
             outdatedFiles.push_back(file);
         }
     }
@@ -1819,18 +1757,14 @@ bool AssetSyncService::extractZipArchive(
 }
 
 /// @brief 计算普通文件的规范化 SHA-256 文本。
-/// @details 当前实现完整读取文件后复用内存哈希；读取失败返回空字符串，调用方
-/// 将其视为摘要不匹配而不会接受文件。
-/// @note 该实现会按文件大小分配内存，只应在后台资源检查和下载验证路径调用。
-/// @note 返回格式与清单 normalizeSha256 的成功输出完全一致。
+/// @details
+/// 复用资源同步的固定块摘要。公开入口无取消回调，维持失败返回空字符串。
 /// @param path 要校验的文件。
-/// @return 64 位小写十六进制摘要；读取失败时为空。
+/// @return 64 位小写十六进制摘要；读取或计算失败时为空。
 std::string AssetSyncService::sha256File(const std::filesystem::path& path)
 {
-    // bytes 只在本函数存活，哈希完成后自动释放大文件缓冲。
-    std::vector<std::uint8_t> bytes;
-    if ( !readFileBytes(path, bytes) ) return {};
-    return sha256Bytes(bytes);
+    // 更新器等原有消费者只需要成功摘要或空值，错误分类留给可取消路径。
+    return hashAssetFile(path).value_or("");
 }
 
 }  // namespace MMM::Network
