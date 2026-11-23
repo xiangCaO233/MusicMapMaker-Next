@@ -10,13 +10,13 @@
 #include "logic/EditorEngine.h"
 #include "logic/RenderSyncRegistry.h"
 #include "logic/SessionRegistry.h"
+#include "logic/audio/CanvasAudioPreparation.h"
 #include "mmm/project/AudioTrackType.h"
 
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <future>
 #include <glm/vec4.hpp>
 #include <memory>
 #include <mutex>
@@ -50,19 +50,8 @@ struct EditorEngine::Impl {
     std::atomic<std::uint64_t> m_activeCanvasRequestRevision{ 0U };
     /// @brief 逻辑线程已处理的最新邮箱修订。
     std::uint64_t m_consumedActiveCanvasRevision{ 0U };
-    /// @brief 仅逻辑线程保存当前准备任务；停止逻辑线程后先回收再关闭音频。
-    std::future<std::shared_ptr<Audio::PreparedAudioTimeline>>
-        m_canvasAudioPreparation;
-    /// @brief 准备任务使用的稳定相机身份。
-    std::string m_preparingCamera;
-    /// @brief 准备任务使用的时间线指纹。
-    std::string m_preparingTimelineFingerprint;
-    /// @brief 将同一相机的 A→B→A 识别为新事务。
-    std::uint64_t m_preparingCanvasRevision{ 0U };
-    /// @brief 每次活动目标变化时失效；仅在会话锁下递增。
-    std::uint64_t m_canvasAudioGeneration{ 0U };
-    /// @brief 仅当活动画布需要音频时才轮询会话锁和后台就绪状态。
-    bool m_hasPendingCanvasAudio{ false };
+    /// @brief 活动画布音频准备任务以及结果提交约束。
+    CanvasAudioPreparation m_canvasAudioPreparation;
 
     /// @brief 多画布会话注册表，封装 Session 列表、活跃索引和 cameraId 分配。
     SessionRegistry m_sessionRegistry;
