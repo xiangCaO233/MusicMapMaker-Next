@@ -813,29 +813,35 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         anchorBpm                                  = ev.bpm;
     }
 
-    auto getBpmAtBeat = [&](double beat) {
-        double curBpm =
-            bpmEvents.empty() ? getInitialBpm() : bpmEvents.front().bpm;
-        for ( const auto& ev : bpmEvents ) {
-            if ( ev.beat > beat + 1e-9 ) break;
-            curBpm = ev.bpm;
-        }
-        return curBpm;
+    /// @brief 查找在目标拍生效的最后一个 BPM 锚点。
+    /// @return 早于首锚点且超出容差时返回空指针。
+    auto findBpmAnchor = [&](double beat) -> const BpmEvent* {
+        // 与线性扫描沿用同一个拍位容差，避免接近整数拍时落入较早分段。
+        // upper_bound 跨过整组同拍事件；稳定排序保证最后一个为来源顺序的末项。
+        const auto firstAfter =
+            std::upper_bound(bpmEvents.begin(),
+                             bpmEvents.end(),
+                             beat + 1e-9,
+                             [](double limit, const BpmEvent& event) {
+                                 return limit < event.beat;
+                             });
+        return firstAfter == bpmEvents.begin() ? nullptr : &*(firstAfter - 1);
     };
+
+    /// @brief 查询效果事件所在拍位的 BPM，首锚点前沿用首个 BPM。
+    auto getBpmAtBeat = [&](double beat) {
+        if ( const auto* anchor = findBpmAnchor(beat) ) return anchor->bpm;
+        return bpmEvents.empty() ? getInitialBpm() : bpmEvents.front().bpm;
+    };
+
+    /// @brief 以最近 BPM 锚点换算绝对毫秒，保留原有首锚点相位和负拍外推。
     auto getAbsTime = [&](double beat) {
-        const BpmEvent* relative = nullptr;
-        for ( const auto& ev : bpmEvents ) {
-            if ( ev.beat > beat + 1e-9 ) break;
-            relative = &ev;
+        if ( bpmEvents.empty() ) {
+            return beat * (60000.0 / getInitialBpm());
         }
-        if ( relative == nullptr ) {
-            if ( bpmEvents.empty() ) {
-                return beat * (60000.0 / getInitialBpm());
-            }
-            const auto& first = bpmEvents.front();
-            return first.timestamp +
-                   (beat - first.beat) * (60000.0 / first.bpm);
-        }
+        const auto* relative = findBpmAnchor(beat);
+        // 首锚点以前也必须保留该锚点的 delay 或成对音频相位。
+        if ( !relative ) relative = &bpmEvents.front();
         return relative->timestamp +
                (beat - relative->beat) * (60000.0 / relative->bpm);
     };
@@ -1274,9 +1280,9 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
     // 更新谱面元数据
     basemeta.name             = fmt::format("[mc] {} [{}] {}",
-                                            basemeta.title,
-                                            basemeta.track_count,
-                                            basemeta.version);
+                                basemeta.title,
+                                basemeta.track_count,
+                                basemeta.version);
     beatMap.m_baseMapMetadata = basemeta;
 
     // 最终同步引用
