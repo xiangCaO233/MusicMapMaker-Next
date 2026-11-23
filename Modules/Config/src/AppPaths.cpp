@@ -1,4 +1,5 @@
 #include "config/AppPaths.h"
+#include "config/ExecutablePath.h"
 #include "config/Utf8Path.h"
 
 #include <cstdint>
@@ -20,43 +21,6 @@
 
 namespace MMM::Config
 {
-
-namespace
-{
-
-/// @brief 应用在 .config 下使用的子目录名。
-constexpr const char* kAppConfigDirectoryName = "mmm";
-
-/// @brief 用户配置基础目录名。
-constexpr const char* kBaseConfigDirectoryName = ".config";
-
-/// @brief 用户全局配置文件名。
-constexpr const char* kUserConfigFileName = "user_config.json";
-
-/// @brief ImGui 窗口布局配置文件名。
-constexpr const char* kImguiIniFileName = "imgui.ini";
-
-/// @brief 用户资源包目录名。
-constexpr const char* kAssetsDirectoryName = "assets";
-
-/// @brief 用户资源包中的皮肤目录名。
-constexpr const char* kSkinsDirectoryName = "skins";
-
-/// @brief 用户资源包中的默认翻译目录名。
-constexpr const char* kTranslationsDirectoryName = "translations";
-
-/// @brief 用户插件目录名。
-constexpr const char* kPluginsDirectoryName = "plugins";
-
-/// @brief Lua 主题插件目录名。
-constexpr const char* kThemePluginsDirectoryName = "themes";
-
-/// @brief 默认资源包中的皮肤脚本相对路径。
-constexpr const char* kDefaultSkinRelativePath = "skins/mmm-default/skin.lua";
-
-/// @brief 默认资源包中的窗口图标相对路径。
-constexpr const char* kWindowIconRelativePath =
-    "skins/mmm-default/resources/image/logo.png";
 
 /// @brief 查询当前进程可执行文件的绝对路径。
 /// @return 查询成功时返回可执行文件路径，否则返回空路径。
@@ -111,6 +75,43 @@ std::filesystem::path currentExecutablePath()
     return {};
 #endif
 }
+
+namespace
+{
+
+/// @brief 应用在 .config 下使用的子目录名。
+constexpr const char* kAppConfigDirectoryName = "mmm";
+
+/// @brief 用户配置基础目录名。
+constexpr const char* kBaseConfigDirectoryName = ".config";
+
+/// @brief 用户全局配置文件名。
+constexpr const char* kUserConfigFileName = "user_config.json";
+
+/// @brief ImGui 窗口布局配置文件名。
+constexpr const char* kImguiIniFileName = "imgui.ini";
+
+/// @brief 用户资源包目录名。
+constexpr const char* kAssetsDirectoryName = "assets";
+
+/// @brief 用户资源包中的皮肤目录名。
+constexpr const char* kSkinsDirectoryName = "skins";
+
+/// @brief 用户资源包中的默认翻译目录名。
+constexpr const char* kTranslationsDirectoryName = "translations";
+
+/// @brief 用户插件目录名。
+constexpr const char* kPluginsDirectoryName = "plugins";
+
+/// @brief Lua 主题插件目录名。
+constexpr const char* kThemePluginsDirectoryName = "themes";
+
+/// @brief 默认资源包中的皮肤脚本相对路径。
+constexpr const char* kDefaultSkinRelativePath = "skins/mmm-default/skin.lua";
+
+/// @brief 默认资源包中的窗口图标相对路径。
+constexpr const char* kWindowIconRelativePath =
+    "skins/mmm-default/resources/image/logo.png";
 
 #ifdef _WIN32
 /// @brief 读取 Windows 宽字符环境变量并转换为文件系统路径。
