@@ -194,13 +194,17 @@
   - Linux RelWithDebInfo 全量构建及相关 6 项 CTest 通过，覆盖已知向量、读取和填充边界、读途中截短及一次性取消。32 MiB 与 3 GiB 稀疏文件的摘要均与 sha256sum 一致，实测进程峰值 RSS 分别为 12,292 KiB 和 12,248 KiB。
   - 注释／代码为 AssetSyncService.cpp 486/1132、AssetSyncServiceTest.cpp 348/811、Network/CMakeLists.txt 25/54，逐文件均达到 30%。
 
-- [ ] **FMT-04（P2）资产 ZIP 同时持有完整压缩包与完整解压条目，缺少展开预算**
+- [x] **FMT-04（P2）资产 ZIP 同时持有完整压缩包与完整解压条目，缺少展开预算**
 
   - 位置：`Modules/Network/src/AssetSyncService.cpp:1724-1734`、`:1795-1808`。
   - 调用链：下载包 SHA 校验后（:1013-1039）或本地包安装（:1112）→ `extractZipArchive` → 完整 ZIP `readFileBytes` → `mz_zip_reader_init_mem` → 每条 `mz_zip_reader_extract_to_heap`。
   - 当前行为：内存为压缩包大小加当前解压条目大小，单个大字体/图像/音频或高压缩比条目可在一次解压中占用大块内存。循环未依据 `fileStat` 检查单条/累计解压大小或条目数量预算；取消只在条目之间检查，单条大文件不可中断。已有路径安全检查不能替代资源规模限制。
   - 整改：文件 reader 加回调/文件流式解压，明确单条、总展开量和文件数预算；输出分块时检查取消，失败维持同步版本标记不提前发布。
   - 验收：合法大条目峰值内存有界；超预算压缩包在写满磁盘或大分配前拒绝；单条内取消可响应；目录穿越等既有路径约束保持。这里只证明资源预算问题，不推断其下载渠道已被攻击。
+
+  - ZIP 以原生路径打开，按偏移读取并按块解压。写盘前预检最多 10,000 个条目、单条 512 MiB、累计 4 GiB。miniz 单次工作缓冲分配上限为 16 MiB。每条文件在暂存区通过长度、CRC 和关闭检查后再重命名；块内取消保留原同名资源，整包失败不推进版本标记。
+  - Linux RelWithDebInfo 全量构建及 3 项资源相关回归通过，覆盖块内取消、暂存清理、重试与原有路径约束。独立进程探针中，160 MiB 条目解压前后 SHA-256 相同，峰值 RSS 由 169.4 降至 20.6 MiB。单条或累计超预算一字节均在创建输出目录前拒绝。
+  - 注释／代码：`AssetSyncService.cpp` 434/1012、`AssetZipExtraction.cpp` 103/240、`AssetPathSafety.h` 21/43、`AssetSyncServiceTest.cpp` 381/887、`Modules/Network/CMakeLists.txt` 25/56，均达到 30%。
 
 - [ ] **FMT-05（P3）离线音频时间线在无 DSP 情况下也强制所有资源完整驻留**
 
