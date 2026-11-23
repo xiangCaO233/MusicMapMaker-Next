@@ -26,15 +26,14 @@
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/DesktopPathUtils.h"
+#include "ui/utils/FileModifiedTime.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <ctime>
 #include <fmt/format.h>
 #include <imgui_internal.h>
 #include <optional>
@@ -263,49 +262,13 @@ std::string formatTypeColumn(const FileManagerView::DirectoryEntryInfo& entry)
                              : toLowerAscii(extension);
 }
 
-/// @brief 将文件系统时间转换为本地时间文本。
-/// @param time 文件系统时间。
-/// @return 本地时间文本，格式为 yyyy/mm/dd HH:MM。
-///
-/// C++ 文件时钟与 system_clock 纪元可能不同，先用两种 clock
-/// 的当前差值近似转换， 再调用线程安全平台本地时间
-/// API。格式化失败返回统一未知占位。
-std::string formatModifiedTime(std::filesystem::file_time_type time)
-{
-    // 以当前时刻对齐两个时钟，避免假设实现使用相同 epoch。
-    const auto systemTime =
-        std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-            time - std::filesystem::file_time_type::clock::now() +
-            std::chrono::system_clock::now());
-    // time_t 供平台 localtime_s/localtime_r 接口使用。
-    const std::time_t timeValue =
-        std::chrono::system_clock::to_time_t(systemTime);
-
-    std::tm localTime{};
-#ifdef _WIN32
-    // Windows 安全版本参数顺序为目标在前。
-    localtime_s(&localTime, &timeValue);
-#else
-    // POSIX 可重入版本不使用进程级静态 tm 缓冲。
-    localtime_r(&timeValue, &localTime);
-#endif
-
-    // 固定格式最大长度远小于 32 字节缓冲。
-    char buffer[32]{};
-    if ( std::strftime(buffer, sizeof(buffer), "%Y/%m/%d %H:%M", &localTime) ==
-         0 ) {
-        // 零返回表示缓冲不足或格式化失败。
-        return TR("ui.file_manager.value_unknown").data();
-    }
-    return buffer;
-}
-
 /// @brief 生成修改时间列显示文本。
 /// @param entry 文件树条目。
 /// @return 本地修改时间或未知占位。
 ///
 /// hasLastWriteTime
 /// 区分真实时间值与查询失败，避免默认构造时间被显示为有效日期。
+/// @note 文件树条目来自目录快照；显示失败不能把仍可浏览的条目从列表移除。
 std::string formatModifiedColumn(
     const FileManagerView::DirectoryEntryInfo& entry)
 {
@@ -313,7 +276,12 @@ std::string formatModifiedColumn(
         // 快照构建失败时统一显示未知。
         return TR("ui.file_manager.value_unknown").data();
     }
-    return formatModifiedTime(entry.lastWriteTime);
+    // 显示使用本地时间。原始 file_time_type 和有效位继续用于排序，
+    // 避免夏令时重复的分钟或日期显示精度改变各行的时间顺序。
+    auto text = Utils::formatFileModifiedTime(entry.lastWriteTime);
+    // 平台无法表达该时刻时，与读取文件属性失败共用同一个本地化占位。
+    if ( text.empty() ) return TR("ui.file_manager.value_unknown").data();
+    return text;
 }
 
 /// @brief 选择文件树条目图标。

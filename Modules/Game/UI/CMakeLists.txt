@@ -121,6 +121,8 @@ add_library(
   src/ui/brush/Brush.cpp
   src/ui/utils/DesktopPathUtils.cpp
   $<$<NOT:$<BOOL:${ANDROID}>>:${CMAKE_CURRENT_SOURCE_DIR}/src/ui/utils/NativeFileDialog.cpp>
+  # 文件列表共用本地时间转换，平台差异只在实现文件内处理。
+  src/ui/utils/FileModifiedTime.cpp
   src/ui/utils/TimeFormatUtils.cpp
   # 内置选择器的移动扩展只调整绘制，保留上游目录和结果协议。
   src/ui/utils/MobileFileDialog.cpp

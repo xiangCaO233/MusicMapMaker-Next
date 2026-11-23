@@ -113,12 +113,16 @@
   - 整改：给协议明确十进制语法并在该边界验证，或定义统一 helper 语法；不修改兼容性解析器的所有调用方。
   - 验收：同一组正负号、科学计数、十六进制、NaN/Inf、尾随垃圾和溢出输入，在 Apple 低部署目标与 Linux/Windows 上得到相同协议结果；保留合法历史剪贴板往返。
 
-- [ ] **PLAT-03（P2）三个 UI 时间格式化分支遗漏失败判断**
+- [x] **PLAT-03（P2）三个 UI 时间格式化分支遗漏失败判断**
 
   - 位置：`Modules/Game/UI/src/ui/imgui/manager/AudioManagerView.cpp:301-329`、`BeatMapManagerView.cpp:202-227`、`FileManagerView_Hierarchy.cpp:273-298`。
   - 行为：三个匿名 `formatModifiedTime` 重复文件时钟近似转换和 `_WIN32` 分支。`localtime_s`/`localtime_r` 返回值没有检查，失败后仍把零初始化 `tm` 交给 `strftime`，它可能成功产生一个看似有效的日期，绕过“未知”回退。
   - 整改：提取 UI 时间显示公共 helper，集中平台签名差异，时间转换失败直接返回未知。是否换成 `file_clock::to_sys` 要按各 Runner 标准库支持度决定，不能仅凭本机 C++20 标记推断。
   - 验收：正常/负纪元/不可表示时间、时区和夏令时边界统一；三处 UI 仍使用原始文件时刻排序；失败显示未知且不抛异常。
+
+  - 已验证。三个管理视图共用 `formatFileModifiedTime`，先以扩宽的秒数换算文件时钟与系统时钟，再检查 `time_t` 范围、本地时间转换和格式化结果。失败显示原有的本地化未知占位；排序仍使用原始时间和值的有效位。
+  - Linux RelWithDebInfo 全量构建及 8 项相关 CTest 通过。TimeFormatUtilsTest 覆盖普通时刻、纪元前后、不可表示的日历时间、时区改变与夏令时跳变。Windows 返回值已对照 Microsoft CRT 文档，Windows 和 macOS 原生运行尚未验证。
+  - 本项注释／代码行数：FileModifiedTime.h 7/13，FileModifiedTime.cpp 21/46，AudioManagerView.cpp 769/1791，BeatMapManagerView.cpp 398/927，FileManagerView_Hierarchy.cpp 631/1472，TimeFormatUtilsTest.cpp 70/159，UI/CMakeLists.txt 243/563。逐文件均达到 30%。
 
 - [ ] **PLAT-04（P2）Windows 命令行解析失败后可能读取未初始化数量**
 

@@ -29,6 +29,7 @@
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/layout/LayoutContext.h"
 #include "ui/layout/box/CLayBox.h"
+#include "ui/utils/FileModifiedTime.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -38,10 +39,8 @@
 #include <algorithm>
 #include <array>
 #include <cfloat>
-#include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <ctime>
 #include <filesystem>
 #include <fmt/format.h>
 #include <imgui_internal.h>
@@ -291,47 +290,6 @@ std::string formatFileSize(std::uintmax_t size)
     return TR_FMT("ui.file_manager.size_gib", value / gibi);
 }
 
-/// @brief 将文件系统时间转换为本地时间文本。
-/// @param time 文件系统时间。
-/// @return 本地时间文本，格式为 yyyy/mm/dd HH:MM。
-///
-/// file_time_type 与 system_clock
-/// 可能使用不同纪元，先以两种时钟当前差值近似转换，
-/// 再调用平台线程安全的本地时间 API。strftime 失败时显示未知。
-std::string formatModifiedTime(std::filesystem::file_time_type time)
-{
-    // 当前时刻对齐可在不假设 epoch 的情况下转换文件时间。
-    // 以两个时钟的当前时刻为锚点，平移输入时间到 system_clock 域。
-    const auto systemTime =
-        std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-            time - std::filesystem::file_time_type::clock::now() +
-            std::chrono::system_clock::now());
-    // 平台本地时间函数接受 time_t。
-    const std::time_t timeValue =
-        std::chrono::system_clock::to_time_t(systemTime);
-
-    // 零初始化目标结构，平台函数会覆盖有效字段。
-    std::tm localTime{};
-#ifdef _WIN32
-    // Windows 使用目标缓冲在前的安全版本。
-    localtime_s(&localTime, &timeValue);
-#else
-    // POSIX 可重入版本避免共享静态 tm。
-    localtime_r(&timeValue, &localTime);
-#endif
-
-    // 固定日期格式最大长度远小于缓冲区。
-    char buffer[32]{};
-    // 格式保持定长且不含秒，便于列宽预测和列表快速比较。
-    if ( std::strftime(buffer, sizeof(buffer), "%Y/%m/%d %H:%M", &localTime) ==
-         0 ) {
-        // 零返回值表示格式化失败或缓冲区不足，使用本地化未知值。
-        return TR("ui.file_manager.value_unknown").data();
-    }
-    // std::string 从栈缓冲复制结果，返回后不依赖局部数组生命周期。
-    return buffer;
-}
-
 /// @brief 生成文件大小列文本。
 /// @param hasSize 是否成功读取大小。
 /// @param size 文件大小字节数。
@@ -353,7 +311,11 @@ std::string formatSizeColumn(bool hasSize, std::uintmax_t size)
 /// @param lastWriteTime 文件修改时间。
 /// @return 修改时间或未知占位。
 ///
-/// 默认构造 file_time_type 可能表示有效纪元值，因此必须依赖显式有效位。
+/// @details 默认构造 file_time_type
+/// 可能表示有效纪元值，因此必须依赖显式有效位。
+/// 音频检测任务只采集文件属性，把本地时间格式化推迟到界面绘制。
+/// 行数据仍可按绝对修改时间排序；时区变化只影响下一次绘制的列文本。
+/// 列的分钟精度与其他资源管理器保持一致，避免同一文件出现不同标签。
 std::string formatModifiedColumn(bool hasLastWriteTime,
                                  std::filesystem::file_time_type lastWriteTime)
 {
@@ -361,8 +323,12 @@ std::string formatModifiedColumn(bool hasLastWriteTime,
         // 权限或文件消失造成的失败使用统一占位。
         return TR("ui.file_manager.value_unknown").data();
     }
-    // 仅将已验证的时间值交给本地时间转换。
-    return formatModifiedTime(lastWriteTime);
+    // 显示使用本地时间。原始 file_time_type 和有效位继续用于排序，
+    // 避免夏令时重复的分钟或日期显示精度改变各行的时间顺序。
+    auto text = Utils::formatFileModifiedTime(lastWriteTime);
+    // 平台无法表达该时刻时，与读取文件属性失败共用同一个本地化占位。
+    if ( text.empty() ) return TR("ui.file_manager.value_unknown").data();
+    return text;
 }
 
 /// @brief 比较两个可选数值。
