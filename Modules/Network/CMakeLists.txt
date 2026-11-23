@@ -1,6 +1,8 @@
 # Network 主库负责启动资源同步和版本更新检查。
-add_library(Network STATIC src/AssetSyncService.cpp src/UpdateChecker.cpp
-                           src/CurlHandle.cpp src/DownloadRouting.cpp)
+add_library(
+  Network STATIC
+  src/AssetSyncService.cpp src/AssetZipExtraction.cpp src/UpdateChecker.cpp
+  src/CurlHandle.cpp src/DownloadRouting.cpp)
 
 # 联机写谱作为 Network 的内部子模块，统一承载信令、P2P 传输和房间协议。
 add_subdirectory("Collaboration")

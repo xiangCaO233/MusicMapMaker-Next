@@ -511,6 +511,115 @@ int testExtractZipArchive()
     return fail;
 }
 
+/// @brief 用单条多块资源验证块内取消、旧文件保留和重试。
+/// @details 取消依据私有暂存文件开始增长，避免依赖回调次数或操作系统调度。
+/// 首次解压被中断时旧资源仍可读，完整重试才允许替换目标。
+/// @par 场景约束
+/// - 使用实际公共解压入口，包含目录预检、回调、CRC 和重命名。
+/// - 测试写入一次包，取消和重试读取同一份 ZIP。
+/// - 旧资源预先写在最终路径，取消后仍需按原身份读取。
+/// - 分块是否发生以磁盘暂存的有效前缀为准，与压缩率无关。
+/// - 重试不传取消回调，目标内容由完整展开结果替换。
+/// @return 暂存、取消和完整重试断言中的失败数。
+int testZipCancellationInsideEntry()
+{
+    int               fail   = 0;
+    const auto        root   = createTempRoot();
+    const auto        zip    = root / "assets.zip";
+    const auto        out    = root / "out";
+    const auto        target = out / "assets/large.txt";
+    const std::string contents(4U * 1024U * 1024U, 'z');
+    // 压缩后体积很小，解压后仍需经过多次输出回调。
+    fail += expectTrue(writeZipFile(zip, { { "assets/large.txt", contents } }),
+                       "write multiblock asset archive");
+    fail += expectTrue(writeTextFile(target, "previous"),
+                       "write existing resource");
+    // 独立记录实际观测到的前缀，防止未来仅凭返回状态判定块内取消通过。
+    bool        sawPartialEntry = false;
+    std::string error;
+    /// @brief 选择已经写出非空前缀、尚未写完整条目的取消时点。
+    const auto cancelDuringWrite = [&]() {
+        std::error_code ec;
+        // 观察被测目录里已经写出的暂存文件，因而不会在预检时提前取消。
+        std::filesystem::directory_iterator entries(target.parent_path(), ec);
+        // 早期调用只检查意图，缺少可观测的暂存文件时仍应让解压继续。
+        if ( ec ) return false;
+        for ( const auto& entry : entries ) {
+            if ( !entry.path().filename().string().starts_with(
+                     ".mmm-zip-entry-") )
+                continue;
+            // stream 尚未打开时文件可能不存在；在下一块之前再次检查。
+            // 条目完全写完后观察到的尺寸不能证明中途曾响应取消。
+            const auto written =
+                std::filesystem::file_size(entry.path() / "entry", ec);
+            sawPartialEntry = !ec && written > 0 && written < contents.size();
+            return sawPartialEntry;
+        }
+        return false;
+    };
+    fail += expectTrue(!AssetSyncService::extractZipArchive(
+                           zip, out, error, cancelDuringWrite) &&
+                           sawPartialEntry && error == "Asset sync cancelled",
+                       "cancels during a single file and reports cancellation");
+    // 当前调用只拥有临时条目，失败后不得截断已有文件或留下临时目录。
+    fail += expectTrue(readTextFile(target) == "previous",
+                       "cancelled write preserves existing resource");
+    std::error_code                     ec;
+    std::filesystem::directory_iterator entriesAfterCancel(target.parent_path(),
+                                                           ec);
+    // 父目录应仍存在，旧文件是其中唯一保留的目录项。
+    // 检查整个父目录可发现关闭失败或提前返回留下的临时条目。
+    // 在重试前执行此检查，避免下一次解压掩盖上一次泄漏。
+    if ( !ec ) {
+        for ( const auto& entry : entriesAfterCancel ) {
+            fail += expectTrue(entry.path() == target,
+                               "cancelled entry staging is removed");
+        }
+    } else {
+        ++fail;
+    }
+    // 重试沿用相同 ZIP 和目标，成功时既验证替换也验证每块内容连续。
+    fail += expectTrue(AssetSyncService::extractZipArchive(zip, out, error),
+                       "retry publishes complete entry");
+    fail += expectTrue(readTextFile(target) == contents,
+                       "streamed entry contains the complete original bytes");
+    // 最终统一回收 ZIP 与输出，取消分支的暂存清理已在重试前独立断言。
+    std::filesystem::remove_all(root, ec);
+    return fail;
+}
+
+/// @brief 用合法空文件验证归档条目预算先于任何输出。
+/// @details 每个空文件具有唯一名称，避免归档工具将同名记录折叠。
+/// ZIP 生成在独立根内，输出目录初始不存在，可独立观察拒绝前有无创建。
+/// 条目数仅高出一项，覆盖严格大于上限这一侧。
+/// 有效的中央目录必须先被打开，因而同时断言业务错误文本排除库级打开错误。
+/// 测试不计入源树资源，也不需要制作大文件或等待外部下载。
+/// @return 条目数量拒绝及其副作用断言的失败数。
+int testZipEntryCountBudget()
+{
+    int                                              fail = 0;
+    const auto                                       root = createTempRoot();
+    const auto                                       zip  = root / "assets.zip";
+    const auto                                       out  = root / "out";
+    std::vector<std::pair<std::string, std::string>> entries;
+    // 零字节文件不消耗展开字节预算，只能通过数量限制提前拒绝。
+    for ( std::size_t index = 0; index <= 10'000; ++index )
+        entries.emplace_back("assets/item-" + std::to_string(index), "");
+    // 只有 miniz 已成功构造归档时，拒绝结果才能归因于业务条目预算。
+    fail += expectTrue(writeZipFile(zip, entries),
+                       "write archive over entry-count limit");
+    std::string error;
+    fail += expectTrue(!AssetSyncService::extractZipArchive(zip, out, error) &&
+                           error == "Asset package contains too many entries",
+                       "rejects entry-count limit before creating output");
+    std::error_code ec;
+    // 文件系统查询本身也须成功，不能将访问错误当作没有输出。
+    fail += expectTrue(!std::filesystem::exists(out, ec) && !ec,
+                       "entry-count refusal leaves output untouched");
+    std::filesystem::remove_all(root, ec);
+    return fail;
+}
+
 /// @brief 测试已有本地资源时远程 manifest 不可用也允许启动。
 /// @return 降级状态或警告信息不符合预期的断言数量。
 /// @note 该路径保护离线启动，前提是关键本地皮肤资源已经存在。
@@ -1229,6 +1338,8 @@ int main(int argc, char** argv)
     fail += testCancelDuringAssetSha256();
     // ZIP 安全测试位于同步策略前，失败也不阻止后续临时场景清理自身。
     fail += testExtractZipArchive();
+    fail += testZipCancellationInsideEntry();
+    fail += testZipEntryCountBudget();
     // 同步策略按离线降级、版本快速路径、强制修复和进度顺序执行。
     fail += testSyncKeepsExistingAssetsWhenManifestUnavailable();
     fail += testSyncSkipsPreciseCheckWhenVersionMatches();

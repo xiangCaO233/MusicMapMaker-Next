@@ -1,4 +1,5 @@
 #include "network/AssetSyncService.h"
+#include "AssetPathSafety.h"
 #include "config/AppPaths.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
@@ -18,7 +19,6 @@
 #include <limits>
 #include <mbedtls/sha256.h>
 #include <memory>
-#include <miniz.h>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <system_error>
@@ -254,69 +254,10 @@ std::uint64_t jsonUnsignedField(const nlohmann::json& value, const char* key)
     return 0;
 }
 
-/// @brief 判断相对资源路径是否安全。
-/// @details
-/// 禁止绝对路径、Windows 反斜杠/盘符、空段、`.` 与 `..` 段，确保同一清单在
-/// 各平台解析为相同的项目内路径。该词法检查之后仍需结合实际根目录验证。
-/// @par 拒绝样式
-/// - `/absolute/path` 等 POSIX 绝对路径。
-/// - `\\server` 或包含反斜杠的 Windows 路径。
-/// - `C:/path` 或含冒号的驱动器、URI 形式。
-/// - `a//b`、`a/` 等含空路径段的形式。
-/// - `a/./b` 与 `a/../b` 等点段导航。
-/// @par 允许样式
-/// 只接受由非空普通段和正斜杠组成的相对资源路径；字符编码本身保持 UTF-8，
-/// 由 Config::utf8ToPath 在最终平台路径组合时转换。
-bool isSafeRelativeAssetPath(const std::string& path)
-{
-    if ( path.empty() || path.front() == '/' || path.front() == '\\' ) {
-        // 空路径和两种平台绝对路径起始符不能映射到资源根内文件。
-        return false;
-    }
-    if ( path.find('\\') != std::string::npos ||
-         path.find(':') != std::string::npos ) {
-        // 统一只接受正斜杠，并拒绝 Windows 驱动器或 URI 冒号。
-        return false;
-    }
-
-    std::size_t start = 0;
-    while ( start <= path.size() ) {
-        // 逐段检查同时拒绝连续斜杠和末尾斜杠产生的空段。
-        const std::size_t end     = path.find('/', start);
-        const auto        segment = path.substr(
-            start, end == std::string::npos ? std::string::npos : end - start);
-        // Windows 会规范化尾空格和尾点；先拒绝这些别名再检查组合路径。
-        if ( segment.empty() || segment.back() == ' ' ||
-             segment.back() == '.' ) {
-            return false;
-        }
-        if ( end == std::string::npos ) break;
-        start = end + 1;
-    }
-    return true;
-}
-
-/// @brief 判断目标路径是否仍处在根目录内。
-/// @details 两侧词法规范化后计算 target 相对 root 的路径；空结果、绝对结果或
-/// 任一 `..` 段都表示目标不是严格根内子项。
-bool isPathInsideRoot(const std::filesystem::path& root,
-                      const std::filesystem::path& target)
-{
-    const auto normalizedRoot   = root.lexically_normal();
-    const auto normalizedTarget = target.lexically_normal();
-    const auto relativePath =
-        normalizedTarget.lexically_relative(normalizedRoot);
-    // 资源必须是根内具体文件，根目录本身不算合法目标。
-    if ( relativePath.empty() || relativePath.is_absolute() ) return false;
-    for ( const auto& part : relativePath ) {
-        if ( part == ".." ) return false;
-    }
-    return true;
-}
-
 /// @brief 向文件写入字节。
-/// @details 先创建父目录，再以二进制截断模式完整写入；用于 ZIP 条目和 file URL
-/// 本地复制，不保留旧文件尾部。
+/// @details 先创建父目录，再以二进制截断模式完整写入；用于 file URL 本地复制，
+/// 不保留旧文件尾部。
+/// @note 下载调用者传入暂存路径，摘要通过后才替换已安装文件。
 bool writeBytesToFile(const std::filesystem::path& path, const void* data,
                       std::size_t size)
 {
@@ -795,11 +736,11 @@ std::optional<bool> isAssetFileOutdated(
     const AssetFileEntry& file, const std::filesystem::path& assetsRootPath,
     const std::function<bool()>& cancellationCallback = {})
 {
-    if ( !isSafeRelativeAssetPath(file.path) ) return true;
+    if ( !AssetPaths::isSafeRelativeAssetPath(file.path) ) return true;
 
     const auto localPath =
         (assetsRootPath / Config::utf8ToPath(file.path)).lexically_normal();
-    if ( !isPathInsideRoot(assetsRootPath, localPath) ) return true;
+    if ( !AssetPaths::isPathInsideRoot(assetsRootPath, localPath) ) return true;
     // 清单已检查过路径，仍以组合后的本地路径执行第二层逃逸防御。
 
     std::error_code regularFileError;
@@ -953,6 +894,9 @@ AssetSyncResult downloadFullPackage(const AssetSyncOptions& options,
     }
 
     // 归档约定自身包含 assets 顶层，解压目标因此是资源根的父目录。
+    // 下载包的摘要检查和解压预检均先于版本更新。预检通过后，各文件
+    // 独立发布，因此中途失败后可以保留已验证文件并由下一轮重新补全。
+    // 已解压的单条资源不足以判定整包安装成功，不能用来推进版本快路径。
     const auto destinationRoot = options.assetsRootPath.parent_path();
     emitProgress(options,
                  AssetSyncProgress{
@@ -968,6 +912,8 @@ AssetSyncResult downloadFullPackage(const AssetSyncOptions& options,
                                               destinationRoot,
                                               result.errorMessage,
                                               options.cancellationCallback) ) {
+        // 解压过程中可能已经完成较早的条目，版本文件仍表示上次成功安装。
+        // 上层使用同一取消查询区分主动退出与预算、格式和文件写入错误。
         if ( isCancellationRequested(options) ) return cancelledResult();
         result.status = AssetSyncStatus::kError;
         return result;
@@ -979,6 +925,7 @@ AssetSyncResult downloadFullPackage(const AssetSyncOptions& options,
 
     writeLocalVersionFile(options.assetsRootPath, result.remoteVersion);
     // 版本标记写入后发布 Finished，使下次启动可使用快速版本路径。
+    // 该标记描述完整包版本，与单个 ZIP 条目或暂存文件的存在状态无关。
     emitProgress(options,
                  AssetSyncProgress{
                      AssetSyncProgressStage::kFinished,
@@ -1040,6 +987,8 @@ bool importLocalPackage(const AssetSyncOptions& options, bool assetsExist,
                    "Importing local asset package" });
     // 这里复用下载路径的 ZIP 读取和校验，解压错误只影响任务独占目录。
     // 解压过程也可以被退出或新一轮资源选择打断，已有安装尚未被写入。
+    // 即使临时树中的部分条目已经写出，只要整个归档失败就不会进入发布阶段。
+    // 暂存的单条文件先经长度及 CRC 检查，切换到安装目录之前还需核对根结构。
     if ( !AssetSyncService::extractZipArchive(options.localPackagePath,
                                               staging,
                                               errorMessage,
@@ -1574,7 +1523,7 @@ std::optional<AssetManifest> AssetSyncService::parseManifest(
         file.sha256 = normalizeSha256(jsonStringField(fileJson, "sha256"));
         file.size   = jsonUnsignedField(fileJson, "size");
 
-        if ( !isSafeRelativeAssetPath(file.path) ) {
+        if ( !AssetPaths::isSafeRelativeAssetPath(file.path) ) {
             // 路径错误优先报告，禁止进入 URL 下载或目标组合阶段。
             errorMessage = "Unsafe asset path in manifest: " + file.path;
             return std::nullopt;
@@ -1617,143 +1566,6 @@ std::vector<AssetFileEntry> AssetSyncService::collectOutdatedFiles(
         }
     }
     return outdatedFiles;
-}
-
-/// @brief 安全地把资源 ZIP 解压到指定根目录。
-/// @details
-/// 先完整读取归档并用 miniz 初始化内存读取器，再逐条验证名称为安全相对路径、
-/// 组合目标仍在 destinationRoot 内。目录条目只创建目录；文件条目解压到临时堆
-/// 缓冲后通过统一二进制写函数落盘。取消和任一错误停止后续条目，始终关闭归档。
-/// @par Zip Slip 防御
-/// - 条目名先去除目录尾斜杠。
-/// - 空目录名不产生文件系统操作。
-/// - 绝对路径、反斜杠、冒号、空段和点段全部拒绝。
-/// - UTF-8 名称与目标根组合后执行词法规范化。
-/// - 规范化目标必须是 destinationRoot 的严格子路径。
-/// - 目录与文件条目遵守同一套路径约束。
-/// @par 资源生命周期
-/// - ZIP 原始字节覆盖 reader 完整生命周期。
-/// - reader 初始化成功后所有出口统一调用 mz_zip_reader_end。
-/// - 每个文件的 extractedData 在写入后立即 mz_free。
-/// - 写入失败时释放当前缓冲并停止后续条目。
-/// - 取消只发生在条目边界，不泄漏 miniz 状态。
-/// @par 发布限制
-/// 本函数不写版本标记、不删除 ZIP，也不宣告同步完成；这些事务性终态由
-/// downloadFullPackage 在整个解压成功后负责。
-/// @param zipPath 已下载且完成摘要校验的 ZIP 文件。
-/// @param destinationRoot 归档相对路径的唯一写入根。
-/// @param errorMessage 接收取消、格式、路径或写入错误。
-/// @param cancellationCallback 可选的逐条取消查询。
-/// @return 所有条目安全写入时返回 true。
-bool AssetSyncService::extractZipArchive(
-    const std::filesystem::path& zipPath,
-    const std::filesystem::path& destinationRoot, std::string& errorMessage,
-    const std::function<bool()>& cancellationCallback)
-{
-    // 成功调用不保留上一次错误详情。
-    errorMessage.clear();
-
-    // 开始前取消不读取归档或创建目标目录。
-    if ( cancellationCallback && cancellationCallback() ) {
-        errorMessage = "Asset sync cancelled";
-        return false;
-    }
-
-    std::vector<std::uint8_t> zipBytes;
-    // 当前实现用内存 miniz 接口，读取失败与归档格式失败分开报告。
-    if ( !readFileBytes(zipPath, zipBytes) ) {
-        errorMessage = "Failed to read asset package";
-        return false;
-    }
-
-    mz_zip_archive zipArchive{};
-    // 零初始化满足 miniz reader 生命周期前置条件。
-    if ( !mz_zip_reader_init_mem(
-             &zipArchive, zipBytes.data(), zipBytes.size(), 0) ) {
-        errorMessage = "Failed to open asset package";
-        return false;
-    }
-
-    bool          success   = true;
-    const mz_uint fileCount = mz_zip_reader_get_num_files(&zipArchive);
-    // 按归档目录顺序处理，首次失败后不再触碰后续条目。
-    for ( mz_uint index = 0; index < fileCount; ++index ) {
-        // 每个条目前响应取消，使大型多文件包可及时停止。
-        if ( cancellationCallback && cancellationCallback() ) {
-            errorMessage = "Asset sync cancelled";
-            success      = false;
-            break;
-        }
-
-        mz_zip_archive_file_stat fileStat{};
-        // 统计信息提供原始文件名和条目类型，读取失败不能猜测路径。
-        if ( !mz_zip_reader_file_stat(&zipArchive, index, &fileStat) ) {
-            errorMessage = "Failed to read asset package entry";
-            success      = false;
-            break;
-        }
-
-        std::string archiveName = fileStat.m_filename;
-        // 去除目录条目末尾斜杠后执行与文件相同的安全分段检查。
-        while ( !archiveName.empty() && archiveName.back() == '/' ) {
-            archiveName.pop_back();
-        }
-        if ( archiveName.empty() ) continue;
-
-        // 第一层拒绝绝对路径、反斜杠、盘符和点段。
-        if ( !isSafeRelativeAssetPath(archiveName) ) {
-            errorMessage = "Unsafe path in asset package: " + archiveName;
-            success      = false;
-            break;
-        }
-
-        const auto destinationPath =
-            (destinationRoot / Config::utf8ToPath(archiveName))
-                .lexically_normal();
-        // 第二层以组合结果验证根目录包含关系，形成纵深 Zip Slip 防护。
-        if ( !isPathInsideRoot(destinationRoot, destinationPath) ) {
-            errorMessage =
-                "Asset package path escapes destination: " + archiveName;
-            success = false;
-            break;
-        }
-
-        if ( mz_zip_reader_is_file_a_directory(&zipArchive, index) ) {
-            // 显式目录仅建立层级；普通文件写入也会按需创建父目录。
-            std::error_code createError;
-            std::filesystem::create_directories(destinationPath, createError);
-            if ( createError ) {
-                errorMessage = createError.message();
-                success      = false;
-                break;
-            }
-            continue;
-        }
-
-        std::size_t extractedSize = 0;
-        // miniz 为单条文件分配缓冲，写入后无论成功失败都必须 mz_free。
-        void* extractedData = mz_zip_reader_extract_to_heap(
-            &zipArchive, index, &extractedSize, 0);
-        if ( !extractedData ) {
-            errorMessage =
-                "Failed to extract asset package entry: " + archiveName;
-            success = false;
-            break;
-        }
-
-        success =
-            writeBytesToFile(destinationPath, extractedData, extractedSize);
-        mz_free(extractedData);
-        // 释放缓冲先于错误返回，避免写入失败泄漏条目内存。
-        if ( !success ) {
-            errorMessage = "Failed to write asset file: " + archiveName;
-            break;
-        }
-    }
-
-    mz_zip_reader_end(&zipArchive);
-    // 统一结束 reader，覆盖成功、取消和中途格式/路径错误。
-    return success;
 }
 
 /// @brief 计算普通文件的规范化 SHA-256 文本。
