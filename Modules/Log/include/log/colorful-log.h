@@ -53,9 +53,6 @@ private:
 /// @note 调用方应在首次记录日志前初始化，并在进程退出阶段关闭。
 class XLogger
 {
-    /// @brief 进程共享日志器，初始化后同时分发到终端和文件 sink。
-    static std::shared_ptr<spdlog::logger> logger;
-
 public:
     /// @brief OpenGL 调用统计计数，由图形诊断代码按帧维护。
     static uint32_t glcalls;

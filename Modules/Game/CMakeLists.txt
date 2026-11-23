@@ -13,8 +13,9 @@ add_subdirectory("UI")
 add_subdirectory("Canvas")
 
 # 聚合库只编译跨子模块应用服务和主循环，不重复收编子模块源码。
-add_library(Game STATIC src/CanvasWorkspaceService.cpp
-                        src/EditorApplicationService.cpp src/GameLoop.cpp)
+add_library(
+  Game STATIC src/CanvasWorkspaceService.cpp src/EditorApplicationService.cpp
+              src/GameLoop.cpp src/GlobDefs.cpp)
 
 target_link_libraries(
   Game
@@ -31,7 +32,9 @@ target_link_libraries(
          3rd_glm
          MMM
          Network
-         NetworkCollaboration)
+         NetworkCollaboration
+  # 启动实现复用 Config 路径服务，公开 Game 头不依赖此服务。
+  PRIVATE Config)
 
 # 平台专属系统库保持 PRIVATE 行为；此处 PUBLIC 仅延续现有静态链接闭包需求。
 if(WIN32)

@@ -139,12 +139,13 @@
   - Linux RelWithDebInfo 全量构建及 6 项启动路径和工作区 CTest 通过，另用实际 POSIX 适配器验证无参、含中文和空格、长路径。在 `debsrv` Runner 原工作区完成 Windows x64 交叉构建，Windows 探针在 Wine 下通过无参、空参、含中文和空格、长路径，并通过平台调用替身验证空指针失败和成功后仅释放一次。
   - 注释／代码行数：`GameLoop.cpp` 113/245、`StartupCommandLinePath.h` 5/6、`StartupCommandLinePathPosix.cpp` 5/9、`StartupCommandLinePathWin32.cpp` 7/15、`Modules/Game/CMakeLists.txt` 14/30，逐文件均达到 30%。
 
-- [ ] **PLAT-05（P3）启动头重复平台可执行路径实现，边界与长路径行为已分叉**
+- [x] **PLAT-05（P3）启动头重复平台可执行路径实现，边界与长路径行为已分叉**
 
   - 位置：`Modules/Game/include/game/GlobDefs.h:84-116` 对照 `Modules/Config/src/AppPaths.cpp:63-111`。
   - 行为：全局头直接引入 Windows/unistd/dyld 并查询进程路径，Windows 固定 `MAX_PATH`；AppPaths 已经独立实现动态扩容，macOS 还解析 canonical 路径。启动更改 cwd 和配置路径查询因而有两套不同成功边界。
   - 整改：复用低层可执行路径服务，把平台 include 与操作移出公开业务头；不要在头中继续复制第三套实现。需注意日志初始化前不能反向依赖日志与业务单例。
   - 验收：Windows 超 MAX_PATH 的可执行路径、macOS 符号链接启动、Linux procfs 失败均有明确一致结果；日志初始化顺序与资源相对路径行为保持兼容。
+  - 已复用 Config 查询，并修复原生启动探针在主线复现的日志退出析构顺序问题。Linux 全量构建、9 项 CTest、符号链接与缺少 procfs 启动探针通过。debsrv MSVC 交叉编译后，Wine 中 288 字符中文路径与正常退出均通过。AppleClang ARM64 最低部署目标 11.0 全量构建、7 项 CTest、符号链接启动和正常退出均通过。
 
 - [ ] **PLAT-06（P3）窗口平台状态策略仍直接驻留通用渲染文件**
 

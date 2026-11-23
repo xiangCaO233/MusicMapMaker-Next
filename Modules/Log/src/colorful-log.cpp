@@ -547,8 +547,18 @@ const char* ColorfulFormatter::get_color(spdlog::level::level_enum level) const
 uint32_t XLogger::glcalls   = 0;
 uint32_t XLogger::drawcalls = 0;
 
-/// @brief 当前进程注册的共享日志器实例。
-std::shared_ptr<spdlog::logger> XLogger::logger;
+namespace
+{
+/// @brief 返回由首次日志初始化建立的进程级日志器持有槽。
+/// @note 槽的析构在启动守卫构造过程中登记，顺序早于启动守卫自己的
+/// 析构登记。因此退出时启动守卫仍可借用此槽完成刷新和注销。
+std::shared_ptr<spdlog::logger>& processLogger()
+{
+    // 函数内静态对象避免与其他翻译单元的启动守卫竞争初始化／析构顺序。
+    static std::shared_ptr<spdlog::logger> logger;
+    return logger;
+}
+}  // namespace
 
 /// @brief 初始化终端、全量文件和错误文件三个日志输出端。
 /// @param name 注册到 spdlog 全局表的日志器名称。
@@ -576,8 +586,10 @@ void XLogger::init(const char* name)
     file_all_sink->set_level(spdlog::level::debug);
     file_error_sink->set_level(spdlog::level::err);
 
+    // 在启动守卫构造完成前初始化持有槽，使退出时仍能安全刷新日志。
     // 组合 logger 保证同一条消息按各 sink 阈值分发。
-    logger = std::make_shared<spdlog::logger>(
+    auto& logger = processLogger();
+    logger       = std::make_shared<spdlog::logger>(
         name,
         spdlog::sinks_init_list{
             console_sink, file_all_sink, file_error_sink });
@@ -600,8 +612,8 @@ void XLogger::init(const char* name)
 /// @note 重复关闭会直接返回，保持退出清理流程幂等。
 void XLogger::shutdown()
 {
-    // 先转移本地所有权，防止后续调用继续通过静态成员访问旧实例。
-    auto activeLogger = std::move(logger);
+    // 将日志器移出持有槽后再刷新，重复关闭看见空槽即可返回。
+    auto activeLogger = std::move(processLogger());
     if ( !activeLogger ) return;
 
     // 显式刷新后再关闭 spdlog 注册表，确保文件尾部完整写出。
@@ -614,14 +626,14 @@ void XLogger::shutdown()
 /// @pre init 已成功建立进程级日志器。
 void XLogger::enable()
 {
-    logger->set_level(spdlog::level::trace);
+    processLogger()->set_level(spdlog::level::trace);
 }
 
 /// @brief 临时关闭日志输出而不销毁 sink。
 /// @pre init 已成功建立进程级日志器。
 void XLogger::disable()
 {
-    logger->set_level(spdlog::level::off);
+    processLogger()->set_level(spdlog::level::off);
 }
 
 /// @brief 更新进程级 logger 的最低日志级别。
@@ -630,5 +642,5 @@ void XLogger::disable()
 void XLogger::setlevel(spdlog::level::level_enum level)
 {
     // 只调整 logger 总阈值，各 sink 的细分阈值保持初始化配置。
-    logger->set_level(level);
+    processLogger()->set_level(level);
 }
