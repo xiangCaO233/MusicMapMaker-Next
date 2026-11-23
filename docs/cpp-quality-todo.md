@@ -113,6 +113,9 @@
   - 整改：给协议明确十进制语法并在该边界验证，或定义统一 helper 语法；不修改兼容性解析器的所有调用方。
   - 验收：同一组正负号、科学计数、十六进制、NaN/Inf、尾随垃圾和溢出输入，在 Apple 低部署目标与 Linux/Windows 上得到相同协议结果；保留合法历史剪贴板往返。
 
+  - 已实现剪贴板字段的十进制字符和完整消费校验，保留合法指数、历史版本以及可往返的非零次正规数。Linux RelWithDebInfo 全量构建及 5 项相关 CTest 通过；Linux 上的两种数值后端对照探针覆盖 28 个输入，结果一致。
+  - Windows 和低部署目标 macOS 的原生构建与回归待验证，本项保持未勾选。注释／代码为 EditorClipboardProtocol.cpp 423/978、EditorClipboardProtocolTest.cpp 220/509，逐文件均达到 30%。
+
 - [x] **PLAT-03（P2）三个 UI 时间格式化分支遗漏失败判断**
 
   - 位置：`Modules/Game/UI/src/ui/imgui/manager/AudioManagerView.cpp:301-329`、`BeatMapManagerView.cpp:202-227`、`FileManagerView_Hierarchy.cpp:273-298`。

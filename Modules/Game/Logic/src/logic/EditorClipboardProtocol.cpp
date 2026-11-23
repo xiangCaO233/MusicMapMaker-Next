@@ -234,19 +234,33 @@ std::optional<bool> parseBoolField(std::string_view field)
     return std::nullopt;
 }
 
-/// @brief 解析一个有限浮点数字段。
-/// @return 完整且有限的数值，失败不以零值掩盖格式问题。
+/// @brief 解析一个完整的有限十进制字段。
+/// @param field 协议原文字段，不裁剪空白。
+/// @return 可由 double 表示的值；语法错误、溢出和非零值下溢至零时返回空。
+/// @note 允许负号和科学计数法，前导加号维持历史协议的拒绝行为。
 /// @note 不按用途钳制颜色、音量或时间，具体行解析器在此基础上施加范围约束。
 std::optional<double> parseDoubleField(std::string_view field)
 {
-    const auto result = Internal::parseFloatingPrefix(field);
-    // 保留科学计数法等底层支持的表示，但不能因前缀有效就吞掉末尾损坏内容。
-    // 底层工具允许前缀解析，协议边界追加全长和有限性约束。
-    if ( result.error != std::errc{} || result.parsedLength != field.size() ||
-         !std::isfinite(result.value) ) {
+    // 先约束协议字符，避免 macOS 的 strtod_l 接受十六进制、非有限值或空白。
+    // 正号仅能出现在指数中；字符白名单之后由数值解析器验证数字和指数位置。
+    if ( field.empty() || field.front() == '+' ||
+         field.find_first_not_of("0123456789.eE+-") != std::string_view::npos )
         return std::nullopt;
-    }
-    return result.value;
+
+    const auto result = Internal::parseFloatingPrefix(field);
+    // 有效前缀不能掩盖损坏尾部，例如 "1e" 只可能消费首个数字。
+    if ( result.parsedLength != field.size() || !std::isfinite(result.value) )
+        return std::nullopt;
+    if ( result.error == std::errc{} ) return result.value;
+
+    // strtod_l 可对正确舍入的次正规数或最小正规数设置 ERANGE；
+    // from_chars 对可表示且非零的同类结果可直接成功。保留既有写端能往返的值，
+    // 并继续拒绝真正舍入到零的下溢和超过上限的溢出。
+    if ( result.error == std::errc::result_out_of_range &&
+         result.value != 0.0 &&
+         std::abs(result.value) <= std::numeric_limits<double>::min() )
+        return result.value;
+    return std::nullopt;
 }
 
 /// @brief 拆分一行以制表符分隔的协议文本。

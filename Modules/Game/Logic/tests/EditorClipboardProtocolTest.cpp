@@ -4,8 +4,10 @@
 #include "logic/session/context/SessionContext.h"
 
 #include "log/colorful-log.h"
+#include <array>
 #include <cmath>
 #include <glm/glm.hpp>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -590,6 +592,87 @@ bool testTimelineRoundTrip()
     return true;
 }
 
+/// @brief 验证十进制语法及范围经由完整时间线剪贴板入口生效。
+/// @return 合法字段保留原值，坏字段只使所在记录被忽略时返回真。
+/// @details 测试用 V3 头和当前浮点解析器，确保历史版本继续共用校验规则。
+/// V3 是只读兼容入口；最后单独用当前序列化器覆盖当前版本的字段输出。
+/// 样例时间这样的通用字段通过解析后再进入编辑层，本组不对目标谱面范围做钳制。
+bool testDecimalFieldGrammar()
+{
+    using MMM::Logic::EditorClipboardProtocol::parse;
+    // 相邻的有效记录应保留，确保解析器只拒绝问题行而非降低格式版本兼容性。
+    // 哨兵使用可手工核对的普通整数，区别坏字段和旧格式头本身的回归。
+    // 第一行和待测行用不同 BPM，使它们不是同一条重复数据。
+    // 每次都从新载荷开始，避免解析状态跨样例流动。
+    const auto parseField = [](std::string_view field) {
+        std::string payload = "MMM_CLIPBOARD_V3\tT\nT\t1\tb\t150\t0\t0\t1\nT\t";
+        payload.append(field);
+        payload.append("\tb\t180\t0\t0\t1\n");
+        return parse(payload);
+    };
+
+    /// @brief 合法输入与手工计算的双精度预期值。
+    struct DecimalCase {
+        /// @brief 时间线时间字段的原始拼写，不经过测试侧数值格式化。
+        std::string_view m_text;
+        /// @brief 解析后的绝对时间，允许负值、零和次正规数。
+        double m_value;
+    };
+    // 加号在指数部分合法，裸正号、空白和非十进制语法均独立覆盖。
+    // 次正规数使用精确比较，不能用容差把一个错误的零结果视为通过。
+    const std::array valid{
+        // 单独验证小数点两侧允许只出现一侧数字，这是既有历史文本的写法。
+        DecimalCase{ ".5", 0.5 },
+        DecimalCase{ "1.", 1.0 },
+        // 负号属于尾数，正号属于指数；保留两种符号的合法位置。
+        DecimalCase{ "-1.25e+2", -125.0 },
+        DecimalCase{ "2.5E-1", 0.25 },
+        DecimalCase{ "3.5e2", 350.0 },
+        // 在最小次正规数附近，strtod_l 可能设置 ERANGE 但仍给出正确非零值。
+        DecimalCase{ "5e-324", std::numeric_limits<double>::denorm_min() },
+    };
+    for ( const auto& item : valid ) {
+        // 先检查两条记录，再比较第二条实际时间，不能以头部合法作为成功。
+        const auto result = parseField(item.m_text);
+        if ( !result || result->timelines.size() != 2 ||
+             result->timelines.back().timeline.m_timestamp != item.m_value ) {
+            XERROR("Clipboard rejected or changed a decimal field: {}",
+                   item.m_text);
+            return false;
+        }
+    }
+    // 同一字段位置覆盖十六进制、特殊值、符号位置、尾随内容与范围错误。
+    // 若整份载荷解析失败，也无法通过“只有有效记录保留”的断言。
+    // 1e、1e+ 和重复小数点只含允许字符，仍必须由完整消费检查将其拒绝。
+    // 同时用上溢和下溢验证两端都不会把解析错误变成可用的时间。
+    constexpr std::array<std::string_view, 17> invalid{
+        "",    "0x1p2", "-0X1P-2", "nan",   "inf",   "-Infinity",
+        "+1",  " 1",    "1 ",      "1ms",   "1.2.3", "1e",
+        "1e+", "--1",   "1,5",     "1e309", "1e-400"
+    };
+    for ( const auto field : invalid ) {
+        // 哨兵值应一直出现在前面，不得把随后被跳过的坏行解释为默认时间。
+        const auto result = parseField(field);
+        if ( !result || result->timelines.size() != 1 ||
+             result->timelines.front().timeline.m_timestamp != 1.0 ) {
+            XERROR("Clipboard accepted a malformed decimal field: {}", field);
+            return false;
+        }
+    }
+
+    // 不手写当前版本的次正规数格式，用真实序列化器输出再解析以覆盖往返。
+    TimelineClipboardItem item;
+    // 负的最小次正规数同时检查序列化附带符号和范围判断没有错误拒绝负值。
+    item.timeline.m_timestamp = -std::numeric_limits<double>::denorm_min();
+    item.timeline.m_effect    = MMM::TimingEffect::BPM;
+    item.timeline.m_value     = 120.0;
+    const auto roundTrip      = parse(
+        MMM::Logic::EditorClipboardProtocol::serializeTimelines({ item }));
+    return roundTrip && roundTrip->timelines.size() == 1 &&
+           roundTrip->timelines.front().timeline.m_timestamp ==
+               item.timeline.m_timestamp;
+}
+
 /// @brief 验证 MMM 剪贴板解析器会忽略普通文本。
 /// @return 无协议标记的文本不产生解析结果时返回 true。
 /// @note 这里只验证一条普通文本，不等同于所有损坏载荷的拒绝测试。
@@ -686,6 +769,7 @@ int main()
     if ( !testLegacyV2SampleBindingDefaultsVolume() ) return 1;
     if ( !testOutOfRangeSampleBindingVolumeRejected() ) return 1;
     if ( !testTimelineRoundTrip() ) return 1;
+    if ( !testDecimalFieldGrammar() ) return 1;
     if ( !testPlainTextIgnored() ) return 1;
     if ( !testCollaborationClipboardIsolation() ) return 1;
     return 0;
