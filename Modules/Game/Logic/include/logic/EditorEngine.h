@@ -116,7 +116,7 @@ public:
     /// @brief 按命令类型路由到项目、编辑器或活动会话。
     /// @param cmd 待转移给对应队列的命令。
     /// @param playbackGeneration 移动控件绑定的活动目标代次，空值走原有路由。
-    /// @warning 连续交互使用已发布路由快照；通用命令入口保留原有会话锁。
+    /// @warning 播放和连续导航使用已发布的目标；通用命令保留原有会话锁。
     void pushCommand(
         LogicCommand&&               cmd,
         std::optional<std::uint64_t> playbackGeneration = std::nullopt);
@@ -606,12 +606,19 @@ private:
     void publishGestureStateUnsafe(const SessionContext* context);
 
     /// @brief 发布同一活动谱面的播放与轨道状态。
-    /// @param context 活动上下文，空值表示正在切换或尚未载入谱面。
-    /// @param targetChanged 活动目标已更换，即使复用同一索引也推进代次。
-    /// @pre 调用者持有会话注册表锁，且上下文属于当前活动会话。
-    /// @warning 每轮逻辑调用，只在值变化时取得独立短锁。
-    void publishActiveEditorStateUnsafe(const SessionContext* context,
-                                        bool targetChanged = false);
+    /// @param target 当前活动会话；空句柄表示没有会话可接收命令。
+    /// @param loading 会话已选中但仍在载入或切换，暂时撤回播放展示值。
+    /// @pre 调用者持有会话注册表锁。
+    /// @warning 每轮逻辑调用，值或目标变化时才取得独立短锁。
+    void publishActiveEditorStateUnsafe(
+        const std::shared_ptr<BeatmapSession>& target, bool loading = false);
+
+    /// @brief 把播放控制命令投给发布时的活动会话。
+    /// @param cmd 播放、定位、倍速或音高指令。
+    /// @param generation 弹层绑定的目标代次；普通播放入口使用提交时的目标。
+    /// @warning 连续拖动只在短锁内核对目标并保活一次会话，锁外才入队。
+    void pushPlaybackCommand(LogicCommand&&               cmd,
+                             std::optional<std::uint64_t> generation);
 
     /// @brief 消费画布切换请求并在资源准备完毕后提交。
     /// @warning 每轮逻辑调用，只有待办或已完成结果才进入低频提交路径。

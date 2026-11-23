@@ -1679,9 +1679,10 @@ void EditorEngine::restoreProjectWorkspace(
             // 注册表和渲染缓存必须同步清理；仅删条目会留下同名旧快照。
             impl().m_renderSyncRegistry.eraseCamera(logoCameraId);
         }
-        // 移除占位槽可能改变活动索引，恢复时同步更新手势状态。
+        // 移除占位槽可能改变活动会话，恢复时同步更新手势和播放路由。
         const auto active = impl().m_sessionRegistry.activeSession();
         publishGestureStateUnsafe(active ? &active->getContext() : nullptr);
+        publishActiveEditorStateUnsafe(active);
     }
 
     const std::string& activePath =
@@ -2660,6 +2661,28 @@ void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
     refreshAudioTimelineFingerprintsUnsafe();
 }
 
+/// @brief 使用同一次发布的代次与会话身份投递播放命令。
+/// @warning 定位和倍速可连续提交。短锁内只核对代次及取得强引用，
+/// 会话队列和最后一个强引用的释放均留在锁外，避免拖慢每帧读取。
+void EditorEngine::pushPlaybackCommand(LogicCommand&&               cmd,
+                                       std::optional<std::uint64_t> generation)
+{
+    std::shared_ptr<BeatmapSession> target;
+    {
+        const auto&           state = impl();
+        const std::lock_guard lock(state.m_activeEditorStateMutex);
+        // 读取代次和目标必须是同一个临界区，数字索引复用时不能混用两次发布。
+        if ( generation &&
+             (*generation != state.m_activePlaybackState.generation ||
+              state.m_activePlaybackState.playerTracks <= 0) )
+            return;
+        target = state.m_activePlaybackTarget.lock();
+    }
+    // 如果提交后会话被关闭，强引用只保活原队列；不会改投新的活动会话。
+    // 消费仍由会话控制器按当时的活动身份限制对全局音频的写入。
+    if ( target ) target->pushCommand(std::move(cmd));
+}
+
 /// @brief 执行项目级命令，并把其余指令路由到对应会话队列。
 /// @param cmd 待转移的指令；成功投递后调用者不得依赖原载荷内容。
 /// @details
@@ -2677,6 +2700,16 @@ void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
 void EditorEngine::pushCommand(LogicCommand&&               cmd,
                                std::optional<std::uint64_t> playbackGeneration)
 {
+    // 四类播放命令只修改试听或定位，不进入项目写入门禁，也不读取活动项目。
+    // 保留同一会话队列，使用原有的拖动、播放时钟与教学阶段策略。
+    if ( std::holds_alternative<CmdSetPlayState>(cmd) ||
+         std::holds_alternative<CmdSeek>(cmd) ||
+         std::holds_alternative<CmdSetPlaybackSpeed>(cmd) ||
+         std::holds_alternative<CmdSetPlaybackPitch>(cmd) ) {
+        pushPlaybackCommand(std::move(cmd), playbackGeneration);
+        return;
+    }
+
     // 路由顺序本身属于权限契约：临时项目另存必须先于写命令门禁，项目级
     // 命令必须先于活动会话查找，全局状态命令则需要广播全部会话。
     if ( std::holds_alternative<CmdSaveTemporaryProject>(cmd) ) {
@@ -2957,8 +2990,8 @@ void EditorEngine::pushCommand(LogicCommand&&               cmd,
         }
     }
 
-    // 移动弹层绘制后也可能关闭或切换标签。沿用通用命令已有的临界区，
-    // 在同一次路由中核对代次和活动目标，避免把命令投给复用该索引的谱面。
+    // 带代次的键数编辑仍由通用入口核对。它修改谱面，必须先经过项目写入门禁。
+    // 在现有临界区比较代次，防止旧弹层改到复用索引的新谱面。
     if ( playbackGeneration &&
          (*playbackGeneration != impl().m_activePlaybackState.generation ||
           impl().m_activePlaybackState.playerTracks <= 0) )
@@ -3196,14 +3229,18 @@ Common::EditorPlaybackState EditorEngine::activePlaybackState() const
 }
 
 /// @brief 将活动会话状态发布给桌面和移动播放控件。
-/// @param context 活动谱面上下文，空值撤回旧目标的显示状态。
-/// @param targetChanged 关闭、替换或切换活动谱面使先前弹层失效。
-/// @warning 逻辑每轮调用，写者由注册表锁串行化，仅在值变化时取得发布短锁。
-void EditorEngine::publishActiveEditorStateUnsafe(const SessionContext* context,
-                                                  bool targetChanged)
+/// @param target 当前活动会话，供命令路由用弱引用识别。
+/// @param loading 暂时撤回还未载入或正在切换的谱面展示值。
+/// @warning 每轮逻辑更新持有注册表锁，发布值不变时不取短锁或复制会话所有权。
+void EditorEngine::publishActiveEditorStateUnsafe(
+    const std::shared_ptr<BeatmapSession>& target, bool loading)
 {
     auto& state = impl();
-    // 目标代次独立于标签索引。索引左移但活动会话仍存活时，弹层可以继续使用。
+    // 比较控制块身份不增加引用计数。关闭前面的标签只移动索引，
+    // 仍使用同一个会话时，既有弹层应继续保留其绑定。
+    const bool targetChanged =
+        target.owner_before(state.m_activePlaybackTarget) ||
+        state.m_activePlaybackTarget.owner_before(target);
     auto playback = state.m_activePlaybackState;
     if ( targetChanged ) ++playback.generation;
     playback.playerTracks = 0;
@@ -3211,6 +3248,7 @@ void EditorEngine::publishActiveEditorStateUnsafe(const SessionContext* context,
 
     // 没有谱面时同时撤回键数、混音轨道和播放位，避免把旧状态归给新标签。
     Common::EditorTrackLayout layout;
+    const auto* context = target && !loading ? &target->getContext() : nullptr;
     if ( context && context->currentBeatmap ) {
         const auto& metadata = context->currentBeatmap->m_baseMapMetadata;
         // 工具栏沿用逻辑规范化的键数，音效弹层按原口径读取完整布局。
@@ -3235,6 +3273,7 @@ void EditorEngine::publishActiveEditorStateUnsafe(const SessionContext* context,
         const std::lock_guard lock(state.m_activeEditorStateMutex);
         state.m_activePlaybackState = playback;
         state.m_activeTrackLayout   = layout;
+        if ( targetChanged ) state.m_activePlaybackTarget = target;
     }
 }
 
@@ -3781,7 +3820,7 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 publishGestureStateUnsafe(nullptr);
                 impl().m_sessionRegistry.setActiveIndex(i);
                 // 新谱面尚未处理载入与播放命令，旧活动项状态不能继续显示。
-                publishActiveEditorStateUnsafe(nullptr, true);
+                publishActiveEditorStateUnsafe(sessions[i].session, true);
                 impl().m_activeHasChartObjectSelection.store(
                     false, std::memory_order_relaxed);
                 // 会话条目身份变化后立即刷新候选并发布快照，UI 不能继续看到
@@ -3875,9 +3914,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
     /// @brief 新 Session 在注册表中的索引。
     // append 使新会话活动，此前手势不能泄漏给新画布。
     publishGestureStateUnsafe(nullptr);
-    // 新条目会成为活动项，但载图命令尚未执行，先撤回上一张谱面的轨道布局。
-    publishActiveEditorStateUnsafe(nullptr, true);
+    // 路由立即指向新条目，让紧随载图提交的定位命令进入同一队列。
+    // 展示值等载图处理后再启用，避免按旧谱面的键数绘制。
     int32_t newIndex = impl().m_sessionRegistry.append(std::move(entry));
+    publishActiveEditorStateUnsafe(sessions[newIndex].session, true);
     // append 已负责发布会话列表；同步候选另依赖新条目的音频身份，需随后刷新。
     refreshMainAudioSyncPeerStateUnsafe();
     impl().m_lastMainAudioSyncActiveIndex = -1;
@@ -3913,27 +3953,17 @@ void EditorEngine::closeSession(int32_t index, bool updateWorkspace)
     std::string cameraId = sessions[index].cameraId;
     XINFO("Closing Session #{} cameraId={}", index, cameraId);
 
-    // 先记录关闭目标。后台标签移除可能移动数字索引，但不会更换活动谱面。
-    const bool closedActive = index == impl().m_sessionRegistry.activeIndex();
+    // 注册表先解析关闭后的活动项。后台标签移除可能只移动索引。
     impl().m_sessionRegistry.erase(index);
-    const auto&   remainingSessions = impl().m_sessionRegistry.entriesUnsafe();
-    const int32_t activeIndex       = impl().m_sessionRegistry.activeIndex();
-    const SessionContext* gestureContext     = nullptr;
-    bool                  activeHasSelection = false;
-    if ( activeIndex >= 0 &&
-         activeIndex < static_cast<int32_t>(remainingSessions.size()) &&
-         remainingSessions[activeIndex].session ) {
-        const auto& context =
-            remainingSessions[activeIndex].session->getContext();
-        gestureContext     = &context;
-        activeHasSelection = !context.selectedNoteEntities.empty() ||
-                             !context.selectedSampleEntities.empty();
-    }
-    // 活动索引可能指向另一个会话，必须同时更新快捷键使用的手势。
-    publishGestureStateUnsafe(gestureContext);
-    publishActiveEditorStateUnsafe(gestureContext, closedActive);
-    impl().m_activeHasChartObjectSelection.store(activeHasSelection,
-                                                 std::memory_order_relaxed);
+    const auto  active  = impl().m_sessionRegistry.activeSession();
+    const auto* context = active ? &active->getContext() : nullptr;
+    // 活动索引可能指向另一个会话，同时更新快捷键、播放与选择状态。
+    publishGestureStateUnsafe(context);
+    publishActiveEditorStateUnsafe(active);
+    impl().m_activeHasChartObjectSelection.store(
+        context && (!context->selectedNoteEntities.empty() ||
+                    !context->selectedSampleEntities.empty()),
+        std::memory_order_relaxed);
     refreshMainAudioSyncPeerStateUnsafe();
     impl().m_lastMainAudioSyncActiveIndex = -1;
 
@@ -4007,7 +4037,7 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
     publishGestureStateUnsafe(nullptr);
     impl().m_sessionRegistry.setActiveIndex(index);
     // Logo 不控制 transport；原槽重置后旧播放状态立即失效。
-    publishActiveEditorStateUnsafe(nullptr, true);
+    publishActiveEditorStateUnsafe(entry.session, true);
     impl().m_activeHasChartObjectSelection.store(false,
                                                  std::memory_order_relaxed);
     refreshMainAudioSyncPeerStateUnsafe();
@@ -4173,7 +4203,7 @@ void EditorEngine::processActiveCanvasRequest()
                 SessionUtils::activateAudioTimeline(ctx, shouldPlay) &&
                 shouldPlay;
             // 同步发布给工具栏，确保新调度生效时状态立即与会话播放位一致。
-            publishActiveEditorStateUnsafe(&ctx);
+            publishActiveEditorStateUnsafe(entry.session);
         } else {
             // 保留可编辑的谱面时间范围，读不到资源时也允许修改有时间的物件。
             ctx.audioTimelineTotalTime = descriptor.m_chartEndSeconds;
@@ -4279,7 +4309,7 @@ void EditorEngine::applyActiveSessionIndex(int32_t index,
     publishGestureStateUnsafe(nullptr);
     impl().m_sessionRegistry.setActiveIndex(index);
     // 切换期间先撤销旧会话的播放标记，防止 UI 把旧状态用于新目标。
-    publishActiveEditorStateUnsafe(nullptr, previousIndex != index);
+    publishActiveEditorStateUnsafe(sessions[index].session, true);
     impl().m_activeHasChartObjectSelection.store(false,
                                                  std::memory_order_relaxed);
     auto& activeSession = sessions[index].session;
@@ -4360,7 +4390,7 @@ void EditorEngine::applyActiveSessionIndex(int32_t index,
     }
 
     // transport 最终状态已确定，再发布给逐帧工具栏读取。
-    publishActiveEditorStateUnsafe(&ctx);
+    publishActiveEditorStateUnsafe(activeSession);
     impl().m_activeHasChartObjectSelection.store(
         !ctx.selectedNoteEntities.empty() ||
             !ctx.selectedSampleEntities.empty(),
@@ -4999,7 +5029,7 @@ void EditorEngine::loop()
                             const auto& activeContext =
                                 entry.session->getContext();
                             publishGestureStateUnsafe(&activeContext);
-                            publishActiveEditorStateUnsafe(&activeContext);
+                            publishActiveEditorStateUnsafe(entry.session);
                             impl().m_activeHasChartObjectSelection.store(
                                 !activeContext.selectedNoteEntities.empty() ||
                                     !activeContext.selectedSampleEntities

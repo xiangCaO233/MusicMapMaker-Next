@@ -124,7 +124,7 @@
     | `Modules/Game/UI/include/ui/imgui/manager/ToolbarView.h` | 202 | 188 | 51.79% |
     | `Modules/Game/UI/src/ui/imgui/manager/ToolbarView.cpp` | 2022 | 4675 | 30.19% |
 
-  - 已完成移动播放控件与活动状态发布批次。播放位、键数和活动目标代次一起发布，移动控件只读取标量。关闭或切换谱面时，旧键数及倍速弹层失效；播放、键数及倍速命令投递前复核代次，避免索引被复用时投到另一张谱面。逻辑循环在已有会话锁内确认快照条目与活动身份仍有效。桌面通用播放命令及音频准备职责仍待收敛。
+  - 已完成移动播放控件与活动状态发布批次。播放位、键数和活动目标代次一起发布，移动控件只读取标量。关闭或切换谱面时，旧键数及倍速弹层失效；播放、键数及倍速命令投递前复核代次，避免索引被复用时投到另一张谱面。逻辑循环在已有会话锁内确认快照条目与活动身份仍有效。
   - Linux Debug 32 线程构建及 218 项 CTest 通过。回归覆盖长锁期间读取、载入时撤回状态、同索引替换后拒绝旧命令并接受当前代次。Android ARM64 NDK 编译了移动播放控件、移动工作区外壳及引擎实现。Android 的 Ninja 历史依赖和同参数重新提取的编译依赖显示，移动播放控件去除了 `SessionContext.h` 和 `BeatmapSession.h`。Linux 活动对象中 `SessionContext.h`、`BeatmapSession.h` 和 `EditorEngine.h` 的扇出分别保持在 70、51 和 97。
   - 移动播放批次逐文件注释率
 
@@ -139,6 +139,17 @@
     | `Modules/Game/UI/include/ui/workspace/MobilePlaybackControls.h` | 21 | 29 | 42.00% |
     | `Modules/Game/UI/src/ui/workspace/MobilePlaybackControls.cpp` | 159 | 366 | 30.29% |
     | `Modules/Game/UI/src/ui/workspace/MobileWorkspacePresentation.cpp` | 372 | 866 | 30.05% |
+
+  - 已完成桌面播放命令路由批次。播放、定位、倍速与音高使用独立发布的活动会话目标，不获取会话更新锁。控件只有实际提交命令时才短暂保活目标，由原队列和播放控制器消费。代次与目标一起发布，关图及同索引更换后拒绝旧代次。移动端带代次的键数编辑继续经过项目写入门禁。画布切换中的音频准备职责仍待收敛。
+  - Linux Debug 32 线程构建、全部 218 项 CTest 及 Android ARM64 NDK 编辑引擎编译通过。回归检查会话锁占用时的四类命令投递、定位拖动阶段、试听倍速和音高生效、索引复用及最后一个会话关闭。Ninja 活动对象中 `SessionContext.h`、`BeatmapSession.h` 和 `EditorEngine.h` 的扇出仍为 70、51 和 97。
+  - 桌面播放命令批次逐文件注释率
+
+    | 文件 | 注释行 | 代码行 | 比例 |
+    | --- | ---: | ---: | ---: |
+    | `Modules/Game/Logic/include/logic/EditorEngine.h` | 373 | 253 | 59.58% |
+    | `Modules/Game/Logic/src/logic/EditorEngine.cpp` | 1731 | 4026 | 30.07% |
+    | `Modules/Game/Logic/src/logic/EditorEngine_Impl.h` | 81 | 79 | 50.62% |
+    | `Modules/Game/Logic/tests/BrushPaletteSessionStateTest.cpp` | 336 | 783 | 30.03% |
 
 - [ ] **PERF-06 P3 离屏几何容量扩张在命令录制阶段等待全 GPU 空闲**
 

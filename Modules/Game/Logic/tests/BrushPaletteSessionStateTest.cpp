@@ -1,4 +1,5 @@
 // 配色回归用例按值构造编辑配置，显式包含对应定义以固定测试输入。
+#include "audio/AudioManager.h"
 #include "common/EditorGestureState.h"
 #include "common/EditorPlaybackState.h"
 #include "common/EditorTrackLayout.h"
@@ -1008,10 +1009,11 @@ bool testToolbarTrackLayoutPublication()
     return usableWhileLocked && editsApplied && switchedCleanly;
 }
 
-/// @brief 核对移动工具栏播放状态发布与同索引替换后的命令归属。
-/// @return 长锁期间仍能读取状态，且只有当前活动代次的编辑命令被接受。
+/// @brief 核对播放展示值与命令路由，以及同索引替换后的归属。
+/// @return 长锁期间仍能读取与投递，旧代次不能改变新会话。
 /// @note 作用域内逐个关闭会话，避免把活动状态留给随后使用引擎单例的测试。
 /// @note 使用正式的逻辑事件订阅路由，覆盖 UI 载荷中的代次跨层传递。
+/// @note 不启动逻辑线程，分别观察提交是否完成以及会话消费后的状态。
 bool testActivePlaybackStatePublication()
 {
     auto& engine = MMM::Logic::EditorEngine::instance();
@@ -1040,15 +1042,40 @@ bool testActivePlaybackStatePublication()
     // 此刻引擎已经切回首项，所见状态必须属于首项，即使第二张谱面已经可以播放。
     const auto openedPopup = engine.activePlaybackState();
 
-    // 读状态期间故意占有会话锁；超时后解锁以允许回收任务和报告错误。
+    auto&        audio         = MMM::Audio::AudioManager::instance();
+    const double originalSpeed = audio.getPlaybackSpeed();
+    const double originalPitch = audio.getPlaybackPitch();
+    // 使用与当前播放方案不同的值，验证实际消费效果而非队列是否非空。
+    const double testSpeed = originalSpeed == .75 ? .5 : .75;
+    const double testPitch = originalPitch == 5.0 ? 3.0 : 5.0;
+    auto&        events    = MMM::Event::EventBus::instance();
+    // 同一线程持有会话锁，另一个线程模拟 UI。这里不启动逻辑循环，
+    // 因此读状态和四类命令都必须在解锁前结束，实际命令由后面的 update 消费。
     std::unique_lock holdSessionLock(engine.getSessionMutex());
-    auto reader = std::async(std::launch::async,
-                             [&] { return engine.activePlaybackState(); });
+    auto             reader = std::async(std::launch::async, [&] {
+        // 带代次的播放事件覆盖移动入口，直接定位与音高覆盖桌面入口。
+        // 先暂停再进入拖动，避免上一场景的实际播放进度影响本轮检查。
+        events.publish(MMM::Event::LogicCommandEvent(
+            MMM::Logic::CmdSetPlayState{ false }, openedPopup.generation));
+        engine.pushCommand(
+            MMM::Logic::CmdSeek{ .time = 0.0, .isScrubbing = true });
+        events.publish(MMM::Event::LogicCommandEvent(
+            MMM::Logic::CmdSetPlaybackSpeed{ testSpeed }));
+        engine.pushCommand(MMM::Logic::CmdSetPlaybackPitch{ testPitch });
+        return engine.activePlaybackState();
+    });
     // 完成条件在持锁期间观察；解锁后读取结果不能掩盖错误的长锁等待。
     const bool returned =
         reader.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+    // 超时也先解锁，故障路径可以回收异步任务，不会留下永久等待。
     holdSessionLock.unlock();
     const auto whileLocked = reader.get();
+    firstSession->update(0, engine.getEditorConfig(), true);
+    // 检查常规状态机确实消费了定位，并且倍速和变调已到达全局音频控制器。
+    // 即使暂停中的谱面没有启用音频后端，仍应保留拖动阶段和试听参数。
+    const bool playbackApplied = firstSession->getContext().isSeekScrubbing &&
+                                 audio.getPlaybackSpeed() == testSpeed &&
+                                 audio.getPlaybackPitch() == testPitch;
 
     // 删除活动首项后，相邻谱面成为零号项。如果继续比较索引就会误投旧命令。
     engine.closeSession(first, false);
@@ -1056,23 +1083,40 @@ bool testActivePlaybackStatePublication()
     const bool reusedIndex = engine.getActiveSessionIndex() == first &&
                              engine.getActiveSession() == secondSession &&
                              second != first;
-    // 夹具持有两张原会话的引用，索引相同和对象相同仍是可分辨的条件。
-    auto& events = MMM::Event::EventBus::instance();
+    // 分别使用旧代次发送播放控制和写谱命令，覆盖两条路由各自的校验。
+    events.publish(MMM::Event::LogicCommandEvent(
+        MMM::Logic::CmdSetPlaybackSpeed{ originalSpeed },
+        openedPopup.generation));
     events.publish(MMM::Event::LogicCommandEvent(
         MMM::Logic::CmdUpdateTrackCount{ 3 }, openedPopup.generation));
     // 旧代次只应拒绝本次触屏命令，不能影响新会话队列及原有可撤销迁移。
     secondSession->update(0, engine.getEditorConfig(), true);
-    const bool ignoredOld = secondSession->getContext().trackCount == 8;
-    // 以当前代次再次经过同一事件入口作阳性对照，不能通过丢弃所有触屏命令过关。
+    // 速度读取全局试听参数，轨数读取替换会话。两个作用域应同时保持原值。
+    const bool ignoredOld = secondSession->getContext().trackCount == 8 &&
+                            audio.getPlaybackSpeed() == testSpeed;
+    // 用同一个替换会话验证两条路由都接受当前代次。
+    // 恢复原始候选倍速与上一条过期请求相同，只有代次发生变化。
+    events.publish(MMM::Event::LogicCommandEvent(
+        MMM::Logic::CmdSetPlaybackSpeed{ originalSpeed },
+        replacement.generation));
     events.publish(MMM::Event::LogicCommandEvent(
         MMM::Logic::CmdUpdateTrackCount{ 7 }, replacement.generation));
     secondSession->update(0, engine.getEditorConfig(), true);
     // 检查消费后的权威轨数。队列中有请求与会话已实际执行编辑是两个条件。
-    const bool acceptedNew = secondSession->getContext().trackCount == 7;
+    const bool acceptedNew = secondSession->getContext().trackCount == 7 &&
+                             audio.getPlaybackSpeed() == originalSpeed;
     // 最后关闭仍沿用被复用的零号槽，结果必须撤回谱面而非恢复到旧对象。
     engine.closeSession(first, false);
     // 关闭会话是同步入口，完整撤回应在它返回时可见，无需等一次逻辑轮询。
     const auto empty = engine.activePlaybackState();
+    // 最后一项已关闭，但测试仍持有原会话。无目标命令不能沿用这份旧弱引用。
+    engine.pushCommand(MMM::Logic::CmdSetPlaybackSpeed{ testSpeed });
+    // 这里检查队列而不手动更新已关闭会话，避免把旧对象重新标成活动项。
+    const bool noClosedTarget = !secondSession->hasPendingCommands();
+    // 显式归还全局速度和音高，保证回归失败时也能清理测试状态。
+    // 关闭不会恢复用户试听参数；清理必须独立于是否收到前面的调速事件。
+    audio.setPlaybackSpeed(originalSpeed);
+    audio.setPlaybackPitch(originalPitch);
 
     // 查验代次与状态一起切换，后台重索引时不能混入先前的谱面键数。
     const bool published =
@@ -1084,19 +1128,24 @@ bool testActivePlaybackStatePublication()
         empty.playerTracks == 0 && !empty.playing &&
         empty.generation != replacement.generation;
     // 及时返回和返回正确值独立检查，提前返回全零快照也算失败。
+    // 回读仍应对应首项，因为另一线程只生产命令，尚无逻辑线程消费。
     const bool readable = returned && whileLocked == openedPopup;
     // 分开打印失败阶段，便于辨别读发布错误和代次路由错误。
-    if ( !published || !readable || !reusedIndex || !ignoredOld ||
-         !acceptedNew )
+    if ( !published || !readable || !playbackApplied || !reusedIndex ||
+         !ignoredOld || !acceptedNew || !noClosedTarget )
         XERROR(
-            "Playback state regression: state={}, read={}, reuse={}, stale={}, "
-            "current={}",
+            "Playback state regression: state={}, read={}, applied={}, "
+            "reuse={}, stale={}, "
+            "current={}, closed={}",
             published,
             readable,
+            playbackApplied,
             reusedIndex,
             ignoredOld,
-            acceptedNew);
-    return published && readable && reusedIndex && ignoredOld && acceptedNew;
+            acceptedNew,
+            noClosedTarget);
+    return published && readable && playbackApplied && reusedIndex &&
+           ignoredOld && acceptedNew && noClosedTarget;
 }
 
 }  // namespace
