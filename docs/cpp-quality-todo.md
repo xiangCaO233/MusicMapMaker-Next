@@ -107,7 +107,7 @@
     | `Modules/Game/Logic/src/logic/session/BeatmapSession.cpp` | 416 | 965 | 30.12% |
     | `Modules/Game/Logic/src/logic/session/BeatmapSession_Rendering.cpp` | 725 | 1685 | 30.08% |
 
-  - 已完成工具栏轨道布局批次。音效弹层一次读取玩家、草稿和 BGM 三组标量，通过短临界区取得同一代布局。键数滚轮、滑条和预设通过会话队列提交单字段变更，逻辑消费时才按当前模型计算键数，继续使用现有迁移、撤销和尾随保存流程。播放控制的生命周期入口仍待收敛。
+  - 已完成工具栏轨道布局批次。音效弹层一次读取玩家、草稿和 BGM 三组标量，通过短临界区取得同一代布局。键数滚轮、滑条和预设通过会话队列提交单字段变更，逻辑消费时才按当前模型计算键数，继续使用现有迁移、撤销和尾随保存流程。
   - Linux Debug 32 线程全量构建，全部 218 项 CTest 通过。回归覆盖占用会话锁时音效布局读取与键数命令入队、连续两格滚轮保留前一条标题修改和 BGM 相对轨、切换及关闭后的三组轨道同步。Ninja 活动对象记录中，`ToolbarView.cpp` 移除了 `SessionContext.h` 和 `BeatmapSession.h` 的依赖，`SessionContext.h` 的扇出由 71 降至 70。
   - 工具栏批次逐文件注释率
 
@@ -123,6 +123,22 @@
     | `Modules/Game/Logic/tests/BrushPaletteSessionStateTest.cpp` | 297 | 683 | 30.31% |
     | `Modules/Game/UI/include/ui/imgui/manager/ToolbarView.h` | 202 | 188 | 51.79% |
     | `Modules/Game/UI/src/ui/imgui/manager/ToolbarView.cpp` | 2022 | 4675 | 30.19% |
+
+  - 已完成移动播放控件与活动状态发布批次。播放位、键数和活动目标代次一起发布，移动控件只读取标量。关闭或切换谱面时，旧键数及倍速弹层失效；播放、键数及倍速命令投递前复核代次，避免索引被复用时投到另一张谱面。逻辑循环在已有会话锁内确认快照条目与活动身份仍有效。桌面通用播放命令及音频准备职责仍待收敛。
+  - Linux Debug 32 线程构建及 218 项 CTest 通过。回归覆盖长锁期间读取、载入时撤回状态、同索引替换后拒绝旧命令并接受当前代次。Android ARM64 NDK 编译了移动播放控件、移动工作区外壳及引擎实现。Android 的 Ninja 历史依赖和同参数重新提取的编译依赖显示，移动播放控件去除了 `SessionContext.h` 和 `BeatmapSession.h`。Linux 活动对象中 `SessionContext.h`、`BeatmapSession.h` 和 `EditorEngine.h` 的扇出分别保持在 70、51 和 97。
+  - 移动播放批次逐文件注释率
+
+    | 文件 | 注释行 | 代码行 | 比例 |
+    | --- | ---: | ---: | ---: |
+    | `Modules/Event/include/event/logic/LogicCommandEvent.h` | 10 | 22 | 31.25% |
+    | `Modules/Game/Common/include/common/EditorPlaybackState.h` | 5 | 11 | 31.25% |
+    | `Modules/Game/Logic/include/logic/EditorEngine.h` | 369 | 251 | 59.52% |
+    | `Modules/Game/Logic/src/logic/EditorEngine.cpp` | 1721 | 4008 | 30.04% |
+    | `Modules/Game/Logic/src/logic/EditorEngine_Impl.h` | 78 | 77 | 50.32% |
+    | `Modules/Game/Logic/tests/BrushPaletteSessionStateTest.cpp` | 321 | 749 | 30.00% |
+    | `Modules/Game/UI/include/ui/workspace/MobilePlaybackControls.h` | 21 | 29 | 42.00% |
+    | `Modules/Game/UI/src/ui/workspace/MobilePlaybackControls.cpp` | 159 | 366 | 30.29% |
+    | `Modules/Game/UI/src/ui/workspace/MobileWorkspacePresentation.cpp` | 372 | 866 | 30.05% |
 
 - [ ] **PERF-06 P3 离屏几何容量扩张在命令录制阶段等待全 GPU 空闲**
 

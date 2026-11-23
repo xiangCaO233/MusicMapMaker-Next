@@ -51,7 +51,8 @@ struct PreparedAudioTimeline;
 namespace MMM::Common
 {
 struct EditorTrackLayout;
-}
+struct EditorPlaybackState;
+}  // namespace MMM::Common
 
 namespace MMM::Logic
 {
@@ -112,10 +113,13 @@ public:
     /// @return 当前临时项目源包与缓存目录；非临时项目时返回默认值。
     TemporaryProjectInfo currentTemporaryProjectInfo() const;
 
-    /**
-     * @brief 向当前活动的 Session 推送指令
-     */
-    void pushCommand(LogicCommand&& cmd);
+    /// @brief 按命令类型路由到项目、编辑器或活动会话。
+    /// @param cmd 待转移给对应队列的命令。
+    /// @param playbackGeneration 移动控件绑定的活动目标代次，空值走原有路由。
+    /// @warning 连续交互使用已发布路由快照；通用命令入口保留原有会话锁。
+    void pushCommand(
+        LogicCommand&&               cmd,
+        std::optional<std::uint64_t> playbackGeneration = std::nullopt);
 
     /**
      * @brief 检查当前是否有未保存的修改
@@ -476,6 +480,10 @@ public:
     /// 与会话更新锁无关，内部不得借用会话或谱面对象。
     Common::EditorTrackLayout activeTrackLayout() const;
 
+    /// @brief 读取同一活动目标的播放状态、键数与代次。
+    /// @warning 移动工具栏每帧读取。短锁只复制标量，不等会话更新或音频准备。
+    Common::EditorPlaybackState activePlaybackState() const;
+
     /// @brief 判断当前活跃 Session 是否存在已选谱面物件。
     /// @return 玩家物件或自动采样至少有一个被选中时返回 true。
     /// @warning UI 菜单每帧读取 relaxed 原子；逻辑 update 发布最终状态，
@@ -597,10 +605,13 @@ private:
     /// 原子。
     void publishGestureStateUnsafe(const SessionContext* context);
 
-    /// @brief 发布当前活动轨道布局；context 为空则撤回旧谱面状态。
-    /// @pre 调用者串行持有会话注册表锁，保证活动身份及模型字段属于同一会话。
-    /// @warning 逻辑热路径，只在标量发生变化时取得与会话无关的短发布锁。
-    void publishTrackLayoutUnsafe(const SessionContext* context);
+    /// @brief 发布同一活动谱面的播放与轨道状态。
+    /// @param context 活动上下文，空值表示正在切换或尚未载入谱面。
+    /// @param targetChanged 活动目标已更换，即使复用同一索引也推进代次。
+    /// @pre 调用者持有会话注册表锁，且上下文属于当前活动会话。
+    /// @warning 每轮逻辑调用，只在值变化时取得独立短锁。
+    void publishActiveEditorStateUnsafe(const SessionContext* context,
+                                        bool targetChanged = false);
 
     /// @brief 消费画布切换请求并在资源准备完毕后提交。
     /// @warning 每轮逻辑调用，只有待办或已完成结果才进入低频提交路径。

@@ -1046,8 +1046,8 @@ void MobileWorkspacePresentation::drawToolbar(UIManager& manager)
             std::max(height * .5f,
                      ImGui::GetContentRegionAvail().y - groupHeight));
         // 两组仍共用滚动区，短屏能从空白处拖动到最末的缩放按钮。
-        m_playbackControls.drawButtons(
-            manager, ImGui::GetContentRegionAvail().x, m_scale);
+        m_playbackControls.drawButtons(ImGui::GetContentRegionAvail().x,
+                                       m_scale);
     }
     ImGui::End();
 }
