@@ -38,6 +38,7 @@
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "runtime/AppThreadPool.h"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -46,7 +47,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <glm/vec4.hpp>
+#include <ice/thread/ThreadPool.hpp>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -418,60 +421,6 @@ float resolveActiveCursorSmokeLifeOverride(
     }
     // 没有匹配活动索引时返回哨兵，不使用任一后台会话代替。
     return -1.0f;
-}
-
-/// @brief 在已持锁的 Session 列表中按 cameraId 查找索引。
-/// @param sessions 当前 Session 条目列表。
-/// @param cameraId 目标画布 cameraId。
-/// @return 找到时返回 Session 索引，否则返回 -1。
-/// @warning 逻辑/UI 热路径辅助：调用者必须已经持有 SessionRegistry 锁。
-int32_t findSessionIndexByCameraIdUnsafe(
-    const std::vector<SessionEntry>& sessions, const std::string& cameraId)
-{
-    // 这里返回 SessionEntry 列表位置，与带索引快照中的 entry.index
-    // 查询方式不同。 不检查 session
-    // 是否存在，后续路由需自行验证目标可接收命令。
-    for ( int32_t index = 0; index < static_cast<int32_t>(sessions.size());
-          ++index ) {
-        if ( sessions[static_cast<size_t>(index)].cameraId == cameraId ) {
-            return index;
-        }
-    }
-    return -1;
-}
-
-/// @brief 判断目标 Session 是否允许接收当前 hover 滚轮。
-/// @param sessions 当前 Session 条目列表。
-/// @param activeIndex 当前活动 Session 索引。
-/// @param targetIndex 鼠标悬停的目标 Session 索引。
-/// @return 目标为活动项或两者主音轨同步键相同时返回 true。
-/// @warning 逻辑/UI 热路径辅助：调用者必须已经持有 SessionRegistry 锁。
-bool canUseHoverScrollTargetUnsafe(const std::vector<SessionEntry>& sessions,
-                                   int32_t activeIndex, int32_t targetIndex)
-{
-    // 先确认悬浮目标索引与会话有效，不能只凭 cameraId 命中就放行。
-    // 活动项检查在目标验证之后，空活动槽也不会误获得滚轮权限。
-    if ( targetIndex < 0 ||
-         targetIndex >= static_cast<int32_t>(sessions.size()) ||
-         !sessions[static_cast<size_t>(targetIndex)].session ) {
-        return false;
-    }
-    if ( targetIndex == activeIndex ) {
-        return true;
-    }
-    if ( activeIndex < 0 ||
-         activeIndex >= static_cast<int32_t>(sessions.size()) ||
-         !sessions[static_cast<size_t>(activeIndex)].session ) {
-        return false;
-    }
-
-    // 不同会话只有共享非空主音轨同步键才允许悬浮滚动路由。
-    // 两个空键不代表同步关系，必须显式排除空指纹相等的情况。
-    const auto& activeFingerprint =
-        sessions[static_cast<size_t>(activeIndex)].mainAudioSyncFingerprint;
-    const auto& targetFingerprint =
-        sessions[static_cast<size_t>(targetIndex)].mainAudioSyncFingerprint;
-    return !activeFingerprint.empty() && activeFingerprint == targetFingerprint;
 }
 
 /// @brief 将持久化的项目相对路径解析为文件系统路径。
@@ -1746,10 +1695,10 @@ void EditorEngine::restoreProjectWorkspace(
                                       ? map->m_baseMapMetadata.name
                                       : state.m_displayName;
         int32_t     index       = createSession(map,
-                                                displayName,
-                                                false,
-                                                state.m_cameraId,
-                                                !state.m_cameraId.empty());
+                                      displayName,
+                                      false,
+                                      state.m_cameraId,
+                                      !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
         // fallback 始终指向最后成功创建项，活动路径丢失时仍给用户可用画布。
 
@@ -2238,6 +2187,13 @@ void EditorEngine::stop()
         // 只有成功把 true 改为 false 的调用者承担等待责任，重复 stop 保持幂等。
         if ( impl().m_loopThread.joinable() ) {
             impl().m_loopThread.join();
+        }
+        // 后台准备只借用音频服务；退出时必须在 AudioManager::shutdown 前收回。
+        // 先 join 逻辑线程再等待资源任务，保证没有新的准备从停止路径后方入队。
+        // 音频池与 AppThreadPool 都在 GameLoop 后续阶段关闭，此处借用仍然有效。
+        if ( impl().m_canvasAudioPreparation.valid() ) {
+            impl().m_canvasAudioPreparation.wait();
+            impl().m_canvasAudioPreparation = {};
         }
         XINFO("EditorEngine logic thread stopped.");
     }
@@ -2867,40 +2823,45 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
 
     // 主画布滚轮按 cameraId 精确路由，确保焦点切换帧的滚动命令进入悬停画布，
     // 而不是依赖上一帧仍未完成切换的活动索引。
-    if ( std::holds_alternative<CmdScroll>(cmd) ) {
-        const auto& scroll = std::get<CmdScroll>(cmd);
-        if ( Common::isComparisonCanvas(scroll.cameraId) ) {
-            // 对比视口处理滚轮前已经激活所属会话，与主窗口共享传输时钟。
-            const auto owner = Common::canvasSessionCameraId(scroll.cameraId);
-            const auto snapshot = impl().m_sessionRegistry.publishedSnapshot();
+    // 使用与渲染列表一致的发布快照辨认目标；即使目标在同轮关闭，
+    // 快照也保活这个特定对象，命令不会落到后来复用索引的新谱面。
+    if ( const auto* scroll = std::get_if<CmdScroll>(&cmd) ) {
+        const bool comparison = Common::isComparisonCanvas(scroll->cameraId);
+        if ( comparison ||
+             SessionUtils::isMainCanvasCameraId(scroll->cameraId) ) {
+            const auto camera = Common::canvasSessionCameraId(scroll->cameraId);
+            const auto snapshot  = impl().m_sessionRegistry.publishedSnapshot();
+            const auto& sessions = snapshot->sessions;
+            const auto  target   = std::ranges::find(
+                sessions, camera, &SessionSnapshotEntry::cameraId);
+            if ( target == sessions.end() ) return;
             const auto activeIndex = impl().m_sessionRegistry.activeIndex();
-            for ( const auto& entry : snapshot->sessions ) {
-                if ( entry.index == activeIndex && entry.cameraId == owner ) {
-                    entry.session->pushCommand(std::move(cmd));
-                    break;
-                }
-            }
-            return;
-        }
-        if ( SessionUtils::isMainCanvasCameraId(scroll.cameraId) ) {
-            std::lock_guard<std::recursive_mutex> lock(
-                impl().m_sessionRegistry.mutex());
-            /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
-            auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
-            /// @brief 当前活动 Session 索引快照。
-            const int32_t activeIndex = impl().m_sessionRegistry.activeIndex();
-            /// @brief 滚轮目标主画布对应的 Session 索引。
-            const int32_t targetIndex =
-                findSessionIndexByCameraIdUnsafe(sessions, scroll.cameraId);
-            // 后台滚轮只允许与活动会话共享有效 Main 指纹的画布，保证时间滚动
-            // 仍对应当前 transport；无关谱面必须先获得活动焦点。
-            if ( !canUseHoverScrollTargetUnsafe(
-                     sessions, activeIndex, targetIndex) ) {
+            if ( target->index == activeIndex ) {
+                // 常态活动画布的立即导航不需要接触焦点邮箱。
+                target->session->pushCommand(std::move(cmd));
                 return;
             }
 
-            sessions[static_cast<size_t>(targetIndex)].session->pushCommand(
-                std::move(cmd));
+            // 焦点边沿的首个滚轮可先于逻辑提交到达；只匹配尚待消费的相机身份。
+            bool hasFocusRequest;
+            {
+                std::lock_guard lock(impl().m_activeCanvasRequestMutex);
+                hasFocusRequest = impl().m_requestedActiveCamera == camera;
+            }
+            const auto active = std::ranges::find(
+                sessions, activeIndex, &SessionSnapshotEntry::index);
+            // 后台主画布仅能滚动同主音轨；两个空指纹不能构成跟随关系。
+            const bool followsActive =
+                !comparison && active != sessions.end() &&
+                !active->mainAudioSyncFingerprint.empty() &&
+                active->mainAudioSyncFingerprint ==
+                    target->mainAudioSyncFingerprint;
+            // 焦点请求可在上述两次读之间被逻辑消费；活动索引需要复核一次。
+            // 仍以该轮快照中的稳定目标投递，不从新索引反查另一个会话。
+            if ( hasFocusRequest || followsActive ||
+                 target->index == impl().m_sessionRegistry.activeIndex() ) {
+                target->session->pushCommand(std::move(cmd));
+            }
             return;
         }
     }
@@ -3672,10 +3633,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 顺序投递初始化命令，保证载图处理看到完整编辑环境。
                 sessions[i].isLogoPlaceholder        = false;
                 sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
-                sessions[i].displayName = displayName.empty()
-                                              ? beatmap->m_baseMapMetadata.name
-                                              : displayName;
-                sessions[i].beatmapPathKey = requestedBeatmapKey;
+                sessions[i].displayName              = displayName.empty()
+                                                           ? beatmap->m_baseMapMetadata.name
+                                                           : displayName;
+                sessions[i].beatmapPathKey           = requestedBeatmapKey;
                 // 占位条目的旧音频身份必须覆盖为空，等待载图命令生成新描述符。
                 sessions[i].audioTimelineFingerprint =
                     requestedAudioTimelineFingerprint;
@@ -3978,6 +3939,190 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
 /// @post 有效目标成为唯一活动上下文，并取得最新共享视口尺寸命令。
 void EditorEngine::setActiveSessionIndex(int32_t index)
 {
+    applyActiveSessionIndex(index, true);
+}
+
+/// @brief 只发布最新的画布焦点意图。
+/// @param cameraId 主画布身份，调用方须先把对比视口映射回所有者。
+/// @details 接纳请求不代表旧 transport 已停止。逻辑线程确认相机仍在注册表后
+/// 再变更活动会话，避免关闭与焦点事件之间的竞态把请求交给错误标签。
+/// @warning UI 焦点及导航入口：邮箱与会话状态独立，锁内只更新标识与修订。
+void EditorEngine::requestActiveCanvas(std::string_view cameraId)
+{
+    std::lock_guard lock(impl().m_activeCanvasRequestMutex);
+    // 连续导航可能在逻辑确认前重复发布同一个相机，保留一个待处理代次即可。
+    if ( impl().m_requestedActiveCamera == cameraId ) return;
+    impl().m_requestedActiveCamera = cameraId;
+    // 数据由互斥锁同步；原子仅用于逻辑轮次的无锁快速返回。
+    impl().m_activeCanvasRequestRevision.fetch_add(1,
+                                                   std::memory_order_relaxed);
+}
+
+/// @brief 推进画布身份切换及音频准备的两个独立阶段。
+/// @details 焦点提交立即更新会话选择。若现有调度不能复用，后台只处理不可变
+/// 事件副本，逻辑继续消费输入。准备完成后同时复核会话身份、切换代次与时间线
+/// 指纹，任何一个变化都使旧候选失效。整个流程只保留一项后台工作和最新意图。
+/// @warning 每轮逻辑调用：空闲只读修订，准备中只轮询就绪状态。禁止等待后台
+/// 解码、持邮箱锁执行会话操作，或将可变 SessionContext 借给后台。
+void EditorEngine::processActiveCanvasRequest()
+{
+    auto&      state = impl();
+    const auto revision =
+        state.m_activeCanvasRequestRevision.load(std::memory_order_relaxed);
+    const bool hasRequest = revision != state.m_consumedActiveCanvasRevision;
+    // future 只有逻辑线程操作。使用零时长查询，设备暂停或解码尚未完成
+    // 都不影响本轮会话更新；停止引擎是唯一允许等待任务退出的路径。
+    const bool workerReady =
+        state.m_canvasAudioPreparation.valid() &&
+        state.m_canvasAudioPreparation.wait_for(std::chrono::seconds(0)) ==
+            std::future_status::ready;
+    if ( !hasRequest && !workerReady &&
+         (!state.m_hasPendingCanvasAudio ||
+          state.m_canvasAudioPreparation.valid()) )
+        return;
+
+    // 先复制邮箱内容，再进入注册表。采纳序号与目标在同一锁域内读取，
+    // 避免 UI 恰好覆盖请求时把前一个相机与后一个序号配对。
+    std::string requestedCamera;
+    if ( hasRequest ) {
+        std::lock_guard lock(state.m_activeCanvasRequestMutex);
+        requestedCamera = state.m_requestedActiveCamera;
+        state.m_consumedActiveCanvasRevision =
+            state.m_activeCanvasRequestRevision.load(std::memory_order_relaxed);
+    }
+
+    // 注册表锁只保护选择与提交所需的可变领域状态。耗时的解码和离线 DSP
+    // 在下面的 worker 中运行，任务没有访问此锁的权限。
+    std::lock_guard lock(state.m_sessionRegistry.mutex());
+    auto&           sessions = state.m_sessionRegistry.entriesUnsafe();
+    if ( hasRequest ) {
+        const auto target = std::ranges::find(
+            sessions, requestedCamera, &SessionEntry::cameraId);
+        // 索引可能在画布关闭后移动，必须在提交锁内按相机身份重找。
+        if ( target != sessions.end() ) {
+            const auto index = static_cast<int32_t>(target - sessions.begin());
+            if ( index != state.m_sessionRegistry.activeIndex() ) {
+                // 立即提交画布身份和可编辑状态，音频完成前不占用逻辑线程。
+                applyActiveSessionIndex(index, false);
+            }
+        }
+    }
+
+    if ( hasRequest ) {
+        // 活动索引提交后才能移除邮箱身份，否则同帧的首个滚轮可能失去路由。
+        // 新相机可在提交期间到达，仅清理确实已消费的发布版本。
+        std::lock_guard requestLock(state.m_activeCanvasRequestMutex);
+        if ( state.m_activeCanvasRequestRevision.load(
+                 std::memory_order_relaxed) ==
+             state.m_consumedActiveCanvasRevision ) {
+            state.m_requestedActiveCamera.clear();
+        }
+    }
+
+    // 即使最新目标是 Logo，已经完成的阶段也要回收，否则会长期持有旧 PCM。
+    // get 仅用于已就绪结果，不在注册表锁内等待任务计算。
+    std::shared_ptr<Audio::PreparedAudioTimeline> prepared;
+    if ( workerReady ) prepared = state.m_canvasAudioPreparation.get();
+    // 如果旧任务还在运行，当前目标继续维持活动但静音，直到执行器腾出准备槽。
+    if ( !state.m_hasPendingCanvasAudio ||
+         state.m_canvasAudioPreparation.valid() )
+        return;
+
+    // 用户可以在准备期间关闭画布或打开项目，此时活动索引不再保证指向
+    // 原请求。只有当前仍声明等待音频的上下文才需要后续处理。
+    const auto index = state.m_sessionRegistry.activeIndex();
+    if ( index < 0 || index >= static_cast<int32_t>(sessions.size()) ||
+         !sessions[index].session ) {
+        state.m_hasPendingCanvasAudio = false;
+        return;
+    }
+    auto& entry = sessions[index];
+    auto& ctx   = entry.session->getContextMutable();
+    // 某些项目动作可清空谱面却保留会话；此时不应为旧文档恢复播放。
+    if ( !ctx.m_waitingForCanvasAudio || !ctx.currentBeatmap ) {
+        ctx.m_waitingForCanvasAudio   = false;
+        state.m_hasPendingCanvasAudio = false;
+        return;
+    }
+    if ( ctx.isAudioTimelineDescriptorDirty ) {
+        // 资源重命名、编辑或协作同步可能在后台准备期间改变事件集合。
+        // 指纹要以当前领域数据计算，不能只比较开始准备时的注册表缓存。
+        const auto* project = ctx.collaborationProject
+                                  ? ctx.collaborationProject.get()
+                                  : getCurrentProject();
+        SessionUtils::rebuildAudioTimelineDescriptor(ctx, project);
+    }
+    const auto& descriptor = ctx.audioTimelineDescriptor;
+    auto&       audio      = Audio::AudioManager::instance();
+    // 相机身份保护跨标签提交；代次区分 A→B→A；指纹保护同标签资源编辑。
+    // 这三个条件同时成立才允许候选替换唯一的全局音频图。
+    if ( prepared && state.m_preparingCamera == entry.cameraId &&
+         state.m_preparingTimelineFingerprint == descriptor.m_fingerprint &&
+         state.m_preparingCanvasRevision == state.m_canvasAudioGeneration ) {
+        auto result = audio.installAudioTimeline(*prepared,
+                                                 descriptor.m_chartEndSeconds,
+                                                 descriptor.m_fingerprint,
+                                                 descriptor.m_stops);
+        // 先解除同步激活门禁，并标记资源已尝试加载，再基于当前光标设定
+        // 传输。失败时也要消费该代次，不能让下一轮回到同步解码。
+        ctx.m_waitingForCanvasAudio          = false;
+        ctx.isAudioTimelineActivationPending = false;
+        ctx.missingAudioTimelineClipCount    = result.missingClipCount;
+        state.m_hasPendingCanvasAudio        = false;
+        for ( const auto& diagnostic : result.diagnostics ) {
+            XWARN("Audio timeline load: {}", diagnostic.message);
+        }
+        if ( result.success ) {
+            // 播放意图和位置取提交时的上下文。后台只负责准备 PCM，
+            // 准备开始时的 seek 或播放状态可能已被用户后续输入替换。
+            const bool shouldPlay = ctx.m_playWhenCanvasAudioReady;
+            ctx.isPlaying =
+                SessionUtils::activateAudioTimeline(ctx, shouldPlay) &&
+                shouldPlay;
+            // 同步发布给工具栏，确保新调度生效时状态立即与会话播放位一致。
+            state.m_activePlaybackPlaying.store(ctx.isPlaying,
+                                                std::memory_order_relaxed);
+        } else {
+            // 保留可编辑的谱面时间范围，读不到资源时也允许修改有时间的物件。
+            ctx.audioTimelineTotalTime = descriptor.m_chartEndSeconds;
+        }
+        ctx.m_playWhenCanvasAudioReady = false;
+        return;
+    }
+
+    if ( auto* pool = Runtime::AppThreadPool::instance().get() ) {
+        // 旧准备结果可能属于已关闭画布或旧谱面版本；只提交当前不变量的副本。
+        // 一个任务最多同时占一个工作者。后续焦点仍可改变活动会话，
+        // 等当前任务交回结果后再按最新描述符准备，不无限积压冷解码。
+        state.m_preparingCamera              = entry.cameraId;
+        state.m_preparingTimelineFingerprint = descriptor.m_fingerprint;
+        state.m_preparingCanvasRevision      = state.m_canvasAudioGeneration;
+        state.m_canvasAudioPreparation =
+            pool->enqueue([&audio, events = descriptor.m_events]() {
+                // 回收已无消费方的旧源轨也可能释放大量
+                // PCM，放在共享后台任务中。
+                static_cast<void>(audio.releaseUnusedTrackCache());
+                return audio.prepareAudioTimeline(events);
+            });
+        return;
+    }
+
+    // 启动或测试缺少运行时池时，保留可编辑会话与明确停止的传输状态。
+    ctx.m_waitingForCanvasAudio          = false;
+    ctx.m_playWhenCanvasAudioReady       = false;
+    ctx.isAudioTimelineActivationPending = false;
+    state.m_hasPendingCanvasAudio        = false;
+}
+
+/// @brief 执行会话切换的同步控制阶段。
+/// @param index 当前注册表中已解析出的目标位置。
+/// @param allowSynchronousPrepare 工作区恢复等同步控制入口可直接准备音频。
+/// @details 交互入口先转移画笔、活动标志与时间，只有现有调度仍适配时才复用。
+/// 冷切换会停用旧传输并发布需要准备的状态，由逻辑线程在后续轮次提交结果。
+/// @warning 仅低频变更时调用。交互路径禁止在此等待解码或音频回调确认。
+void EditorEngine::applyActiveSessionIndex(int32_t index,
+                                           bool    allowSynchronousPrepare)
+{
     std::lock_guard<std::recursive_mutex> lock(
         impl().m_sessionRegistry.mutex());
     const auto editorConfig = getEditorConfig();
@@ -3985,6 +4130,11 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
     if ( index < 0 || index >= static_cast<int32_t>(sessions.size()) ) {
         return;
     }
+
+    // 程序主动切换也必须推进代次：先前交互的准备结果不可以在恢复完成后
+    // 覆盖刚装入的时间线。待办快路径标志只由逻辑线程写入。
+    ++impl().m_canvasAudioGeneration;
+    if ( !allowSynchronousPrepare ) impl().m_hasPendingCanvasAudio = false;
 
     // 切换只采样一次 steady_clock，使旧会话的连续播放位置与新会话的
     // transport 定位建立在同一时刻，不受中间资源激活耗时影响。
@@ -4020,6 +4170,12 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
                 resolveContinuousSessionTime(previousCtx, sessionSwitchTime);
             previousWasPlaying = true;
         }
+        if ( previousCtx.m_waitingForCanvasAudio ) {
+            // 连续快速切换时，旧目标尚未装载也可以传递有效的续播意图。
+            previousWasPlaying = previousCtx.m_playWhenCanvasAudioReady;
+            previousCtx.m_waitingForCanvasAudio    = false;
+            previousCtx.m_playWhenCanvasAudioReady = false;
+        }
         previousTime                            = previousCtx.currentTime;
         previousCtx.isPlaying                   = false;
         previousCtx.isAudioTimelineSyncFollower = false;
@@ -4037,7 +4193,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
     auto& activeSession = sessions[index].session;
     if ( !activeSession ) {
         // 空槽无法接管 transport，卸载旧时间线防止 UI 状态与实际播放来源分离。
-        audio.unloadAudioTimeline();
+        audio.unloadAudioTimeline(allowSynchronousPrepare);
         return;
     }
 
@@ -4069,10 +4225,30 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
         previousWasPlaying,
         editorConfig.settings.stopPlaybackOnScroll,
         m_syncSameMainAudioCanvases.load(std::memory_order_relaxed));
-    ctx.currentTime       = switchDecision.m_targetTime;
-    bool transferPlayback = switchDecision.m_resumePlayback;
+    ctx.currentTime             = switchDecision.m_targetTime;
+    const bool transferPlayback = switchDecision.m_resumePlayback;
 
-    const bool timelineReady = !sessions[index].isLogoPlaceholder &&
+    const bool canLoad =
+        !sessions[index].isLogoPlaceholder && ctx.currentBeatmap;
+    // 同指纹只有在未被明确标记为重载时才可复用，用于保留文件失效语义。
+    const bool reuse = audio.hasLoadedAudioTimeline() &&
+                       !ctx.isAudioTimelineActivationPending &&
+                       audio.getLoadedAudioTimelineFingerprint() ==
+                           ctx.audioTimelineDescriptor.m_fingerprint;
+    // 空白谱面只需要停用旧图，既无需创建后台任务也没有尾部 PCM 可等待。
+    if ( canLoad && !allowSynchronousPrepare && !reuse ) {
+        // 新画布立即接管本地输入及位置；旧音频须先静音，不能跨谱面继续出声。
+        ctx.m_waitingForCanvasAudio    = true;
+        ctx.m_playWhenCanvasAudioReady = transferPlayback;
+        // 若曾激活过同一会话，保留已知音频尾端直到新调度就绪。
+        ctx.audioTimelineTotalTime =
+            std::max(ctx.audioTimelineTotalTime,
+                     ctx.audioTimelineDescriptor.m_chartEndSeconds);
+        impl().m_hasPendingCanvasAudio = true;
+    }
+    // 等待期间保留本地视野和编辑能力。实际音频准备结束后，
+    // processActiveCanvasRequest 会读取这期间最后一次导航与播放意图。
+    const bool timelineReady = canLoad && !ctx.m_waitingForCanvasAudio &&
                                SessionUtils::activateAudioTimeline(ctx, false);
     // 允许负视觉前置时间，但不能越过有效总时长；视觉偏移过大时上下界合并。
     double totalTime = SessionUtils::getEffectiveTotalTimeSeconds(ctx);
@@ -4087,9 +4263,8 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
             ctx.isPlaying = true;
         }
     } else {
-        // Logo、空谱面或资源激活失败都必须卸载全局时间线；续播意图作废。
-        audio.unloadAudioTimeline();
-        transferPlayback = false;
+        // 无可用音频时立即断开旧调度，待准备的续播意图留在目标上下文。
+        audio.unloadAudioTimeline(allowSynchronousPrepare);
     }
 
     // transport 最终状态已确定，再发布给逐帧工具栏读取。
@@ -4604,6 +4779,10 @@ void EditorEngine::loop()
                                           editorConfigSnapshotRevision);
         // 配置刷新位于项目动作之后，新项目自动备份覆盖可在同轮进入 Session
         // 更新。
+
+        // 先处理焦点再取得本轮发布快照，使活动身份与后续定向滚轮一起生效。
+        // 焦点请求可以独立于谱面命令推进；资源未就绪则继续正常更新。
+        processActiveCanvasRequest();
 
         // 项目动作可能恢复工作区并改变会话集合，因此在其完成后才获取发布快照。
         /// @brief 当前已发布的 Session 快照读取句柄，避免为复制 SessionEntry

@@ -199,6 +199,12 @@ struct SessionContext {
     bool isAudioTimelineDescriptorDirty{ true };
     /// @brief 当前会话下次成为活动项时是否必须重新提交音频图。
     bool isAudioTimelineActivationPending{ true };
+
+    /// @brief 画布已活动，后台音频准备期间暂停全局 transport 的同步加载入口。
+    bool m_waitingForCanvasAudio{ false };
+
+    /// @brief 后台音频准备期间最新的续播或显式播放意图。
+    bool m_playWhenCanvasAudioReady{ false };
     /// @brief 新指纹是否尚未发布到 SessionRegistry 的不可变快照。
     bool isAudioTimelineFingerprintPublishPending{ true };
     /// @brief 最近一次成功激活后缓存的复合时间线总时长，单位秒。

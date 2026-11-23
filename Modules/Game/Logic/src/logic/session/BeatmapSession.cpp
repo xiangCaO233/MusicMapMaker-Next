@@ -1206,7 +1206,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
         EditorEngine::instance().refreshAudioTimelineFingerprints();
         m_ctx->isAudioTimelineFingerprintPublishPending = false;
     }
-    if ( isActiveSession && m_ctx->isAudioTimelineActivationPending ) {
+    if ( isActiveSession && m_ctx->isAudioTimelineActivationPending &&
+         !m_ctx->m_waitingForCanvasAudio ) {
         // 后台会话可刷新描述符，但不能借此替换全局正在加载的音频。
         if ( !SessionUtils::activateAudioTimeline(*m_ctx, m_ctx->isPlaying) ) {
             m_ctx->isPlaying = false;

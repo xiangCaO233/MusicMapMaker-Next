@@ -314,6 +314,8 @@ private:
 
     /// @brief 下一帧是否调用 ImGui::SetNextWindowFocus。
     bool m_shouldFocusNextFrame{ false };
+    /// @brief 上一可见帧的根窗口焦点，用于去重会话切换请求。
+    bool m_hadSessionFocus{ false };
 
     /// @brief 同步缓冲区
     /// @warning 热路径/共享指针：画布仅持有所有权确保缓冲区生命周期，update
