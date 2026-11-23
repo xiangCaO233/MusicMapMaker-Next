@@ -280,6 +280,104 @@ private:
     return true;
 }
 
+/// @brief 验证回调内更换观察者后，旧观察者返回的序号不会拦截新绑定的权威状态。
+/// @return 旧回调确实运行、后续权威物件在新观察者下成功安装时返回 true。
+[[nodiscard]] bool testObserverReplacementDuringCallback()
+{
+    using namespace MMM::Logic;
+    // 本用例只有一个逻辑消费线程。同步换绑模拟最窄竞争窗口，
+    // 不需要计时等待，也不会让测试在线程调度变化时偶发漏测。
+    /// @brief 在收到本地对象回调时立即替换当前绑定，并返回旧连接的序号。
+    class ReplacingObserver final : public MMM::IBeatmapMutationObserver
+    {
+    public:
+        /// @brief 将会话和目标观察者保持为本次同步夹具的显式依赖。
+        /// @param session 提供正在运行的回调，并要在回调中建立新绑定。
+        /// @param replacement 接收后续权威同步的观察者。
+        ReplacingObserver(BeatmapSession&                           session,
+                          std::shared_ptr<CountingMutationObserver> replacement)
+            : m_session(session), m_replacement(std::move(replacement))
+        {
+        }
+
+        /// @copydoc MMM::IBeatmapMutationObserver::onBeatmapMutated
+        std::uint64_t onBeatmapMutated(const MMM::BeatMap&,
+                                       MMM::BeatmapMutationFlags flags) override
+        {
+            // 回调仍在运行时同步换绑，不依赖线程调度推测竞争窗口。
+            if ( flags != MMM::BeatmapMutationFlags::Objects ) return 0;
+            // 不请求初始快照，使新观察者的第一次通知只可能来自权威安装。
+            m_session.setMutationObserver(std::move(m_replacement), false);
+            // 该序号大于新绑定的零基线，必须由换绑后的身份检查丢弃。
+            return 7;
+        }
+
+    private:
+        /// @brief 负责回调的会话，其生命周期覆盖夹具。
+        BeatmapSession& m_session;
+
+        /// @brief 回调换绑时移交给会话的新观察者。
+        std::shared_ptr<CountingMutationObserver> m_replacement;
+    };
+
+    BeatmapSession            session;
+    MMM::Config::EditorConfig config;
+    auto                      initial = makeBeatmap();
+    // 载入一个能通过全选与删除触发纯物件回调的对象。
+    // 基线不需要额外元数据编辑，避免变更被合并到多个不同数据域。
+    auto& localNote       = initial->m_noteData.notes.emplace_back();
+    localNote.m_timestamp = 500.0;
+    localNote.m_track     = 2;
+    initial->sync();
+    session.pushCommand(
+        LogicCommand{ CmdLoadBeatmap{ .beatmap = std::move(initial) } });
+    // 框选工具采用全轨道选择，排除界面焦点和鼠标坐标影响。
+    session.pushCommand(
+        LogicCommand{ CmdChangeTool{ .tool = EditTool::Marquee } });
+    session.pushCommand(
+        LogicCommand{ CmdSelectAll{ .scope = SelectAllScope::AllTrackAreas } });
+    session.update(0.0, config, false);
+
+    auto replacement = std::make_shared<CountingMutationObserver>();
+    auto original = std::make_shared<ReplacingObserver>(session, replacement);
+    // 仅用弱句柄观察旧绑定释放，夹具不能人为延长旧观察者寿命。
+    const std::weak_ptr<ReplacingObserver> previous = original;
+    session.setMutationObserver(std::move(original), false);
+    // 只有消费对象编辑并完成替换后，旧观察者才能随回调的局部拥有权一起释放。
+    session.pushCommand(LogicCommand{ CmdDeleteSelected{} });
+    session.update(0.1, config, false);
+    // 原句柄若仍存活，说明本轮未执行换绑或旧读取没有在回调后释放。
+    if ( !previous.expired() || hasRootNote(session, 0.5, 2) ) {
+        XERROR("Observer replacement fixture did not execute the local delete");
+        return false;
+    }
+
+    // 新权威状态只包含远端对象，通过 ECS 检查是否真的完成安装。
+    // 用不同时间和轨道避免把旧对象误当作安装成功的证据。
+    auto  authority        = makeBeatmap();
+    auto& remoteNote       = authority->m_noteData.notes.emplace_back();
+    remoteNote.m_timestamp = 1000.0;
+    remoteNote.m_track     = 3;
+    // 指定协议使用的稳定身份，避免按源数据重新分配身份造成歧义。
+    remoteNote.m_collaborationId = "replacement-observer-note";
+    authority->sync();
+    // 新绑定还没有本地序号。若旧回调的 7 被误存，这条权威状态会一直被延后。
+    session.pushCommand(LogicCommand{ CmdReplaceBeatmapData{
+        .sourceBeatmap                 = std::move(authority),
+        .replaceObjects                = true,
+        .notifyMutationObserver        = false,
+        .authoritativeRemote           = true,
+        .includedLocalMutationSequence = 0,
+    } });
+    // 本轮没有额外手势或回执，只有被错误保留的旧序号会延后安装。
+    session.update(0.2, config, false);
+    // 新观察者必须接收权威同步且不回传本地变化，分别检查两个通知入口。
+    // 累计通知从零开始，无需依赖前一阶段的计数差来判断回声。
+    return hasRootNote(session, 1.0, 3) &&
+           replacement->synchronizationCount() == 1 &&
+           replacement->notificationCount() == 0;
+}
+
 /// @brief 验证 Timeline 窗口使用的单个和批量 Timing 命令都会发布协作变化。
 /// @return 两次编辑分别以 Timelines 类型通知观察者时返回 true。
 /// @note 单条、批量、撤销和重做都经过会话命令队列。
@@ -2153,6 +2251,7 @@ int main()
                    testBeatmapAnnotationPermissionAndTimestampGrouping() &&
                    testRemoteSynchronizationPreservesActiveBrush() &&
                    testRemoteSynchronizationWaitsForLocalMutationReceipt() &&
+                   testObserverReplacementDuringCallback() &&
                    testPreparedRemoteObjectDeltaAppliesIncrementally() &&
                    testOfflineCollaborationSessionIsReadOnly() &&
                    testCollaborationMutationPermissionsAreLocalGate() &&

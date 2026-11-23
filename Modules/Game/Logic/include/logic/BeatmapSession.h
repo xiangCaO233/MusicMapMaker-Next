@@ -2,6 +2,7 @@
 
 #include "common/AutoSaveTypes.h"
 #include "common/LogicCommandFwd.h"
+#include "logic/PublishedSharedPtr.h"
 #include "mmm/beatmap/BeatmapMutationObserver.h"
 #include <atomic>
 #include <cstdint>
@@ -349,9 +350,9 @@ private:
     std::vector<ResourceRenameAlias> m_resourceRenameAliases;
 
     /// @brief 当前低频谱面变化观察者。
-    /// @warning 跨线程访问通过 shared_ptr 原子自由函数完成；只在谱面发生实际
-    /// 变化或首次绑定时加载，用于避免观察者在逻辑回调期间被 UI 线程销毁。
-    std::shared_ptr<::MMM::IBeatmapMutationObserver> m_mutationObserver;
+    /// @warning UI 绑定或解绑，逻辑仅在已有变更、首次同步或权威提交时获取，
+    /// 持有到回调结束。替换者或最后持有者释放旧观察者；回调不持有发布槽锁。
+    PublishedSharedPtr<::MMM::IBeatmapMutationObserver> m_mutationObserver;
 
     /// @brief 新观察者绑定后请求逻辑线程发布一次完整谱面快照。
     /// @warning UI 线程写、逻辑线程每 update 读，使用 relaxed

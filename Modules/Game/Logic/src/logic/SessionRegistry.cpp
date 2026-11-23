@@ -257,14 +257,13 @@ void SessionRegistry::fillIndexedSessionSnapshot(
 
 /// @brief 获取当前发布给逻辑线程的不可变 Session 快照。
 /// @return 拥有型读取句柄，调用方应持有到本轮所有会话访问结束。
-/// @warning 逻辑热路径原子：只做 acquire shared_ptr 读取，不获取注册表锁。
+/// @warning 逻辑热路径原子：只获取一份快照句柄，不获取注册表锁。
 std::shared_ptr<const PublishedSessionSnapshot>
 SessionRegistry::publishedSnapshot() const
 {
     // acquire 对应写侧 release，使同一个快照的会话和元数据完整可见。
     // 读取句柄持有旧快照，写侧替换不会让本轮访问中的会话悬空。
-    auto snapshot = std::atomic_load_explicit(&m_publishedSnapshot,
-                                              std::memory_order_acquire);
+    auto snapshot = m_publishedSnapshot.load();
     if ( snapshot ) {
         return snapshot;
     }
@@ -283,8 +282,7 @@ SessionRegistry::publishedUiSnapshot() const
     // acquire 配对结构变更的 release，读者能看到完整的标签元数据。
     // 复制引用仅延长这一代快照寿命，不延长任何 BeatmapSession 寿命。
     // 读者可以在标签关闭与列表重排后完成本轮画布身份匹配。
-    auto snapshot = std::atomic_load_explicit(&m_publishedUiSnapshot,
-                                              std::memory_order_acquire);
+    auto snapshot = m_publishedUiSnapshot.load();
     if ( snapshot ) {
         return snapshot;
     }
@@ -408,15 +406,8 @@ void SessionRegistry::publishSnapshotUnsafe()
     // 快照自身只读，但所持会话仍按各自线程协议更新，不是深拷贝谱面。
     // 旧快照由并发读句柄保活，最后一个拥有者释放后才销毁。
     // 两次发布间的短暂代际差只影响 UI 标签身份，不改变命令校验规则。
-    std::atomic_store_explicit(
-        &m_publishedSnapshot,
-        std::shared_ptr<const PublishedSessionSnapshot>(std::move(snapshot)),
-        std::memory_order_release);
-    std::atomic_store_explicit(
-        &m_publishedUiSnapshot,
-        std::shared_ptr<const PublishedSessionUiSnapshot>(
-            std::move(uiSnapshot)),
-        std::memory_order_release);
+    m_publishedSnapshot.store(std::move(snapshot));
+    m_publishedUiSnapshot.store(std::move(uiSnapshot));
     // 所有元数据变更均通过本入口发布；不得只修改 entriesUnsafe 后遗漏发布。
 }
 

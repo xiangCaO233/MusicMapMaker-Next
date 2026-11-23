@@ -54,6 +54,7 @@
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "logic/SessionTypes.h"
 #include "logic/ecs/system/render/SkinTextureScale.h"
 #include "logic/session/CanvasCamera.h"
 #include "network/collaboration/CollaborationRoom.h"
@@ -2736,18 +2737,17 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         // 仅工具切换的低频路径保存配置，拖动过程不会执行文件 IO。
         if ( !comparison ) Config::AppConfig::instance().save();
     }
-    // cameraId 是窗口与会话的稳定连接键；索引会随标签关闭和重排变化，
-    // 因此需要使用时重新解析，不能跨帧缓存旧索引。
-    auto findSessionIndex = [owner, &engine]() -> int32_t {
-        const auto snapshot = engine.getSessionUiSnapshot();
-        // 此次 cameraId 解析始终读取同一代际，避免借用可移动条目。
-        for ( const auto& entry : snapshot->entries ) {
-            if ( entry.cameraId == owner ) {
-                // 返回当前容器中的即时索引，调用方在同一同步步骤内使用。
-                return entry.index;
-            }
+    /// @brief 在调用方持有的一代会话快照中解析窗口的稳定归属。
+    /// @return 借用快照中的条目，使用期间不得释放快照句柄。
+    /// @warning 每帧使用；查找过程不重新获取快照或会话锁。
+    const auto findSessionEntry =
+        [&owner](const Logic::PublishedSessionUiSnapshot& snapshot)
+        -> const Logic::SessionUiSnapshotEntry* {
+        for ( const auto& entry : snapshot.entries ) {
+            // 标签可被关闭和重排，索引只能在同一代元数据内解释。
+            if ( entry.cameraId == owner ) return &entry;
         }
-        return -1;
+        return nullptr;
     };
 
     // 关闭请求先经过脏谱面确认。未保存内容存在时恢复窗口 open 状态，
@@ -2760,30 +2760,25 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         } else if ( shouldKeepOpenForLastSessionReset() ) {
             // 最后一个真实会话不从 Dock 中移除，而是原位变成 Logo
             // 占位页；这维持启动布局并为欢迎页保留编辑器标签顺序。
-            if ( int32_t myIdx = findSessionIndex(); myIdx != -1 ) {
+            const auto closingSnapshot = engine.getSessionUiSnapshot();
+            if ( const auto* closingEntry =
+                     findSessionEntry(*closingSnapshot) ) {
                 engine.resetSessionToLogoPlaceholder(
-                    myIdx, TR("canvas.welcome").data());
+                    closingEntry->index, TR("canvas.welcome").data());
             }
             m_isOpen         = true;
             m_closeConfirmed = false;
         }
     }
 
-    bool    showClose         = false;
-    bool    isLogoPlaceholder = false;
-    int32_t myIndex           = findSessionIndex();
-    // Logo 占位页没有可关闭的谱面语义，隐藏标签关闭按钮；真实会话
-    // 才把 m_isOpen 交给 ImGui 标题栏关闭控件。
-    if ( myIndex != -1 ) {
-        const auto snapshot = engine.getSessionUiSnapshot();
-        // 关闭时逻辑层还会校验索引；这里仅决定当前标签外观。
-        if ( myIndex < static_cast<int32_t>(snapshot->entries.size()) ) {
-            // 与索引查询使用相同的结构代际，避免标签关闭时读到替换项。
-            const auto& entry = snapshot->entries[static_cast<size_t>(myIndex)];
-            isLogoPlaceholder = entry.isLogoPlaceholder;
-            showClose         = !isLogoPlaceholder;
-        }
-    }
+    // 普通帧只获取一次快照；索引与 Logo 标志都从同一条目读取。
+    // 关闭转占位会同步发布新元数据，所以渲染句柄在该分支完成后再获取。
+    const auto  frameSession      = engine.getSessionUiSnapshot();
+    const auto* frameEntry        = findSessionEntry(*frameSession);
+    const auto  myIndex           = frameEntry ? frameEntry->index : -1;
+    const bool  isLogoPlaceholder = frameEntry && frameEntry->isLogoPlaceholder;
+    // Logo 占位页没有可关闭谱面的语义，隐藏标题栏关闭控件。
+    const bool showClose = frameEntry && !isLogoPlaceholder;
 
     auto* collaborationRoom =
         sourceManager ? sourceManager->getCollaborationRoom() : nullptr;
@@ -3243,9 +3238,10 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                                        ImVec2(120 * dpiScale, 0)) ) {
             // 保存命令面向活动会话，先将当前 Canvas 对应索引设为活动，
             // 防止多谱面下保存到此前聚焦的其它标签。
-            int32_t myIdx = findSessionIndex();
-            if ( myIdx != -1 ) {
-                engine.setActiveSessionIndex(myIdx);
+            // 用户确认是低频边沿，使用当前代际重新核对保存目标。
+            const auto savingSnapshot = engine.getSessionUiSnapshot();
+            if ( const auto* savingEntry = findSessionEntry(*savingSnapshot) ) {
+                engine.setActiveSessionIndex(savingEntry->index);
             }
             // 发布保存后记录关闭已确认；具体磁盘写入由逻辑命令处理，
             // UI 不在模态框中同步等待文件系统完成。

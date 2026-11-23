@@ -1,5 +1,6 @@
 #pragma once
 
+#include "logic/PublishedSharedPtr.h"
 #include "logic/SessionTypes.h"
 
 #include <atomic>
@@ -194,15 +195,14 @@ private:
     mutable std::recursive_mutex m_mutex;
 
     /// @brief 逻辑线程当前可读取的不可变 Session 快照。
-    /// @warning 逻辑热路径通过 shared_ptr 原子自由函数访问：loop 每 update
-    /// acquire 读取，写侧在持有 m_mutex 后 release 发布新快照。shared_ptr
-    /// 所有权用于解决读写并发时的快照生命周期。
-    std::shared_ptr<const PublishedSessionSnapshot> m_publishedSnapshot;
+    /// @warning 会话列表写者在持有 m_mutex 时发布。逻辑 loop 每轮获取一次，
+    /// 以引用访问各条目；关闭会话后旧快照仍由最后一个拥有者释放。
+    PublishedSharedPtr<const PublishedSessionSnapshot> m_publishedSnapshot;
 
     /// @brief 只含标签信息的 UI 发布快照，写侧仅在结构变化时替换。
-    /// @warning UI 每帧 acquire 读取、结构变更 release 写入；shared_ptr
-    /// 保证 UI 使用期间旧快照有效，避免锁住整个会话更新周期。
-    std::shared_ptr<const PublishedSessionUiSnapshot> m_publishedUiSnapshot;
+    /// @warning 画布 UI 在一次查询期间持有快照，注册表在发布新列表时替换。
+    /// 旧元数据在发布者或最后读取者处回收，不延长会话寿命。
+    PublishedSharedPtr<const PublishedSessionUiSnapshot> m_publishedUiSnapshot;
 };
 
 }  // namespace MMM::Logic

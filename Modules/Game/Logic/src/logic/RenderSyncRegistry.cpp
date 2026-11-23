@@ -1,6 +1,7 @@
 #include "logic/RenderSyncRegistry.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include <mutex>
+#include <utility>
 
 namespace MMM::Logic
 {
@@ -207,18 +208,18 @@ void RenderSyncRegistry::setAtlasUVMap(
 /// @brief 获取指定画布的图集 UV 映射，缺失时回退到 Basic2DCanvas。
 /// @param cameraId 优先查询的画布，只有条目缺失才尝试公共主画布。
 /// @return 保活完整快照的只读 UV 表句柄，未找到时返回共享空表。
-/// @warning 逻辑查询路径进行 acquire 与共享引用复制，不新增图集复制或文件访问。
+/// @warning 逻辑查询路径仅获取一次快照句柄，不新增图集复制或文件访问。
 std::shared_ptr<const std::unordered_map<uint32_t, glm::vec4>>
 RenderSyncRegistry::getAtlasUVMap(const std::string& cameraId) const
 {
-    // shared_ptr 专用自由函数兼容当前 libc++，并让局部句柄继续保活本次读取。
-    auto snapshot = std::atomic_load_explicit(&m_publishedAtlasUVSnapshot,
-                                              std::memory_order_acquire);
+    // 仅获取一次快照句柄，查找期间局部拥有权保活待返回的图集表。
+    auto snapshot = m_publishedAtlasUVSnapshot.load();
     if ( snapshot ) {
         if ( const auto* state =
                  findAtlasUVMapStateInSnapshot(*snapshot, cameraId) ) {
-            // 别名 shared_ptr 指向子表，但持有父快照，替换图集不会悬空。
-            return { snapshot, &state->uvMap };
+            // 别名指向子表并接管局部句柄的拥有权，避免再修改一次引用计数。
+            // 该表可跨后续替换使用，直至调用方释放最后一份共享句柄。
+            return { std::move(snapshot), &state->uvMap };
         }
     }
 
@@ -242,8 +243,8 @@ void RenderSyncRegistry::updateSnapshotAtlasUVMap(
     Common::AsciiFontAtlasMetrics&           targetAsciiFontAtlasMetrics,
     Common::UnicodeFontMetrics&              targetUnicodeFontMetrics) const
 {
-    const auto snapshot = std::atomic_load_explicit(&m_publishedAtlasUVSnapshot,
-                                                    std::memory_order_acquire);
+    // 本次按同一代图集同时检查修订号并读取度量，不能分开获取两次。
+    const auto  snapshot = m_publishedAtlasUVSnapshot.load();
     const auto* state =
         snapshot ? findAtlasUVMapStateInSnapshot(*snapshot, cameraId) : nullptr;
     if ( !state ) {
@@ -370,10 +371,7 @@ void RenderSyncRegistry::publishAtlasUVSnapshotUnsafe()
 
     // 构造完成后 release 发布，逻辑侧 acquire 读取可见完整的配套度量。
     // 不维护退休列表，最后一个读取句柄释放后自然回收旧快照。
-    std::atomic_store_explicit(
-        &m_publishedAtlasUVSnapshot,
-        std::shared_ptr<const PublishedAtlasUVSnapshot>(std::move(snapshot)),
-        std::memory_order_release);
+    m_publishedAtlasUVSnapshot.store(std::move(snapshot));
 }
 
 /// @brief 判断画布是否为需要同步给新 Session 的共享视口。

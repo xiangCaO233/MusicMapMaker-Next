@@ -2568,6 +2568,11 @@ bool BeatmapSession::processCommands()
     // 多条连续编辑命令的变更类别按位合并，到同步边界一次性发布观察者通知。
     ::MMM::BeatmapMutationFlags mutationFlags =
         ::MMM::BeatmapMutationFlags::None;
+    /// @brief 将一批已执行的本地编辑同步至当前协作观察者。
+    /// @details 同一批次可以包含多类领域变更。只有纯物件批次拥有本地序号
+    /// 门控，混合批次仍按权威整包处理，避免把一条序号解释为所有域的确认。
+    /// @warning 每批有变更的命令至多获取一次回调句柄；仅当观察者返回物件序号时
+    /// 重读身份。回调执行期间不得持有发布槽锁，观察者可以在回调内解绑或替换。
     const auto publishPendingMutation = [this, &mutationFlags]() {
         // 批次发布顺序固定为：更新备份/保存调度、同步领域模型、通知观察者、
         // 清空类别位。任何新增提前返回都必须保持 mutationFlags，不能在同步前
@@ -2595,8 +2600,8 @@ bool BeatmapSession::processCommands()
             // 自动备份与覆盖原文件的自动保存分别排队，二者策略互不替代。
             m_triggeredAutoBackupPending = true;
         }
-        auto observer = std::atomic_load_explicit(&m_mutationObserver,
-                                                  std::memory_order_acquire);
+        // 回调所用的句柄独立于发布槽，替换者不需要等待本次谱面同步完成。
+        const auto observer = m_mutationObserver.load();
         if ( observer && m_ctx->currentBeatmap ) {
             // 观察者需要一致领域模型，通知前把本批 ECS 与元数据脏域统一同步。
             SessionUtils::syncBeatmap(*m_ctx);
@@ -2604,21 +2609,27 @@ bool BeatmapSession::processCommands()
                 *m_ctx->currentBeatmap, mutationFlags);
             if ( sequence != 0 ) {
                 // 房主之后按网络修订定位原动作；首次创建序号只绑定一次。
+                // 动作历史记录已经发出的编辑，观察者换绑不会撤销本次本地动作。
+                // 当前绑定是否需要等待该序号，在下方独立按照观察者身份判断。
                 m_ctx->actionStack.markLatestCollaborationSequence(sequence);
             }
             if ( sequence != 0 &&
                  mutationFlags == ::MMM::BeatmapMutationFlags::Objects ) {
                 // 仅纯物件变更使用本地序号与远端对象快照协调；混合类别等待
                 // 权威状态完整回放，不把单一对象序号解释为全部数据已接受。
-                const auto activeObserver = std::atomic_load_explicit(
-                    &m_mutationObserver, std::memory_order_acquire);
+                // 回调可能同步触发绑定更换。必须在回调结束后重新读取槽，
+                // 不能用仍被本地持有的旧句柄判断其是否还属于当前绑定。
+                const auto activeObserver = m_mutationObserver.load();
                 if ( activeObserver == observer ) {
                     // 回调期间观察者可能被替换，只有身份未变才发布其返回序号。
+                    // 局部句柄仍保有旧观察者，地址不会在本次比较前被释放重用。
                     m_latestAcceptedLocalObjectMutationSequence.store(
                         sequence, std::memory_order_release);
                 }
             }
         }
+        // 绑定为空时动作也已经生效，并设置了保存标记。不能为新绑定保留
+        // 历史批次，否则重新连接后的首次通知会被误认为新的本地编辑。
         // 发布完成后清空累计位，后续命令形成新的同步批次。
         mutationFlags = ::MMM::BeatmapMutationFlags::None;
     };
@@ -2626,11 +2637,15 @@ bool BeatmapSession::processCommands()
     // 延迟文件命令与权威替换状态仍由逻辑线程独占，不向入队生产者暴露。
     // 移动私有字段不改变队列发布机制，也不在每次出队时分配状态。
     // 权威替换继续按手势屏障合并，不能通过重新排队制造忙等。
+    /// @brief 判断远端替换是否需要等待本地连续手势结束。
+    /// @note 手势状态只在逻辑线程检查，观察者发布槽不保护这些字段。
     const auto localGestureActive = [this]() {
         // 拖动、框选、画笔和橡皮均持有临时交互状态，不适合被权威全量替换中断。
         return m_ctx->isDragging || m_ctx->isSelecting ||
                m_ctx->brushState.isActive || m_ctx->eraserState.isActive;
     };
+    /// @brief 判断移除不适用的数据域后，权威替换是否仍有内容可执行。
+    /// @note 仅判断命令中剩余的类别标志，保持命令的既有身份与修订不变。
     const auto replacementHasCategories =
         [](const CmdReplaceBeatmapData& value) {
             // 权威替换清空某一类别后可能变成空命令，用此助手决定是否仍需保留。
@@ -3324,18 +3339,23 @@ bool BeatmapSession::processCommands()
         // 这保证一条可撤销命令只执行一次，同时允许控制器以统一脏标记补充类别。
         if ( authoritativeSynchronization && m_ctx->currentBeatmap ) {
             // 权威应用完成后通知协作观察者更新编码基线或接收完整同步快照。
-            auto observer = std::atomic_load_explicit(
-                &m_mutationObserver, std::memory_order_acquire);
+            // 完整同步和轻量确认共用这一个句柄，使整个通知落在同一个观察者。
+            // 持有时长只覆盖本分支，后续命令会再次检查当前绑定。
+            // 收到准备好的差量时只借用其中的修订字段，不保留命令的拥有权。
+            // 读取可变谱面仍由逻辑线程串行，发布槽只管理通知目标。
+            const auto observer = m_mutationObserver.load();
             if ( observer ) {
                 if ( authoritativeReplacement
                          ->objectEncodingBaselinePrepared ) {
                     // 已准备差量基线时只提交修订与本地包含序号，避免再次序列化谱面。
+                    // 两个序号属于不同方向，不用权威修订替代这份基线的本地进度。
                     observer->onAuthoritativeBeatmapApplied(
                         authoritativeReplacement->authoritativeRevision,
                         authoritativeReplacement
                             ->includedLocalMutationSequence);
                 } else {
                     // 缺少编码基线时同步当前 BeatMap 并走完整观察者重建路径。
+                    // 同步后的对象供通知过程借用，句柄的共享所有权只覆盖观察者。
                     SessionUtils::syncBeatmap(*m_ctx);
                     observer->onBeatmapSynchronized(*m_ctx->currentBeatmap);
                 }

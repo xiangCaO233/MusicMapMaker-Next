@@ -3,6 +3,7 @@
 #include "common/AsciiFontData.h"
 #include "common/UnicodeFontData.h"
 #include "common/render/RenderSnapshotBuffer.h"
+#include "logic/PublishedSharedPtr.h"
 #include <atomic>
 #include <cstdint>
 #include <glm/vec2.hpp>
@@ -161,10 +162,10 @@ private:
     mutable std::shared_mutex m_mutex;
 
     /// @brief 逻辑线程当前可读取的不可变图集 UV 快照。
-    /// @warning 逻辑热路径通过 shared_ptr 原子自由函数访问：每个快照生成时
-    /// acquire 读取，写侧在持有 m_mutex 后 release 发布新快照。shared_ptr
-    /// 所有权用于解决读写并发时的快照生命周期。
-    std::shared_ptr<const PublishedAtlasUVSnapshot> m_publishedAtlasUVSnapshot;
+    /// @warning 图集更新者在 m_mutex 下发布。逻辑生成快照时获取一次句柄，
+    /// 别名表可跨重建继续持有旧图集，最后一个发布或读取句柄负责释放。
+    PublishedSharedPtr<const PublishedAtlasUVSnapshot>
+        m_publishedAtlasUVSnapshot;
 };
 
 }  // namespace MMM::Logic
