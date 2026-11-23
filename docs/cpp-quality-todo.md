@@ -230,7 +230,7 @@
 - [ ] **HDR-02 · P3 · 调色文件接口独立于完整编辑设置和 JSON 实现。** `Modules/Config/include/config/ColorPaletteFile.h:3、34` 仅为一个按值方案引入 EditorSettings，并内联 JSON 转换。提取方案类型及 ADL 声明，转换移入 cpp；该文件本身仅传播到 3 个已记录对象，收益单独计量。验收合法/非法配色导入与现有文件往返。
 - [ ] **HDR-03 · P2 · 用真实消费者验收会话拆分。** SessionContext 对应 73 个对象、EditorEngine 对应 96 个；PERF-05 列出 UI 直接取锁访问的实例。先迁移批注读模型或交互状态，再对照活动对象清单；降低直接 include 个数不足以证明扇出下降。
 - [ ] **DOC-01 · P2 · 修订失真的契约说明。** `Modules/MMM/include/mmm/SafeParse.h:141` 的旧 stod 兼容描述需写明前导加号、消费长度和平台语法；`Modules/Game/include/game/GlobDefs.h:79` 的 UTF-8 声明需以初始化结果为准；对照 PERF-03 更正时间格式化调用频率。每条用相应输入或调用链验收。
-- [ ] **DOC-02 · P3 · 让函数体注释解释选择依据。** `Modules/Game/Graphic/src/imguivk/context/VKContextDebugFeats.cpp:15–33` 中多条注释逐词复述 eError、eWarning、eGeneral 等枚举。保留需要解释的筛选理由、回调生存期和不可重入约束；无需为显然枚举逐项写释义。修订后逐文件检查 cloc 和函数体关键实现。
+- [x] **DOC-02 · P3 · 让函数体注释解释选择依据。** `Modules/Game/Graphic/src/imguivk/context/VKContextDebugFeats.cpp:15–33` 中多条注释逐词复述 eError、eWarning、eGeneral 等枚举。保留需要解释的筛选理由、回调生存期和不可重入约束；无需为显然枚举逐项写释义。修订后逐文件检查 cloc 和函数体关键实现。 已说明实例创建与运行期共用的过滤配置、调用线程及并发进入、数据借用寿命和不可重入约束。前后非注释代码 token 一致。Linux RelWithDebInfo 全量构建，以及 VulkanHandleFwdTest、CanvasCameraTest、ComparisonCanvasTest 通过。VKContextDebugFeats.cpp 注释／代码 39/87 行（30.95%）。
 - [ ] **STACK-01 · P3 · 补齐不定长栈分配的编译器证据。** 1,242 文件文本扫描未命中显式 alloca、_alloca、_malloca 或 __builtin_alloca 调用；主仓常见声明模式未定位 VLA。模板、别名和宏展开仍需以各平台编译器诊断确认。用支持的 GCC/Clang 配置开启 VLA 诊断并检查平台分支；对 `ProjectController.cpp:815`、`BeatmapSession_Commands.cpp:880` 等固定 64 KiB 局部缓冲用栈使用报告核对同一调用链峰值和工作线程栈预算。固定数组、对象成员与输入决定长度的栈分配要分别判断。
 
 ## 注释率逐文件待办
