@@ -1228,8 +1228,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         if ( !snapshot ) continue;
 
         // 复用工作槽前重置逐帧状态，避免旧悬浮、选择或几何残留。
-        // 容量及可复用缓存的具体保留规则由 RenderSnapshot::clear 管理。
-        snapshot->clear();
+        // 同时挂接会话 BPM 修订，所有相机共用一份不依赖滚动分段的拍号索引。
+        // 普通轮次复用快照槽已有的修订，不复制索引或增加共享引用。
+        snapshot->clear(m_ctx->m_beatTimeIndex);
 
         // 注入该 Camera 特有的 UV 映射到快照
         // 图集映射按相机与修订同步。

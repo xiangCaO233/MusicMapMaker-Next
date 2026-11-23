@@ -45,13 +45,6 @@ std::string formatClock(double timeSeconds);
 /// @return 四舍五入到整数毫秒并附加单位的文本。
 std::string formatMilliseconds(double timeSeconds);
 
-/// @brief 从快照滚动分段中提取完整 BPM 时间线。
-/// @param snapshot 当前渲染快照，可为空。
-/// @return 按时间升序排列且时间点去重的 BPM 节点值数组。
-/// @warning 非每帧批量调用路径：函数会分配、排序并去重节点数组。
-std::vector<CanvasTimeFormatBpmPoint> collectBpmPoints(
-    const Common::Render::RenderSnapshot* snapshot);
-
 /// @brief 使用已经归一化的 BPM 节点计算拍号与分拍位。
 /// @param timeSeconds 待格式化时间，单位秒。
 /// @param points 已按时间排序且 BPM 有效的计时节点。
@@ -74,7 +67,7 @@ std::string formatBeatTimeWithPoints(
 /// @param timeSeconds 待格式化时间，单位秒。
 /// @param snapshot 当前渲染快照，可为空。
 /// @return 基于快照 BPM 时间线和当前分拍数的文本。
-/// @warning 会提取、排序并去重 BPM 节点，不应在同帧对大量标签重复调用。
+/// @warning UI 热路径：借用已发布的 BPM 索引，二分定位段首。
 std::string formatBeatTime(double                                timeSeconds,
                            const Common::Render::RenderSnapshot* snapshot);
 
