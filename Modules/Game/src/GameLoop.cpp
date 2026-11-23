@@ -17,6 +17,7 @@
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "network/collaboration/CollaborationRoom.h"
+#include "platform/StartupCommandLinePath.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/CanvasTabManager.h"
@@ -33,13 +34,11 @@
 #include "ui/imgui/manager/SearchView.h"
 #include <array>
 #include <chrono>
+#include <filesystem>
 #include <nfd.h>
+#include <system_error>
 #include <thread>
 #include <utility>
-
-#ifdef _WIN32
-#    include <shellapi.h>
-#endif
 
 namespace MMM
 {
@@ -269,40 +268,19 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[],
         // 启动独立逻辑线程 (必须在音频加载后启动，防止字典竞态)
         Logic::EditorEngine::instance().start();
 
-        // 首个命令行路径存在时发布统一打开事件，由项目控制器判断具体类型。
-        if ( argc > 1 ) {
-#ifdef _WIN32
-            // Windows 重新读取宽字符命令行，避免 argv 中的本地路径编码损失。
-            int     argcW;
-            LPWSTR* argvW = CommandLineToArgvW(GetCommandLineW(), &argcW);
-            if ( argcW > 1 ) {
-                std::filesystem::path inputPath(argvW[1]);
-                // error_code 重载保证无权限或无效路径不会抛出异常。
-                std::error_code inputExistsError;
-                if ( std::filesystem::exists(inputPath, inputExistsError) &&
-                     !inputExistsError ) {
-                    Event::OpenProjectEvent openEv;
-                    openEv.m_projectPath = inputPath;
-                    Event::EventBus::instance().publish(openEv);
-                    XINFO("Handling command line argument: {}",
-                          Config::pathToUtf8(inputPath));
-                }
-            }
-            // CommandLineToArgvW 返回内存由 LocalFree 释放。
-            LocalFree(argvW);
-#else
-            // POSIX 平台按进程 argv 字节构造 filesystem 路径。
-            std::filesystem::path inputPath(argv[1]);
-            std::error_code       inputExistsError;
-            if ( std::filesystem::exists(inputPath, inputExistsError) &&
-                 !inputExistsError ) {
-                Event::OpenProjectEvent openEv;
-                openEv.m_projectPath = inputPath;
-                Event::EventBus::instance().publish(openEv);
+        // 路径适配器统一以空路径表示未指定参数或无法解析，启动仍继续。
+        if ( const auto inputPath = readStartupCommandLinePath(argc, argv);
+             !inputPath.empty() ) {
+            // 只为存在且可查询的目标发出打开事件，失败不影响主循环启动。
+            std::error_code inputError;
+            if ( std::filesystem::exists(inputPath, inputError) &&
+                 !inputError ) {
+                Event::OpenProjectEvent openEvent;
+                openEvent.m_projectPath = inputPath;
+                Event::EventBus::instance().publish(openEvent);
                 XINFO("Handling command line argument: {}",
                       Config::pathToUtf8(inputPath));
             }
-#endif
         }
 
         // 累计 deadline 与上一目标间隔共同处理限帧配置热切换。

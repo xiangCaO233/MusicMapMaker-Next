@@ -128,12 +128,16 @@
   - Linux RelWithDebInfo 全量构建及 8 项相关 CTest 通过。TimeFormatUtilsTest 覆盖普通时刻、纪元前后、不可表示的日历时间、时区改变与夏令时跳变。Windows 返回值已对照 Microsoft CRT 文档，Windows 和 macOS 原生运行尚未验证。
   - 本项注释／代码行数：FileModifiedTime.h 7/13，FileModifiedTime.cpp 21/46，AudioManagerView.cpp 769/1791，BeatMapManagerView.cpp 398/927，FileManagerView_Hierarchy.cpp 631/1472，TimeFormatUtilsTest.cpp 70/159，UI/CMakeLists.txt 243/563。逐文件均达到 30%。
 
-- [ ] **PLAT-04（P2）Windows 命令行解析失败后可能读取未初始化数量**
+- [x] **PLAT-04（P2）Windows 命令行解析失败后可能读取未初始化数量**
 
   - 位置：`Modules/Game/src/GameLoop.cpp:274-292`。
   - 行为：`int argcW;` 没初始化；取得 `CommandLineToArgvW` 结果后直接判断 `argcW > 1` 并访问 `argvW[1]`。若 API 分配失败返回空，代码没有任何失败分支。
   - 整改：数量初始化为零，先检查返回指针，再处理第二参数；把“平台命令行到路径”收敛到启动适配器，保留事件发布在通用 GameLoop。
   - 验收：正常中文/空格/长路径参数保持一致；API 失败能够继续启动且不发布打开事件；分配结果只释放一次。
+
+  - 已将参数解析移入 Windows 与 POSIX 启动适配器。Windows 先判空，参数块由局部智能指针统一回收；通用启动流程仍只为存在且可查询的路径发布打开事件。
+  - Linux RelWithDebInfo 全量构建及 6 项启动路径和工作区 CTest 通过，另用实际 POSIX 适配器验证无参、含中文和空格、长路径。在 `debsrv` Runner 原工作区完成 Windows x64 交叉构建，Windows 探针在 Wine 下通过无参、空参、含中文和空格、长路径，并通过平台调用替身验证空指针失败和成功后仅释放一次。
+  - 注释／代码行数：`GameLoop.cpp` 113/245、`StartupCommandLinePath.h` 5/6、`StartupCommandLinePathPosix.cpp` 5/9、`StartupCommandLinePathWin32.cpp` 7/15、`Modules/Game/CMakeLists.txt` 14/30，逐文件均达到 30%。
 
 - [ ] **PLAT-05（P3）启动头重复平台可执行路径实现，边界与长路径行为已分叉**
 
