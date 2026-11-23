@@ -26,6 +26,7 @@
 #include "event/project/ProjectOpenInteractionEvent.h"
 #include "event/ui/menu/ProjectLoadedEvent.h"
 #include "log/colorful-log.h"
+#include "logic/AnnotationTableSnapshot.h"
 #include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ProjectController.h"
@@ -1268,6 +1269,27 @@ EditorEngine::getSessionUiSnapshot() const
 {
     // 直接返回原发布句柄，保持一次所有权获取，不另建快照或增加查询锁。
     return impl().m_sessionRegistry.publishedUiSnapshot();
+}
+
+/// @brief 从同一代列表快照路由活动批注表请求，容器内会话由本地句柄保活。
+/// @warning UI 低频刷新。共享列表只用于保证请求期间会话未析构，不获取业务锁。
+std::optional<ActiveAnnotationTableRead> readActiveAnnotationTable()
+{
+    const auto registry =
+        EditorEngine::instance().impl().m_sessionRegistry.publishedSnapshot();
+    // activeIndex
+    // 与会话列表同代。删除条目时即使索引左移，也不会路由给别的画布。
+    const auto active = std::ranges::find(registry->sessions,
+                                          registry->activeIndex,
+                                          &SessionSnapshotEntry::index);
+    if ( active == registry->sessions.end() || active->isLogoPlaceholder )
+        return std::nullopt;
+    // 只传给 UI 批注数据，活动条目及共享会话所有权不离开本次路由。
+    return ActiveAnnotationTableRead{
+        active->cameraId,
+        active->session->requestAnnotationTableSnapshot(),
+        active->session->isCollaborationOfflineReadOnly()
+    };
 }
 
 /// @brief 按索引借用注册表条目，不延长会话或列表的生命周期。

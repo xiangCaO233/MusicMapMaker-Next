@@ -1,55 +1,18 @@
 #pragma once
 
-#include "mmm/annotation/BeatmapAnnotation.h"
+#include "logic/AnnotationTableSnapshot.h"
 #include "ui/utils/CanvasTimeFormatContext.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace MMM::Canvas
 {
 
-/// @brief 批注目标玩家物件的导出类型；无目标或目标缺失时为 None。
-enum class AnnotationExportObjectType { None, Note, Hold, Flick, Polyline };
-
-/// @brief 批注表中一条已经解析到实际谱面位置的独立数据行。
-struct AnnotationTableRow {
-    /// @brief 批注实际展示时间，单位秒。
-    double timestamp{ 0.0 };
-
-    /// @brief 批注稳定标识。
-    std::string id;
-
-    /// @brief 批注目标类型。
-    ::MMM::BeatmapAnnotationTargetKind targetKind{
-        ::MMM::BeatmapAnnotationTargetKind::TIMESTAMP
-    };
-
-    /// @brief 目标物件轨道；独立时间戳或目标丢失时为 -1。
-    std::int32_t track{ -1 };
-
-    /// @brief 面向导出的目标起始轨道；音频采样已转换为 BGM 区内零基编号。
-    std::int32_t exportTrack{ -1 };
-
-    /// @brief 滑键或折线终点的零基轨道；其它对象为 -1。
-    std::int32_t exportEndTrack{ -1 };
-
-    /// @brief 目标玩家物件的种类，音频采样和时间标记使用 None。
-    AnnotationExportObjectType objectType{ AnnotationExportObjectType::None };
-
-    /// @brief 目标是否指向折线内嵌子段，而非整条折线。
-    bool isPolylineSubNote{ false };
-
-    /// @brief 目标物件是否已经不存在。
-    bool targetMissing{ false };
-
-    /// @brief 批注作者。
-    std::string author;
-
-    /// @brief Markdown 正文。
-    std::string content;
-};
+using Logic::AnnotationExportObjectType;
+using Logic::AnnotationTableRow;
 
 /// @brief 批注表数据刷新后的可用状态。
 enum class AnnotationTableDataStatus {
@@ -71,10 +34,10 @@ struct AnnotationTableDataRefreshResult {
 class AnnotationTableData
 {
 public:
-    /// @brief 从活动谱面会话的版本化缓存刷新数据。
+    /// @brief 请求下一次发布并消费活动谱面最近的完整批注快照。
     /// @return 当前可用状态以及批注行是否发生变化。
-    /// @warning UI 低频路径：调用时短暂持有 Session 锁，只在缓存版本变化时
-    /// 复制批注行或 BPM 分段，禁止改为每帧无条件执行。
+    /// @warning UI 低频路径：共享句柄保证跨逻辑线程的行数据寿命。
+    /// 只在 Timing 变化时复制轻量锚点，不等待会话更新。
     AnnotationTableDataRefreshResult refresh();
 
     /// @brief 清空谱面绑定和所有独立数据缓存。
@@ -82,10 +45,7 @@ public:
 
     /// @brief 获取当前批注表行。
     /// @return 按实际时间排序的批注行只读引用。
-    [[nodiscard]] const std::vector<AnnotationTableRow>& rows() const
-    {
-        return m_rows;
-    }
+    [[nodiscard]] const std::vector<AnnotationTableRow>& rows() const;
 
     /// @brief 获取独立时间格式上下文。
     /// @return 当前谱面的 BPM 和分拍数据只读引用。
@@ -98,8 +58,8 @@ public:
     /// @brief 行或拍位显示上下文改变时递增，用于平台派生文本的脏标记。
     /// @warning 每帧只读取 UI 自持标量，不读取会话或遍历批注。
     std::uint64_t displayRevision() const { return m_displayRevision; }
-    /// @brief 稳定实例令牌用于关闭跨谱面的未提交编辑，不解引用该地址。
-    /// @warning 每帧只读取 UI 缓存令牌，禁止解引用为会话或谱面。
+    /// @brief 稳定实例令牌用于关闭跨谱面的未提交编辑。
+    /// @warning 每帧只读取 UI 缓存标量，无需读取逻辑状态。
     std::uintptr_t instanceId() const { return m_beatmapInstanceId; }
     /// @brief 低频刷新时发布的编辑许可；实际命令仍由会话执行时复核。
     /// @warning 每帧只读取已发布许可，不查询设备或等待逻辑锁。
@@ -109,20 +69,14 @@ private:
     /// @brief 实例重置与显示数据发布共同推进，不与后台缓存版本混用。
     std::uint64_t m_displayRevision{};
     bool          m_writable{};  ///< 播放或离线只读时保留阅读，禁止发起修改。
-    /// @brief 当前绑定的谱面实例地址令牌。
+    /// @brief 当前绑定的谱面实例令牌。
     std::uintptr_t m_beatmapInstanceId{ 0U };
 
-    /// @brief 当前批注行对应的逻辑缓存版本。
-    std::uint64_t m_annotationRevision{ static_cast<std::uint64_t>(-1) };
+    /// @brief 最近一次选择的相机，用于区分等待中和同谱面刷新。
+    std::string m_cameraId;
 
-    /// @brief 当前时间格式上下文对应的滚动缓存版本。
-    std::uint64_t m_timingRevision{ static_cast<std::uint64_t>(-1) };
-
-    /// @brief 当前缓存的分拍数，用于识别不涉及 Timing 的格式配置变化。
-    int m_beatDivisor{ 4 };
-
-    /// @brief 按实际时间排序的全量批注行缓存。
-    std::vector<AnnotationTableRow> m_rows;
+    /// @brief UI 整体保活不可变快照，绘制与导出不借用会话。
+    std::shared_ptr<const Logic::AnnotationTableSnapshot> m_snapshot;
 
     /// @brief 与 Timeline 渲染快照无关的时间格式上下文。
     UI::Utils::CanvasTimeFormatContext m_timeFormatContext;

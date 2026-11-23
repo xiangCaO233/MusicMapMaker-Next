@@ -394,10 +394,10 @@ void AnnotationTableWindow::update(UI::UIManager* sourceManager)
         if ( m_selectedRow && *m_selectedRow < rowsBeforeRefresh.size() ) {
             selectedId = rowsBeforeRefresh[*m_selectedRow].id;
         }
-        // 数据层负责持锁和版本判断，窗口只消费 Ready/Pending/Close 状态。
+        // 数据层请求并读取不可变发布，窗口只消费 Ready/Pending/Close 状态。
         const auto refreshResult = m_data.refresh();
         m_dataStatus             = refreshResult.status;
-        // 即使本次没有版本变化也推进截止时间，避免每帧争用会话锁。
+        // 即使数据未变也推进截止时间，将批注投影请求控制在低频。
         m_nextDataRefreshTime = now + ANNOTATION_TABLE_REFRESH_INTERVAL_SECONDS;
         if ( m_dataStatus == AnnotationTableDataStatus::Close ) {
             // 没有活动谱面时关闭而不是展示空壳，保持菜单勾选状态真实。

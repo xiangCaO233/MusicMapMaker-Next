@@ -10,6 +10,7 @@
 #include "config/EditorConfig.h"
 #include "config/EditorConfigView.h"
 #include "config/Utf8Path.h"
+#include "logic/AnnotationTableSnapshot.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "logic/PreviewDensity.h"
@@ -28,13 +29,19 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
 #include "mmm/timing/BpmNormalization.h"
+#include <entt/entt.hpp>
+
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace MMM::Logic
@@ -209,6 +216,141 @@ void rebuildAnnotationRenderCacheIfNeeded(SessionContext& ctx)
         // UI 后续只需按可见时间范围复制分组。
         ctx.annotationRenderCache.back().items.push_back(std::move(entry.item));
     }
+}
+
+/// @brief 将已解析的渲染批注投影为不引用 ECS 的导出行。
+/// @param context 对应一张已载入谱面，渲染标记及实体来自同一代逻辑更新。
+/// @return 与时间标记顺序一致的平坦行；每行自持标识、作者和正文。
+/// @pre 调用者在本会话逻辑更新内，渲染缓存已就绪。
+/// @note 画布保留分组以便裁剪可见范围，批注表需要包括屏幕外的全部标记。
+/// @note 缺失目标不会阻止正文导出；相关对象信息沿用空类型和无效轨道哨兵。
+/// @warning 仅按请求且在批注修订变化时执行；遍历批注缓存而非完整 ECS。
+std::vector<AnnotationTableRow> annotationRows(const SessionContext& context)
+{
+    std::vector<AnnotationTableRow> refreshedRows;
+    // 原始批注数是上界。无效时间的批注已从渲染缓存过滤，不在这里二次解析。
+    refreshedRows.reserve(context.currentBeatmap->m_annotations.size());
+    // 渲染缓存已经按实际时间组织 marker；同一时间戳下的多个批注仍要
+    // 各自成为独立表格行，不能把正文或目标信息折叠到 marker 层级。
+    for ( const auto& marker : context.annotationRenderCache ) {
+        for ( const auto& item : marker.items ) {
+            AnnotationTableRow row{
+                .timestamp     = marker.timestamp,
+                .id            = item.id,
+                .targetKind    = item.targetKind,
+                .track         = item.track,
+                .exportTrack   = item.track,
+                .targetMissing = item.targetMissing,
+                .author        = item.author,
+                .content       = item.content,
+            };
+            // 缓存保存父折线实体和子段索引；在逻辑线程投影时读取
+            // 目标类型与终轨，导出时不再访问可能变化的 Registry。
+            // 同一实体可能是普通物件或折线根，子段类型需按索引覆盖。
+            // 若索引无效则退回根类型，绝不越界访问子段数组。
+            if ( item.targetKind ==
+                     ::MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT &&
+                 !item.targetMissing && item.targetEntity != entt::null ) {
+                const auto* note =
+                    context.noteRegistry.try_get<const Logic::NoteComponent>(
+                        item.targetEntity);
+                if ( note ) {
+                    // 普通玩家物件没有内嵌索引。默认使用根数据，再按合法子索引覆写。
+                    ::MMM::NoteType type   = note->m_type;
+                    std::int32_t    dtrack = note->m_dtrack;
+                    if ( item.targetSubIndex >= 0 &&
+                         static_cast<std::size_t>(item.targetSubIndex) <
+                             note->m_subNotes.size() ) {
+                        // 批注附着的是子段本身，其轨道和 Flick 位移由
+                        // 渲染缓存的目标轨与子段定义共同决定。
+                        const auto& sub =
+                            note->m_subNotes[static_cast<std::size_t>(
+                                item.targetSubIndex)];
+                        type                  = sub.type;
+                        dtrack                = sub.dtrack;
+                        row.isPolylineSubNote = true;
+                    }
+                    switch ( type ) {
+                    case ::MMM::NoteType::NOTE:
+                        row.objectType = AnnotationExportObjectType::Note;
+                        break;
+                    case ::MMM::NoteType::HOLD:
+                        row.objectType = AnnotationExportObjectType::Hold;
+                        break;
+                    case ::MMM::NoteType::FLICK:
+                        // dtrack 是相对起始轨的偏移，可以为负。
+                        row.objectType     = AnnotationExportObjectType::Flick;
+                        row.exportEndTrack = row.exportTrack + dtrack;
+                        break;
+                    case ::MMM::NoteType::POLYLINE:
+                        row.objectType = AnnotationExportObjectType::Polyline;
+                        // 整条折线以最终节点的落轨描述路径跨度。
+                        // 最后节点仍可能是横向 Flick，终轨要包含其位移。
+                        // 折线内部弯折无法用两端轨道完全表示；正文仍保留
+                        // 原批注细节，目标描述只承担快速定位用途。
+                        if ( !note->m_subNotes.empty() ) {
+                            const auto& tail = note->m_subNotes.back();
+                            row.exportEndTrack =
+                                tail.trackIndex +
+                                (tail.type == ::MMM::NoteType::FLICK
+                                     ? tail.dtrack
+                                     : 0);
+                        }
+                        break;
+                    default: break;
+                    }
+                }
+            } else if ( item.targetKind ==
+                            ::MMM::BeatmapAnnotationTargetKind::AUDIO_SAMPLE &&
+                        item.track >= context.trackCount ) {
+                // 自动采样使用统一绝对轨道编号，导出改用 BGM 区局部编号。
+                // 负轨和主画布轨不进入此分支，避免跨区域编号混用。
+                row.exportTrack = item.track - context.trackCount;
+            }
+            // 使用值快照，剪贴板或导出稍后读取正文时不会再接触会话持有的字符串。
+            refreshedRows.push_back(std::move(row));
+        }
+    }
+    return refreshedRows;
+}
+
+/// @brief 复用当前滚动缓存的实际 BPM 分段，保持批注表既有锚点规则。
+/// @param scrollCache 已重建的会话滚动缓存，不要求时间线视口正在绘制。
+/// @param beatDivisor 当前有效设置，独立于滚动缓存修订。
+/// @return 同一份格式上下文的分拍值和已排序节点；没有 BPM 时节点可为空。
+/// @warning 只在请求需要新时间上下文时执行完整排序，禁止常态调用。
+AnnotationTableTiming annotationTiming(const System::ScrollCache& scrollCache,
+                                       int                        beatDivisor)
+{
+    AnnotationTableTiming refreshedContext;
+    // 时间格式上下文只保存显示所需的轻量 BPM 点，不复制滚动曲线、
+    // SV 倍率或时间线实体，从数据结构上维持与时间线表窗口的解耦。
+    refreshedContext.beatDivisor = beatDivisor;
+    const auto& segments         = scrollCache.getSegments();
+    refreshedContext.bpmPoints.reserve(segments.size());
+    // 只有真实 BPM 实体能定义时间格式锚点；纯 SV 分段沿用此前 BPM，
+    // 若把它们也加入会在同一拍点产生虚假的节奏切换。
+    for ( const auto& segment : segments ) {
+        if ( segment.bpmEntity == entt::null ) continue;
+        refreshedContext.bpmPoints.push_back(
+            { segment.time, ::MMM::normalizeBpmValue(segment.bpmValue) });
+    }
+    // ScrollCache 面向滚动计算，不把排序与同时间去重作为公开契约；
+    // 时间格式器则要求稳定递增锚点，因此在复制边界显式规范化。
+    std::sort(
+        refreshedContext.bpmPoints.begin(),
+        refreshedContext.bpmPoints.end(),
+        [](const auto& lhs, const auto& rhs) { return lhs.time < rhs.time; });
+    // 浮点时间允许微小构建误差。保留排序后的第一项，使同一时刻只
+    // 参与一次拍号换算，避免表格文本在两个近似锚点之间抖动。
+    refreshedContext.bpmPoints.erase(
+        std::unique(refreshedContext.bpmPoints.begin(),
+                    refreshedContext.bpmPoints.end(),
+                    [](const auto& lhs, const auto& rhs) {
+                        return std::abs(lhs.time - rhs.time) < 1e-6;
+                    }),
+        refreshedContext.bpmPoints.end());
+    return refreshedContext;
 }
 
 /// @brief 谱面状态栏统计缓存。
@@ -2304,5 +2446,94 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
     }
 }
 
+
+/// @brief 通知逻辑线程在安全边界投影，并保活最后一份完整快照。
+/// @return 该会话最近一次完整发布，首次逻辑处理前返回空句柄。
+/// @note 调用不保证读到本次请求的结果；逻辑线程会独立推进。
+/// @warning UI 低频调用。请求只传递标志，数据寿命由发布槽的共享句柄承担。
+std::shared_ptr<const AnnotationTableSnapshot>
+BeatmapSession::requestAnnotationTableSnapshot()
+{
+    // UI 只声明需要刷新，不向逻辑线程传递参数；多次轮询可以合并。
+    // 发布槽的 acquire/release 单独负责快照内容和文本的可见性。
+    m_annotationTableRequested.store(true, std::memory_order_relaxed);
+    return m_annotationTableSnapshot.load();
+}
+
+/// @brief 在渲染缓存完成后按需发布批注表状态。
+/// @pre 会话逻辑线程拥有写入权，调用点已经完成本轮命令或空闲边界。
+/// @note 行和拍位数据各自有修订；播放变化只替换顶部状态。
+/// @note 表格未请求时不为额外窗口构造字符串，也不要求有可见主画布。
+/// @warning 每轮逻辑更新可调用。无请求时只读一个 relaxed 原子；
+/// 修订未变时不复制整表或 BPM。已发布数据由 UI 共享保活以跨过会话关闭。
+void BeatmapSession::publishAnnotationTableSnapshot()
+{
+    if ( !m_annotationTableRequested.load(std::memory_order_relaxed) ) return;
+    const auto& context = *m_ctx;
+    const auto* beatmap = context.currentBeatmap.get();
+    // 等待已有渲染缓存完成该修订。此时请求仍在，下次更新会继续处理。
+    if ( beatmap && context.isAnnotationRenderCacheDirty ) return;
+    // 交换消费本代请求，UI 在投影期间提交的新请求会保留到下一轮。
+    m_annotationTableRequested.exchange(false, std::memory_order_relaxed);
+
+    const auto previous = m_annotationTableSnapshot.load();
+    if ( !beatmap ) {
+        // 非空句柄配零令牌表示明确没有谱面；空句柄只表示尚未处理首次请求。
+        // 两者必须分开，否则窗口会在新加载期间误关，或在无谱面时无限等待。
+        if ( !previous || previous->instanceId )
+            m_annotationTableSnapshot.store(
+                std::make_shared<AnnotationTableSnapshot>());
+        m_annotationTableBeatmap = nullptr;
+        return;
+    }
+
+    // 无发布或实例更换时全部重建。缓存修订只在一张谱面内具有可比性。
+    const bool newBeatmap = !previous || beatmap != m_annotationTableBeatmap;
+    // 跨谱面即使修订数相同也必须替换全部数据，旧批注正文不能串到新标签。
+    const bool rowsChanged =
+        newBeatmap ||
+        context.annotationRenderCacheRevision != m_annotationTableRevision;
+    const auto* scrollCache =
+        context.timelineRegistry.ctx().find<System::ScrollCache>();
+    const int beatDivisor =
+        std::max(1, context.lastConfig.settings.beatDivisor);
+    // 滚动缓存脏时保留本实例上一份锚点；只有新谱面才丢弃旧实例的时间格式。
+    // 分拍方案变更不一定增加滚动修订，必须与缓存修订独立判断。
+    const bool timingChanged =
+        scrollCache && !scrollCache->isDirty &&
+        (newBeatmap || !previous->timing ||
+         scrollCache->getRevision() != m_annotationTableTimingRevision ||
+         beatDivisor != previous->timing->beatDivisor);
+    // 连续轮询读取同代数据，不为相同状态重复分配顶部对象或子容器。
+    if ( !rowsChanged && !timingChanged &&
+         previous->playing == context.isPlaying )
+        return;
+
+    // 播放标记或 Timing 更新复用未变化的行；旧发布仍可由绘制和导出持用。
+    auto next = newBeatmap
+                    ? std::make_shared<AnnotationTableSnapshot>()
+                    : std::make_shared<AnnotationTableSnapshot>(*previous);
+    if ( newBeatmap ) {
+        /// @brief 各会话共用的进程内实例序号，低频载入边界递增。
+        /// @warning relaxed 只负责分配不同编号，数据可见性由各会话发布槽保证。
+        static std::atomic<std::uintptr_t> nextInstance{ 1 };
+        next->instanceId = nextInstance.fetch_add(1, std::memory_order_relaxed);
+        m_annotationTableBeatmap = beatmap;
+    }
+    if ( rowsChanged ) {
+        next->rows = std::make_shared<const std::vector<AnnotationTableRow>>(
+            annotationRows(context));
+        m_annotationTableRevision = context.annotationRenderCacheRevision;
+    }
+    if ( timingChanged ) {
+        // 新锚点与当前分拍值通过同一个不可变对象发布。
+        next->timing = std::make_shared<const AnnotationTableTiming>(
+            annotationTiming(*scrollCache, beatDivisor));
+        m_annotationTableTimingRevision = scrollCache->getRevision();
+    }
+    // 一次交换完成发布。即使下一轮修改缓存，正在绘制的行仍由旧句柄保活。
+    next->playing = context.isPlaying;
+    m_annotationTableSnapshot.store(std::move(next));
+}
 
 }  // namespace MMM::Logic

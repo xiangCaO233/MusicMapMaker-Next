@@ -1,29 +1,42 @@
 /// @file MobileAnnotationTableTest.cpp
 /// @brief 使用真实会话缓存、ImGui 控件和原始触点验证触屏批注列表。
+#include "audio/AudioManager.h"
+#include "audio/AudioTimelineClock.h"
+#include "audio/AudioTimelineTransport.h"
+#include "audio/AudioTypes.h"
 #include "canvas/AnnotationTableData.h"
 #include "common/LogicCommands.h"
+#include "config/AppConfig.h"
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "graphic/mobile/MobileTouchInput.h"
 #include "log/colorful-log.h"
+#include "logic/AnnotationTableSnapshot.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/annotation/BeatmapAnnotation.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "presentation/AnnotationTablePresentation.h"
+#include "runtime/AppThreadPool.h"
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/workspace/IWorkspacePresentation.h"
 #include "ui/workspace/MobileTouchScroll.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
+#include <future>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -195,6 +208,13 @@ struct Fixture {
         // NewFrame 之前送入完整输入，之后先让全局页面仲裁器分类。
         // 父窗口、列表和正文由生产布局创建，不在测试里补额外触摸区域。
         // 结束时恢复过滤前输入，让下一次 NewFrame 正常计算原生边沿。
+        // 本夹具没有后台逻辑线程，由正式会话 update 消费上一帧的表格请求。
+        // 先请求再推进逻辑，避免把直接从 ECS 读取误当成快照回归通过。
+        (void)data.refresh();
+        session->update(
+            0, Logic::EditorEngine::instance().getEditorConfig(), true);
+        // 完成逻辑更新后才开始 ImGui 帧，控制层不在绘制或清理控件时被重入。
+        // 此处只推进读取请求；点击生成的命令仍由 apply 独立送入会话。
         ImGui::NewFrame();
         scroll.beginFrame(1);
         UI::WorkspaceFrameScope scope(workspace);
@@ -500,15 +520,45 @@ void invalidation()
             w->DC.CursorPosPrevLine.y + ImGui::GetFrameHeight() * .5f
         };
     };
-    // 播放是外部前置变化，禁止确认，不把已在编辑中的草稿自动写回。
-    // 内存夹具没有播放线程，该赋值只建立外部播放状态前置条件。
-    // 数据层仍通过正式 refresh 读取许可，测试不直接替控件禁用按钮。
-    // 播放结束只恢复本测试会话，不修改任何系统音量或实际应用状态。
-    f.session->getContextMutable().isPlaying = true;
+    // 真实虚拟输出提供匹配会话指纹的传输，防止 update
+    // 像生产中一样清掉无源播放标志。
+    // 只加载有时长的静音调度，避免依赖样本、系统设备或用户音量。
+    // 此时弹窗已打开，变更权限必须影响旧草稿，无法通过禁用打开入口覆盖。
+    // 五秒静音长度与单帧输入无关，确保这一组不会因自然结束提前解禁。
+    auto& audio    = Audio::AudioManager::instance();
+    auto& playback = f.session->getContextMutable();
+    // 指纹来自本会话已重建的描述符。其他标签的传输会在正式更新中被拒绝。
+    const auto& fingerprint = playback.audioTimelineDescriptor.m_fingerprint;
+    check(!fingerprint.empty() &&
+              audio.loadAudioTimeline({}, 5.0, fingerprint).success,
+          "silent timeline is available for the playback permission fixture");
+    audio.play();
+    // 播放请求由回调接管后才断言 UI 禁用，避免以刚投递命令代替实际状态。
+    // 上限仅用于回归失效时按时失败，生产批注表从不阻塞等待回调。
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    // 只观察公开值快照，不读取混音器内部节点或从测试线程推进设备回调。
+    const auto isTransportPlaying = [&] {
+        const auto clock = audio.getAudioTimelineClockSnapshot();
+        return clock.valid &&
+               clock.state == Audio::AudioTimelinePlaybackState::Playing;
+    };
+    while ( !isTransportPlaying() &&
+            std::chrono::steady_clock::now() < deadline )
+        std::this_thread::yield();
+    check(isTransportPlaying(), "dummy callback accepted playback");
+    // 回调已经工作，再把相同传输的播放状态交给逻辑更新。
+    // 表格此时仍持有旧的可写快照，必须实际完成换代才能禁用保存。
+    playback.isPlaying = true;
     f.frame({ -100, -100 });
+    check(!f.data.writable(), "published table reflects active playback");
     f.tap(save());
+    // 除了许可值，也要证明真实点击没有发出任何编辑命令。
     check(f.commands.empty(), "playback disables save in an existing editor");
-    f.session->getContextMutable().isPlaying = false;
+    // 在下一组改变正文前停止计时器，冲突检查必须独立于播放门禁。
+    playback.isPlaying = false;
+    audio.pause();
+    // 同一草稿仍打开；新正文导致的拒绝必须发生在会话已恢复可写的前提下。
     // 正式命令模拟另一编辑者更新，数据缓存必须发布新版本而非私改 UI 行。
     f.session->pushCommand(Logic::CmdUpsertBeatmapAnnotation{
         .annotationId = "annotation-0", .content = "External edit" });
@@ -530,16 +580,129 @@ void invalidation()
               f.commands.empty(),
           "profile change closes the old editor without a write");
 }
+/// @brief 验证活动路由与表格发布的生命周期，覆盖旧注册表更新锁占用。
+/// @details 会话由内存谱面创建，逻辑线程和 UI 刷新按固定顺序推进。
+/// 因为没有图形窗口或后台循环，所有快照必须由正式活动会话更新产生。
+/// @post 关闭本组创建的两张谱面，保留独立快照到最后以检查读者生命周期。
+void snapshotRouting()
+{
+    auto&      engine = Logic::EditorEngine::instance();
+    const auto open   = [&](const char* id) {
+        auto map = std::make_shared<BeatMap>();
+        // 两张谱面使用相同修订次数；只有活动身份能够区分它们。
+        map->m_annotations.push_back(
+            BeatmapAnnotation{ .m_id = "same-id", .m_content = id });
+        return engine.createSession(map, id, false, id, true);
+    };
+    // 同一稳定批注 ID 是刻意设置的冲突值，身份回归不能靠不同 ID 碰巧通过。
+    const auto                  firstIndex   = open("AnnotationSnapshotFirst");
+    auto                        firstSession = engine.getActiveSession();
+    Canvas::AnnotationTableData data;
+    // 首次轮询只请求更新。若直接读会话缓存或将等待误判为关闭，本断言会失败。
+    check(data.refresh().status == Canvas::AnnotationTableDataStatus::Pending,
+          "first refresh requests a publication");
+    firstSession->update(0, engine.getEditorConfig(), true);
+    check(data.refresh().status == Canvas::AnnotationTableDataStatus::Ready &&
+              data.rows().size() == 1 &&
+              data.rows()[0].content == "AnnotationSnapshotFirst",
+          "publication is usable without canvas rendering");
+    const auto first = Logic::readActiveAnnotationTable();
+    // 缓存发布的实例令牌也是移动编辑器决定草稿归属的依据。
+    // 移动编辑器据此绑定草稿，即使两个版本的行 ID 完全相同也不能复用。
+    const auto firstInstance = data.instanceId();
+
+    // 确定另一线程在长锁未释放前完成读取。超时后先解锁，再回收 future，
+    // 以便旧实现即使阻塞，也会明确失败而不会挂死整个测试。
+    // 先在主线程占锁，再启动读取线程，避免读取恰好跑在占锁之前。
+    std::unique_lock lock(engine.getSessionMutex());
+    auto             reader =
+        std::async(std::launch::async, [&] { return data.refresh(); });
+    // 只在测试线程做有界等待，生产代码保持完全异步。
+    const auto status = reader.wait_for(std::chrono::seconds(1));
+    lock.unlock();
+    check(status == std::future_status::ready && !reader.get().rowsChanged,
+          "unchanged table refresh does not wait for the session lock");
+
+    // 分拍值独立于批注与滚动修订。只改变格式时，逻辑应复用原行，
+    // UI 仍要更新派生文本；单靠 rowsChanged 会漏掉这次刷新。
+    const auto oldDisplay       = data.displayRevision();
+    auto       config           = engine.getEditorConfig();
+    config.settings.beatDivisor = 8;
+    firstSession->update(0, config, true);
+    const auto reformatted = data.refresh();
+    check(reformatted.status == Canvas::AnnotationTableDataStatus::Ready &&
+              !reformatted.rowsChanged &&
+              data.timeFormatContext().beatDivisor == 8 &&
+              data.displayRevision() > oldDisplay,
+          "beat divisor change refreshes timing without replacing rows");
+
+    // 新窗口暂缺首份快照时，旧行的稳定 ID 不能成为新会话的编辑目标。
+    const auto secondIndex   = open("AnnotationSnapshotSecond");
+    auto       secondSession = engine.getActiveSession();
+    check(data.refresh().status == Canvas::AnnotationTableDataStatus::Pending &&
+              data.rows().empty() && !data.writable(),
+          "switching to a new session does not expose the previous rows");
+    // 两个新会话的批注修订相同，覆盖仅按版本判断造成的误复用。
+    secondSession->update(0, engine.getEditorConfig(), true);
+    check(data.refresh().status == Canvas::AnnotationTableDataStatus::Ready &&
+              data.instanceId() != firstInstance && data.rows().size() == 1 &&
+              data.rows()[0].content == "AnnotationSnapshotSecond",
+          "equal revisions from another chart publish different rows");
+
+    // 删除活动项会回到第一项，同时旧发布句柄仍持有原来的数据。
+    // 关闭入口正常发布活动结构，不手动迁移索引或补发新谱面快照。
+    engine.closeSession(secondIndex, false);
+    secondSession.reset();
+    // 首张谱面没有重新更新，验证路由可直接读取仍有效的旧发布。
+    check(data.refresh().status == Canvas::AnnotationTableDataStatus::Ready &&
+              data.instanceId() == firstInstance,
+          "closing active session follows new registry publication");
+    // 释放夹具自己的会话句柄，避免把测试代码的保活误认为发布所保证的寿命。
+    // weak_ptr 只验证析构；若快照意外持有 Session，该断言就会失败。
+    const std::weak_ptr<Logic::BeatmapSession> firstLifetime = firstSession;
+    engine.closeSession(firstIndex, false);
+    firstSession.reset();
+    check(firstLifetime.expired(),
+          "the annotation snapshot does not own its session");
+    // 无活动谱面是关闭，而非继续等待某个已经注销的会话。
+    check(data.refresh().status == Canvas::AnnotationTableDataStatus::Close &&
+              data.rows().empty(),
+          "no active chart closes the table and drops its rows");
+    // 旧句柄包含自己的行和正文，两个注册表条目都已解绑仍然可读。
+    // 第一代数据已跨过独立 Timing 更新；关闭会话后也能读到原正文。
+    check(first && first->snapshot && first->snapshot->rows &&
+              first->snapshot->rows->size() == 1 &&
+              (*first->snapshot->rows)[0].content == "AnnotationSnapshotFirst",
+          "original snapshot survives both session closures");
+}
 }  // namespace
-/// @brief 三组独立上下文避免上一场景的菜单、滚动和触点掩盖下一场景故障。
+/// @brief 各组独立验证活动发布和触屏交互，避免上一组状态掩盖失败。
 int main()
 {
     Translation::getActiveTranslator().loadLanguage("en_us",
                                                     MMM_T08_TRANSLATION);
     Translation::getActiveTranslator().switchLang("en_us");
     // 三组结果分别检查读取、历史与外部失效，不能相互抵消失败。
+    // 数据路由先独立验证，随后才创建 ImGui 触屏夹具。
+    snapshotRouting();
     navigation();
     editing();
+    // 只有播放权限组需要实际回调。CTest 为它选中虚拟输出驱动，
+    // 不探测真实系统设备，也不加载配置里记录的专用输出端点。
+    // CTest 单独启动权限用例所在套件进程，其他用例不继承这里的设备设置。
+    auto& settings = Config::AppConfig::instance().getEditorSettings();
+    settings.audioPlaybackBackend = Config::AudioPlaybackBackend::SDL;
+    settings.sdlAudioOutputDeviceName.clear();
+    auto& pool  = Runtime::AppThreadPool::instance();
+    auto& audio = Audio::AudioManager::instance();
+    // AudioManager 的资源服务需要现有工作池，即使本组只播放静音调度。
+    pool.init();
+    audio.init();
+    // 只有权限场景需要启动回调。之前的路由和普通输入继续覆盖无设备路径。
     invalidation();
+    // 回调和音频图先停止，后台资源池后关闭，沿用正式管理器的退出顺序。
+    audio.shutdown();
+    // 等回调和图停下再释放工作线程，保持正式管理器的关闭顺序。
+    pool.shutdown();
     return passed ? 0 : 1;
 }

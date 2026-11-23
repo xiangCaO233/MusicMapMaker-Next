@@ -67,8 +67,10 @@ struct SessionSnapshotEntry {
     bool isLogoPlaceholder{ false };
 };
 
-/// @brief 发布给逻辑热路径的不可变 Session 列表快照。
+/// @brief 逻辑调度和窄读接口共享的不可变 Session 列表快照。
 struct PublishedSessionSnapshot {
+    /// @brief 与 sessions 同一次发布的活动索引；列表重排时一起替换。
+    int32_t activeIndex{ -1 };
     /// @brief 当前所有有效 Session 的稳定快照。
     std::vector<SessionSnapshotEntry> sessions;
 };

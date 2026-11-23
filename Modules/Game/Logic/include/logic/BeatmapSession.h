@@ -20,8 +20,15 @@ struct AutoBackupConfig;
 struct AutoSaveConfig;
 struct EditorConfig;
 }  // namespace MMM::Config
+namespace MMM
+{
+class BeatMap;
+}
+
 namespace MMM::Logic
 {
+
+struct AnnotationTableSnapshot;
 
 struct SessionContext;
 class PlaybackController;
@@ -98,6 +105,11 @@ public:
     /// @param isActiveSession 当前会话是否是前台活跃会话。
     void update(double dt, const Config::EditorConfig& config,
                 bool isActiveSession);
+
+    /// @brief 向逻辑更新请求批注表，并读取上一份不可变发布。
+    /// @warning UI 低频轮询。只有发布句柄的共享所有权跨线程，不等待会话锁。
+    std::shared_ptr<const AnnotationTableSnapshot>
+    requestAnnotationTableSnapshot();
 
     /// @brief 获取共享上下文的只读引用（通常供 UI 渲染层读取状态）
     const SessionContext& getContext() const { return *m_ctx; }
@@ -311,6 +323,23 @@ private:
     ::MMM::BeatmapMutationFlags handleCommand(
         const CmdUpdateBeatmapMetadata& cmd);
     void handleCommand(const CmdMarkBeatmapMetadataDirty& cmd);
+
+    /// @brief 在渲染缓存之后投影批注表。
+    /// @warning 每次活动会话更新可调用，无请求时只检查标志。
+    void publishAnnotationTableSnapshot();
+
+    /// @brief UI 轮询设置标志，逻辑更新消费合并的待处理请求。
+    /// @warning 每次活动逻辑更新可能读取一次，relaxed 仅传递请求，不传数据。
+    std::atomic<bool> m_annotationTableRequested{ false };
+    /// @brief 逻辑写、UI 读的快照发布槽，对象独立于会话生命周期。
+    /// @warning 只在请求时读取或发布共享句柄，不持有会话更新锁供 UI 访问。
+    PublishedSharedPtr<const AnnotationTableSnapshot> m_annotationTableSnapshot;
+    /// @brief 逻辑侧记录最后投影的谱面身份，仅比较地址，不借用或解引用旧实例。
+    const ::MMM::BeatMap* m_annotationTableBeatmap{};
+    /// @brief 已发布批注行的逻辑缓存修订。
+    std::uint64_t m_annotationTableRevision{};
+    /// @brief 已发布拍位锚点的滚动缓存修订。
+    std::uint64_t m_annotationTableTimingRevision{};
 
     std::unique_ptr<SessionContext>        m_ctx;          ///< 共享上下文状态
     std::unique_ptr<PlaybackController>    m_playback;     ///< 播放控制器
