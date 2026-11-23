@@ -10,6 +10,8 @@
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
+#include "event/core/EventBus.h"
+#include "event/logic/BeatmapSaveResultEvent.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
@@ -29,6 +31,7 @@
 #include <nfd.h>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -209,8 +212,24 @@ private:
     {
         // 防止空选择进入 filesystem 或导出流程。
         if ( path.empty() ) return;
+        // 区分目标不存在与查询失败。遇到权限或 I/O 错误时不能继续导出，
+        // 否则相同的 false 结果可能绕过已有目标的覆盖确认。
+        std::error_code error;
+        const bool      targetExists =
+            std::filesystem::exists(Config::utf8ToPath(path), error);
+        if ( error ) {
+            // 交给统一保存反馈展示错误和所选目标，保留当前谱面供用户重试。
+            Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+                .path         = std::move(path),
+                .success      = false,
+                .isExport     = true,
+                .errorMessage = "无法检查导出目标：" + error.message(),
+            });
+            return;
+        }
+
         // 已存在目标不直接覆盖，先保存路径并请求确认。
-        if ( std::filesystem::exists(Config::utf8ToPath(path)) ) {
+        if ( targetExists ) {
             m_pendingOverwritePath = std::move(path);
             m_showOverwriteWarning = true;
             return;
@@ -604,7 +623,7 @@ private:
         // 居中作用域限制弹窗样式并负责离开时恢复。
         // 仅 BMS 兼容性页接管触控正文，保留其它格式既有临时选项语义。
         // 草稿仍由原命令按值复制，移动控件不写全局编辑器配置。
-        ExportTouchLayout touchLayout(dpiScale,
+        ExportTouchLayout              touchLayout(dpiScale,
                                       m_pendingExportShowBmsAlignmentOption);
         Utils::CenteredModalPopupScope popupStyle(dpiScale);
         if ( popupStyle.begin(popupId,
