@@ -76,7 +76,9 @@ struct RTTILogger {
         // 崩溃处理器必须在后续业务初始化前注册，以覆盖早期故障。
         register_crash_handler();
 #endif
-        // C 与 C++ 路径及格式化依赖统一 UTF-8 区域设置。
+        // 仅当运行库接受 .UTF-8 时才切换进程的 C locale；不支持时保留原设置。
+        // 这里忽略返回值，不能把这次调用视为路径编码或 C++ locale
+        // 已初始化的保证。
         std::setlocale(LC_ALL, ".UTF-8");
         // 设置工作目录为可执行程序所在目录。
         std::string           workingDirectoryError;
