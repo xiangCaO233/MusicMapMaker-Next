@@ -6,6 +6,7 @@
 #include "config/BeatLinePalette.h"
 #include "config/CreatorIdentity.h"
 #include "config/EditorConfig.h"
+#include "config/EditorConfigView.h"
 #include "config/EditorPlatformDefaults.h"
 #include "config/EditorSettings.h"
 #include "config/EditorShortcutActions.h"
@@ -1405,6 +1406,42 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     // 旧配置没有操作方案字段时继续使用经典桌面，不重置用户快捷键。
     settings.m_interactionProfileId =
         json.value("interactionProfileId", std::string("classic-desktop"));
+}
+
+/// @brief 借用完整配置，读取者必须在所有者销毁前结束访问。
+EditorConfigView::EditorConfigView(const EditorConfig& config)
+    : EditorConfigView(config.visual, config.settings)
+{
+}
+
+/// @brief 复用配置字段默认值，恢复工具栏中的物件渲染分组。
+void EditorConfig::resetNoteRenderingToDefaults()
+{
+    // 临时默认对象集中提供字段初值，避免在重置路径重复维护常量。
+    const EditorConfig defaults;
+    visual.noteScaleX               = defaults.visual.noteScaleX;
+    visual.noteScaleY               = defaults.visual.noteScaleY;
+    visual.notePartScales           = defaults.visual.notePartScales;
+    visual.nonHoldHitEffectDuration = defaults.visual.nonHoldHitEffectDuration;
+    visual.showBoundSampleLabels    = defaults.visual.showBoundSampleLabels;
+    visual.noteFillMode             = defaults.visual.noteFillMode;
+    // 固定位置与缩放归属同一复位分组，不能保留上次底边设置。
+    visual.noteTexturePosition = defaults.visual.noteTexturePosition;
+    settings.defaultColorPaletteSchemeName =
+        defaults.settings.defaultColorPaletteSchemeName;
+}
+
+/// @brief 只恢复背景渲染分组，不覆盖独立的频谱配置。
+void EditorConfig::resetBackgroundRenderingToDefaults()
+{
+    // 只覆盖本分组声明的选项，背景频谱等独立设置保持用户值。
+    const EditorConfig defaults;
+    visual.background.fillMode     = defaults.visual.background.fillMode;
+    visual.background.opaque_ratio = defaults.visual.background.opaque_ratio;
+    visual.background.darken_ratio = defaults.visual.background.darken_ratio;
+    visual.beatLineAlpha           = defaults.visual.beatLineAlpha;
+    visual.hoverSubdivisionLineExtensionRatio =
+        defaults.visual.hoverSubdivisionLineExtensionRatio;
 }
 
 /// @brief 序列化编辑器配置根对象。

@@ -1,6 +1,7 @@
 #pragma once
 
-#include "config/EditorConfig.h"
+#include "config/EditorConfigView.h"
+
 #include "logic/BeatmapSyncBuffer.h"
 
 namespace MMM::Logic::System

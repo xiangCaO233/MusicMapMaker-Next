@@ -4,6 +4,7 @@
 #include "common/render/HoverRenderData.h"
 #include "common/render/NotePartSizing.h"
 #include "common/render/TextureID.h"
+#include "config/EditorConfigView.h"
 #include "config/VisualConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "logic/EditorEngine.h"

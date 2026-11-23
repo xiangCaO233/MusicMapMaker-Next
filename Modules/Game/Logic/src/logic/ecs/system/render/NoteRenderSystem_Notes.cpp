@@ -1,7 +1,8 @@
 #include "common/render/NotePartSizing.h"
 #include "common/render/RenderSnapshot.h"
 #include "common/render/TextureID.h"
-#include "config/EditorConfig.h"
+#include "config/EditorConfigView.h"
+#include "config/EditorSettings.h"
 #include "config/VisualConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/BeatmapSyncBuffer.h"
@@ -13,12 +14,12 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/AudioObjectLabelRenderer.h"
 #include "logic/ecs/system/render/Batcher.h"
+#include "logic/ecs/system/render/DragRenderPinnedEntities.h"
 #include "logic/ecs/system/render/HoldCarrierVisibility.h"
 #include "logic/ecs/system/render/NoteLaneGeometry.h"
 #include "logic/ecs/system/render/SkinTextureScale.h"
 #include "logic/session/CanvasCamera.h"
 #include "logic/session/SessionUtils.h"
-#include "logic/session/context/SessionContext.h"
 #include "mmm/note/HoldScrollSemantics.h"
 #include <algorithm>
 #include <array>

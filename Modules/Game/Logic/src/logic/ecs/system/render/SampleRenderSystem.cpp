@@ -1,14 +1,18 @@
 #include "logic/ecs/system/SampleRenderSystem.h"
+#include "logic/ecs/system/render/DragRenderPinnedEntities.h"
+// 采样绘制借用视口的视觉设置，编辑策略仍由会话持有。
+#include "common/render/RenderSnapshot.h"
 #include "common/render/TextureID.h"
+#include "config/EditorConfigView.h"
+#include "config/VisualConfig.h"
 
-#include "config/EditorConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/SampleComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/AudioObjectLabelRenderer.h"
 #include "logic/ecs/system/render/Batcher.h"
-#include "logic/session/context/SessionContext.h"
+#include "logic/session/CanvasCamera.h"
 
 #include <fmt/format.h>
 
@@ -457,6 +461,7 @@ void SampleRenderSystem::renderSamples(
     }
     // 拖动实体可能尚未反映在排序索引中，额外加入候选后仍接受轨道和像素裁剪。
     // 与普通候选共享去重集合，防止同一实体重复生成命中框。
+    // 拖动对象可能已离开索引位置，仍需补入当前帧的可见候选。
     if ( const auto* pinned = registry.ctx().find<DragRenderPinnedEntities>();
          pinned && pinned->entities ) {
         // pinned 只提供本帧额外查询入口，不授予实体新的所有权或有效性。
