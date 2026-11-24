@@ -1,6 +1,11 @@
 #include "network/collaboration/CollaborationRoom.h"
 
+#include "network/collaboration/BeatmapDocumentCodec.h"
 #include "network/collaboration/CollaborationBuildFingerprint.h"
+#include "network/collaboration/CollaborationDirectoryClient.h"
+#include "network/collaboration/CollaborationResourceSync.h"
+
+#include "network/collaboration/WebRtcTransport.h"
 
 #include "config/CreatorIdentity.h"
 #include "log/colorful-log.h"
@@ -13,7 +18,10 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <deque>
 #include <future>
+#include <mutex>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -401,14 +409,205 @@ public:
     std::unique_ptr<BeatmapDocumentCodec> visibleDocument;
 };
 
+/// @brief 一条已经编码且等待权威提交的本地谱面变化。
+struct CollaborationRoom::LocalOperation {
+    /// @brief 与进程内 ECS 无关的规范增量负载。
+    ByteBuffer payload;
+    /// @brief 当前房间内严格递增的本地变化序号。
+    std::uint64_t sequence{ 0 };
+};
+
+/// @brief 权威文档重放待确认本地变化后的可见谱面。
+struct CollaborationRoom::RebasedLocalBeatmap {
+    /// @brief 可安全回灌逻辑线程的领域谱面。
+    std::shared_ptr<::MMM::BeatMap> beatmap;
+    /// @brief 与领域谱面对应、供后台计算下一次可见差量的规范文档。
+    std::unique_ptr<BeatmapDocumentCodec> document;
+    /// @brief 该谱面已经包含的最新本地变化序号。
+    std::uint64_t includedLocalMutationSequence{ 0 };
+};
+
+/// @brief 等待逻辑线程确认应用的后台物件编码基线。
+struct CollaborationRoom::PendingObjectEncodingBaseline {
+    /// @brief 基线对应的权威文档修订号。
+    std::uint64_t revision{ 0 };
+    /// @brief 基线已经包含的最新本地变化序号。
+    std::uint64_t includedLocalMutationSequence{ 0 };
+    /// @brief 后台完整准备、逻辑线程只需移动安装的物件基线。
+    std::shared_ptr<BeatmapDocumentCodec::ObjectEncodingBaseline> baseline;
+};
+
+/// @brief 房间内部状态按资源与线程所有权组织。房间构造后地址保持稳定。
+struct CollaborationRoom::Impl {
+    /// @brief 中心目录与当前连接设置，重连计时与目录客户端使用同一生命周期。
+    struct DirectoryConnection {
+        /// @brief 只在没有活动房间时轮询目录，断线重试受截止时间控制。
+        /// @warning UI 每帧调用，执行有界事件消费。
+        void update(bool isActive);
+
+
+        /// @brief 当前中心服务器配置。
+        CollaborationServerEndpoint m_serverEndpoint;
+        /// @brief 公网在线房间目录订阅客户端。
+        CollaborationDirectoryClient m_directory;
+        /// @brief 目录断线后的下一次重连时间。
+        std::chrono::steady_clock::time_point m_nextDirectoryReconnect{
+            std::chrono::steady_clock::now()
+        };
+        /// @brief 跨重连保留的最近目录错误。
+        std::string m_directoryError;
+    };
+
+    /// @brief 中心目录与当前连接设置，重连计时与目录客户端使用同一生命周期。
+    DirectoryConnection m_directoryConnection;
+
+    /// @brief
+    /// 本地编码由逻辑线程在队列锁下访问，权威文档由单一后台消费者推进。UI
+    /// 线程交付结果与确认。
+    struct DocumentReplication {
+        /// @brief 关闭逻辑编辑入口，等待正在编码的增量退出队列锁后清理。
+        /// @warning 只在断开或关闭时获取队列锁。
+        void stopAcceptingLocalMutations();
+
+        /// @brief 当前客户端的规范化谱面文档。
+        BeatmapDocumentCodec m_documentCodec;
+        /// @brief 逻辑线程专用的本地编辑增量编码器。
+        BeatmapDocumentCodec m_localMutationCodec;
+        /// @brief 远端提交数据的本地逻辑命令入口。
+        ApplyBeatmapCallback m_applyBeatmapCallback;
+        /// @brief 本地提交无需整谱回灌时使用的序号确认入口。
+        LocalMutationAcknowledgedCallback m_localMutationAcknowledgedCallback;
+        /// @brief 房主历史补偿对应的本地动作栈入口。
+        HistoryCorrectedCallback m_historyCorrectedCallback;
+        /// @brief 本会话已提交客户端序号到逻辑观察序号的有界对应表。
+        std::deque<std::pair<std::uint64_t, std::uint64_t>>
+            m_localSequenceByClientSequence;
+        /// @brief 私有无锁队列、消费者状态与后台任务生命周期。
+        std::unique_ptr<RemoteOperationPipeline> m_remoteOperationPipeline;
+        /// @brief UI 线程最近收到的房主成员历史摘要。
+        std::vector<CollaborationMemberHistory> m_memberHistories;
+        /// @brief 最近一次成员历史请求的失败原因。
+        std::string m_memberHistoryError;
+        /// @brief 防止用户连续点击时重复提交同一历史步骤。
+        bool m_memberHistoryRequestPending{ false };
+        /// @brief 即将同步提交的补偿操作原始修订；回调入队时消费。
+        std::uint64_t m_pendingHistoryRevision{ 0 };
+        /// @brief 即将同步提交的补偿操作是否为重做。
+        bool m_pendingHistoryRedo{ false };
+        /// @brief 房主等待最新文档快照完成后再登记的访客连接事件。
+        std::deque<WebRtcTransportEvent> m_pendingPeerConnections;
+        /// @brief 已发布给 Peer 且可安全交给新访客的文档修订号。
+        std::uint64_t m_publishedDocumentRevision{ 0 };
+        /// @brief 逻辑线程等待 UI 网络循环提交的本地操作。
+        std::deque<LocalOperation> m_localOperationQueue;
+        /// @brief 已交给可靠传输且等待房主提交回执的本地操作。
+        std::deque<LocalOperation> m_inFlightLocalOperations;
+        /// @brief 已交付且等待逻辑线程按修订顺序确认的物件编码基线。
+        std::deque<PendingObjectEncodingBaseline>
+            m_pendingObjectEncodingBaselines;
+        /// @brief 保护本地操作队列。
+        std::mutex m_localOperationMutex;
+        /// @brief 当前房间是否接受逻辑线程发布的谱面变化。
+        std::atomic_bool m_acceptLocalMutations{ false };
+        /// @brief 本地队首因传输背压暂时无法提交时抑制重复错误日志。
+        bool m_localOperationSubmitBlocked = false;
+        /// @brief
+        /// 远端回灌曾覆盖含待确认编辑的本地状态，需要由本人提交回执重放。
+        bool m_localStateNeedsRebase = false;
+        /// @brief 已收到但逻辑线程尚未确认应用的远端权威状态。
+        /// 由本地操作互斥锁保护，用于保证此期间产生的本地编辑在提交回执时取得
+        /// 一次合并后的权威结果，而不是仅收到轻量序号确认。
+        bool m_remoteStateApplyPending = false;
+        /// @brief 下一条成功编码的本地谱面变化序号。
+        std::uint64_t m_nextLocalMutationSequence{ 1 };
+        /// @brief 房主权威文档已经确认的最新本地变化序号。
+        /// 由本地操作互斥锁保护，并附加到后续所有物化结果，防止较早完成的后台
+        /// 快照在确认到达后反向覆盖本地状态。
+        std::uint64_t m_latestCommittedLocalMutationSequence{ 0 };
+        /// @brief 当前房间角色是否为房主。
+        std::atomic_bool m_hostRoleForObserver{ false };
+        /// @brief 房主是否已经排队初始完整快照。
+        std::atomic_bool m_initialSnapshotQueued{ false };
+        /// @brief 当前客户端是否已应用完整房主文档。
+        std::atomic_bool m_hasDocument{ false };
+        /// @brief 当前客户端的权限镜像。
+        /// @warning UI 线程在 Peer 更新后写，逻辑线程发布本地变更前读；使用
+        /// acquire/release 保证权限收紧可及时阻止后续增量编码。
+        std::atomic_uint32_t m_localPermissions{ 0U };
+    };
+
+    /// @brief
+    /// 本地编码由逻辑线程在队列锁下访问，权威文档由单一后台消费者推进。UI
+    /// 线程交付结果与确认。
+    DocumentReplication m_replication;
+
+    /// @brief 房间的资源收发任务，清单与已接收清单的访客集合随同步重置。
+    struct ResourceTransfer {
+        /// @brief 停止后台传输并使旧清单和接收者失效。
+        void reset()
+        {
+            // 先停止工作者，下一房间不会沿用旧清单或发送记录。
+            m_resourceSync.reset();
+            m_resourceManifest.reset();
+            m_resourceManifestRecipients.clear();
+        }
+
+        /// @brief 按消息类别将资源清单、请求或分块交给后台同步器。
+        void receive(PeerId senderId, const CollaborationMessage& message);
+
+        /// @brief 访客完成资源校验后的会话绑定入口。
+        ResourceBundleCallback m_resourceBundleCallback;
+        /// @brief 后台资源清单和分块状态机。
+        CollaborationResourceSync m_resourceSync;
+        /// @brief 房主当前已经准备好的资源清单。
+        std::optional<ResourceManifest> m_resourceManifest;
+        /// @brief 已发送当前清单的访客集合。
+        std::unordered_set<PeerId> m_resourceManifestRecipients;
+    };
+
+    /// @brief 房间的资源收发任务，清单与已接收清单的访客集合随同步重置。
+    ResourceTransfer m_resources;
+
+    /// @brief UI 线程独占的发送限频与跟随会话状态。
+    struct ViewportPublication {
+        /// @brief 在限频允许时把变化后的最新视口交给 Peer。
+        /// @warning 每帧调用且只做常量级检查，不得等待网络。
+        void flush(CollaborationPeer* peer);
+
+        /// @brief 主画布最近写入且等待节流发布的本地状态。
+        std::optional<ParticipantViewport> m_pendingLocalViewport;
+        /// @brief 最近一次成功交给 Peer 发布的本地状态。
+        std::optional<ParticipantViewport> m_lastPublishedLocalViewport;
+        /// @brief 连续本地 Seek 预览期间是否暂缓发送视口，直至最终位置提交。
+        bool m_localViewportPublishDeferred{ false };
+        /// @brief 允许下一次视口状态发送的时间点。
+        std::chrono::steady_clock::time_point m_nextViewportPublish{
+            std::chrono::steady_clock::now()
+        };
+        /// @brief P2P 主画布状态的本地发送频率，限制为 5～60 Hz。
+        std::uint32_t m_viewportPublishRateHz = 10;
+        /// @brief 最新跟随请求是否等待完成，避免旧回复覆盖稳定身份意图。
+        bool m_followRequestPending{ false };
+        /// @brief 已尝试恢复跟随的目标会话；每次重连最多重新请求一次。
+        OperationSessionId m_followResumeSessionId;
+        /// @brief 已确认的持续跟随稳定身份；离线后保留以安全恢复同一参与者。
+        ParticipantId m_followedParticipantId;
+        /// @brief 当前房间的跟随音频选择，结束房间时恢复关闭。
+        bool m_followPlaybackEnabled{ false };
+    };
+
+    /// @brief UI 线程独占的发送限频与跟随会话状态。
+    ViewportPublication m_viewport;
+};
+
 CollaborationRoom::CollaborationRoom()
-    : m_nextDirectoryReconnect(std::chrono::steady_clock::now())
+    : m_impl(std::make_unique<Impl>())
     , m_startedAt(std::chrono::steady_clock::now())
-    , m_nextViewportPublish(std::chrono::steady_clock::now())
 {
     // 流水线与房间同寿命，future 预留降低正常会话中的容器扩容次数。
-    m_remoteOperationPipeline = std::make_unique<RemoteOperationPipeline>();
-    m_remoteOperationPipeline->workerFutures.reserve(4U);
+    m_impl->m_replication.m_remoteOperationPipeline =
+        std::make_unique<RemoteOperationPipeline>();
+    m_impl->m_replication.m_remoteOperationPipeline->workerFutures.reserve(4U);
 }
 
 /// @brief 停止观察、销毁网络所有权并等待后台流水线安全退出。
@@ -418,7 +617,7 @@ CollaborationRoom::CollaborationRoom()
 CollaborationRoom::~CollaborationRoom()
 {
     // 先阻止观察线程继续入队，再销毁传输；最后等待后台文档任务完成。
-    stopAcceptingLocalMutations();
+    m_impl->m_replication.stopAcceptingLocalMutations();
     m_peer.reset();
     m_pendingTransport.reset();
     m_transport = nullptr;
@@ -463,7 +662,7 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
         fail("invalid_host_configuration");
         return false;
     }
-    m_directory.disconnect();
+    m_impl->m_directoryConnection.m_directory.disconnect();
 
     // transportConfig 生成本次会话唯一 sessionId，稳定 participantId
     // 则跨重连保留。
@@ -488,9 +687,9 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
     m_state  = CollaborationRoomState::Hosting;
     m_isHost = true;
     m_roomId.clear();
-    m_roomName                        = std::move(config.roomName);
-    m_serverEndpoint                  = std::move(config.endpoint);
-    m_creator                         = std::move(config.creator);
+    m_roomName                                     = std::move(config.roomName);
+    m_impl->m_directoryConnection.m_serverEndpoint = std::move(config.endpoint);
+    m_creator                                      = std::move(config.creator);
     m_participantId                   = std::move(config.participantId);
     m_operationSessionId              = std::move(transportConfig.sessionId);
     m_buildFingerprint                = std::move(config.buildFingerprint);
@@ -501,33 +700,36 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
     m_logs.clear();
     m_nextChatSequence = 1;
     m_chatMessages.clear();
-    m_pendingLocalViewport.reset();
-    m_lastPublishedLocalViewport.reset();
-    m_localViewportPublishDeferred = false;
-    m_nextViewportPublish          = std::chrono::steady_clock::now();
-    m_followedParticipantId.clear();
-    m_followRequestPending = false;
-    m_followResumeSessionId.clear();
-    m_followPlaybackEnabled = false;
+    m_impl->m_viewport.m_pendingLocalViewport.reset();
+    m_impl->m_viewport.m_lastPublishedLocalViewport.reset();
+    m_impl->m_viewport.m_localViewportPublishDeferred = false;
+    m_impl->m_viewport.m_nextViewportPublish = std::chrono::steady_clock::now();
+    m_impl->m_viewport.m_followedParticipantId.clear();
+    m_impl->m_viewport.m_followRequestPending = false;
+    m_impl->m_viewport.m_followResumeSessionId.clear();
+    m_impl->m_viewport.m_followPlaybackEnabled = false;
     m_pendingJoinRequests.clear();
     resetRemoteOperationPipeline();
-    m_hasDocument.store(false, std::memory_order_relaxed);
-    m_localPermissions.store(COLLABORATION_PERMISSION_ALL,
-                             std::memory_order_release);
-    m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
-    m_hostRoleForObserver.store(true, std::memory_order_relaxed);
-    m_acceptLocalMutations.store(true, std::memory_order_release);
+    m_impl->m_replication.m_hasDocument.store(false, std::memory_order_relaxed);
+    m_impl->m_replication.m_localPermissions.store(COLLABORATION_PERMISSION_ALL,
+                                                   std::memory_order_release);
+    m_impl->m_replication.m_initialSnapshotQueued.store(
+        false, std::memory_order_relaxed);
+    m_impl->m_replication.m_hostRoleForObserver.store(
+        true, std::memory_order_relaxed);
+    m_impl->m_replication.m_acceptLocalMutations.store(
+        true, std::memory_order_release);
     {
         // 本地编码器与队列受观察线程共享锁保护，必须作为一个状态组重置。
-        std::lock_guard lock(m_localOperationMutex);
-        m_localMutationCodec.reset();
-        m_localOperationQueue.clear();
-        m_inFlightLocalOperations.clear();
-        m_localOperationSubmitBlocked          = false;
-        m_localStateNeedsRebase                = false;
-        m_remoteStateApplyPending              = false;
-        m_nextLocalMutationSequence            = 1;
-        m_latestCommittedLocalMutationSequence = 0;
+        std::lock_guard lock(m_impl->m_replication.m_localOperationMutex);
+        m_impl->m_replication.m_localMutationCodec.reset();
+        m_impl->m_replication.m_localOperationQueue.clear();
+        m_impl->m_replication.m_inFlightLocalOperations.clear();
+        m_impl->m_replication.m_localOperationSubmitBlocked          = false;
+        m_impl->m_replication.m_localStateNeedsRebase                = false;
+        m_impl->m_replication.m_remoteStateApplyPending              = false;
+        m_impl->m_replication.m_nextLocalMutationSequence            = 1;
+        m_impl->m_replication.m_latestCommittedLocalMutationSequence = 0;
     }
 
     // m_transport 是非拥有快捷指针，实际所有权随后移入 CollaborationPeer。
@@ -546,7 +748,7 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
             handleCommittedOperation(operation);
         },
         [this](PeerId senderId, const CollaborationMessage& message) {
-            handleResourceMessage(senderId, message);
+            m_impl->m_resources.receive(senderId, message);
         },
         [this](const CollaborationChatMessage& message) {
             handleChatMessage(message);
@@ -601,7 +803,7 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
         fail("invalid_join_configuration");
         return false;
     }
-    m_directory.disconnect();
+    m_impl->m_directoryConnection.m_directory.disconnect();
 
     // 访客 sessionId 每次加入重新生成，用于区分同一稳定身份的旧在途操作。
     auto              transport = std::make_unique<WebRtcTransport>();
@@ -618,12 +820,12 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
         return false;
     }
 
-    m_state                           = CollaborationRoomState::Joining;
-    m_isHost                          = false;
-    m_roomId                          = std::move(config.roomId);
-    m_roomName                        = std::move(config.roomName);
-    m_serverEndpoint                  = std::move(config.endpoint);
-    m_creator                         = std::move(config.creator);
+    m_state    = CollaborationRoomState::Joining;
+    m_isHost   = false;
+    m_roomId   = std::move(config.roomId);
+    m_roomName = std::move(config.roomName);
+    m_impl->m_directoryConnection.m_serverEndpoint = std::move(config.endpoint);
+    m_creator                                      = std::move(config.creator);
     m_participantId                   = std::move(config.participantId);
     m_operationSessionId              = std::move(transportConfig.sessionId);
     m_buildFingerprint                = std::move(config.buildFingerprint);
@@ -634,35 +836,40 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
     m_logs.clear();
     m_nextChatSequence = 1;
     m_chatMessages.clear();
-    m_pendingLocalViewport.reset();
-    m_lastPublishedLocalViewport.reset();
-    m_localViewportPublishDeferred = false;
-    m_nextViewportPublish          = std::chrono::steady_clock::now();
-    m_followedParticipantId.clear();
-    m_followRequestPending = false;
-    m_followResumeSessionId.clear();
-    m_followPlaybackEnabled = false;
+    m_impl->m_viewport.m_pendingLocalViewport.reset();
+    m_impl->m_viewport.m_lastPublishedLocalViewport.reset();
+    m_impl->m_viewport.m_localViewportPublishDeferred = false;
+    m_impl->m_viewport.m_nextViewportPublish = std::chrono::steady_clock::now();
+    m_impl->m_viewport.m_followedParticipantId.clear();
+    m_impl->m_viewport.m_followRequestPending = false;
+    m_impl->m_viewport.m_followResumeSessionId.clear();
+    m_impl->m_viewport.m_followPlaybackEnabled = false;
     m_pendingJoinRequests.clear();
     resetRemoteOperationPipeline();
-    m_hasDocument.store(false, std::memory_order_relaxed);
-    m_localPermissions.store(0U, std::memory_order_release);
-    m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
-    m_hostRoleForObserver.store(false, std::memory_order_relaxed);
-    m_acceptLocalMutations.store(true, std::memory_order_release);
+    m_impl->m_replication.m_hasDocument.store(false, std::memory_order_relaxed);
+    m_impl->m_replication.m_localPermissions.store(0U,
+                                                   std::memory_order_release);
+    m_impl->m_replication.m_initialSnapshotQueued.store(
+        false, std::memory_order_relaxed);
+    m_impl->m_replication.m_hostRoleForObserver.store(
+        false, std::memory_order_relaxed);
+    m_impl->m_replication.m_acceptLocalMutations.store(
+        true, std::memory_order_release);
     // 资源缓存根随本次会话移交，旧清单及已发送记录全部清除。
-    m_resourceSync.startGuest(std::move(config.resourceCacheRoot));
-    m_resourceManifest.reset();
-    m_resourceManifestRecipients.clear();
+    m_impl->m_resources.m_resourceSync.startGuest(
+        std::move(config.resourceCacheRoot));
+    m_impl->m_resources.m_resourceManifest.reset();
+    m_impl->m_resources.m_resourceManifestRecipients.clear();
     {
-        std::lock_guard lock(m_localOperationMutex);
-        m_localMutationCodec.reset();
-        m_localOperationQueue.clear();
-        m_inFlightLocalOperations.clear();
-        m_localOperationSubmitBlocked          = false;
-        m_localStateNeedsRebase                = false;
-        m_remoteStateApplyPending              = false;
-        m_nextLocalMutationSequence            = 1;
-        m_latestCommittedLocalMutationSequence = 0;
+        std::lock_guard lock(m_impl->m_replication.m_localOperationMutex);
+        m_impl->m_replication.m_localMutationCodec.reset();
+        m_impl->m_replication.m_localOperationQueue.clear();
+        m_impl->m_replication.m_inFlightLocalOperations.clear();
+        m_impl->m_replication.m_localOperationSubmitBlocked          = false;
+        m_impl->m_replication.m_localStateNeedsRebase                = false;
+        m_impl->m_replication.m_remoteStateApplyPending              = false;
+        m_impl->m_replication.m_nextLocalMutationSequence            = 1;
+        m_impl->m_replication.m_latestCommittedLocalMutationSequence = 0;
     }
     // 在 accepted 前由 pendingTransport 拥有；ensureGuestPeer 后所有权转入
     // Peer。
@@ -790,11 +997,13 @@ bool CollaborationRoom::setServerEndpoint(CollaborationServerEndpoint endpoint)
     if ( isActive() || makeCollaborationSignalingUrl(endpoint).empty() ) {
         return false;
     }
-    if ( endpoint == m_serverEndpoint ) return true;
-    m_serverEndpoint = std::move(endpoint);
-    m_directory.disconnect();
-    m_directoryError.clear();
-    m_nextDirectoryReconnect = std::chrono::steady_clock::now();
+    if ( endpoint == m_impl->m_directoryConnection.m_serverEndpoint )
+        return true;
+    m_impl->m_directoryConnection.m_serverEndpoint = std::move(endpoint);
+    m_impl->m_directoryConnection.m_directory.disconnect();
+    m_impl->m_directoryConnection.m_directoryError.clear();
+    m_impl->m_directoryConnection.m_nextDirectoryReconnect =
+        std::chrono::steady_clock::now();
     return true;
 }
 
@@ -802,14 +1011,14 @@ bool CollaborationRoom::setServerEndpoint(CollaborationServerEndpoint endpoint)
 /// @return 请求被目录客户端接受时返回 true。
 bool CollaborationRoom::refreshDirectory()
 {
-    return m_directory.refresh();
+    return m_impl->m_directoryConnection.m_directory.refresh();
 }
 
 /// @brief 设置后台合并结果交付逻辑线程的回调。
 /// @param callback 接收谱面、分类、序列、修订和可选对象 ID 差量。
 void CollaborationRoom::setApplyBeatmapCallback(ApplyBeatmapCallback callback)
 {
-    m_applyBeatmapCallback = std::move(callback);
+    m_impl->m_replication.m_applyBeatmapCallback = std::move(callback);
 }
 
 /// @brief 设置无需重新应用谱面时的本地操作确认回调。
@@ -817,14 +1026,15 @@ void CollaborationRoom::setApplyBeatmapCallback(ApplyBeatmapCallback callback)
 void CollaborationRoom::setLocalMutationAcknowledgedCallback(
     LocalMutationAcknowledgedCallback callback)
 {
-    m_localMutationAcknowledgedCallback = std::move(callback);
+    m_impl->m_replication.m_localMutationAcknowledgedCallback =
+        std::move(callback);
 }
 
 /// @brief 设置房主定向补偿对应的本地动作历史同步入口。
 void CollaborationRoom::setHistoryCorrectedCallback(
     HistoryCorrectedCallback callback)
 {
-    m_historyCorrectedCallback = std::move(callback);
+    m_impl->m_replication.m_historyCorrectedCallback = std::move(callback);
 }
 
 /// @brief 设置访客完整资源包落盘后的交付回调。
@@ -832,7 +1042,7 @@ void CollaborationRoom::setHistoryCorrectedCallback(
 void CollaborationRoom::setResourceBundleCallback(
     ResourceBundleCallback callback)
 {
-    m_resourceBundleCallback = std::move(callback);
+    m_impl->m_resources.m_resourceBundleCallback = std::move(callback);
 }
 
 /// @brief 扫描房主项目并准备可向访客发布的资源清单。
@@ -844,9 +1054,9 @@ void CollaborationRoom::setResourceBundleCallback(
 void CollaborationRoom::prepareHostResources(const ::MMM::Project& project,
                                              const ::MMM::BeatMap& beatmap)
 {
-    m_resourceManifest.reset();
-    m_resourceManifestRecipients.clear();
-    m_resourceSync.startHost(project, beatmap);
+    m_impl->m_resources.m_resourceManifest.reset();
+    m_impl->m_resources.m_resourceManifestRecipients.clear();
+    m_impl->m_resources.m_resourceSync.startHost(project, beatmap);
 }
 
 /// @brief 从观察线程编码并排队一次本地谱面变化。
@@ -862,31 +1072,43 @@ void CollaborationRoom::prepareHostResources(const ::MMM::Project& project,
 std::uint64_t CollaborationRoom::onBeatmapMutated(
     const ::MMM::BeatMap& beatmap, ::MMM::BeatmapMutationFlags flags)
 {
-    if ( !m_acceptLocalMutations.load(std::memory_order_acquire) ) return 0;
+    if ( !m_impl->m_replication.m_acceptLocalMutations.load(
+             std::memory_order_acquire) )
+        return 0;
 
-    const bool host = m_hostRoleForObserver.load(std::memory_order_relaxed);
-    if ( !host && !m_hasDocument.load(std::memory_order_acquire) ) {
+    const bool host = m_impl->m_replication.m_hostRoleForObserver.load(
+        std::memory_order_relaxed);
+    if ( !host && !m_impl->m_replication.m_hasDocument.load(
+                      std::memory_order_acquire) ) {
         return 0;
     }
 
-    std::lock_guard lock(m_localOperationMutex);
-    if ( !m_acceptLocalMutations.load(std::memory_order_acquire) ) return 0;
-    if ( m_localOperationQueue.size() >= MAX_QUEUED_LOCAL_OPERATIONS ) {
+    std::lock_guard lock(m_impl->m_replication.m_localOperationMutex);
+    if ( !m_impl->m_replication.m_acceptLocalMutations.load(
+             std::memory_order_acquire) )
+        return 0;
+    if ( m_impl->m_replication.m_localOperationQueue.size() >=
+         MAX_QUEUED_LOCAL_OPERATIONS ) {
         return 0;
     }
     // 房主首个成功编码的本地变化承担加入者所需完整初始快照。
     const bool snapshot =
-        host && !m_initialSnapshotQueued.load(std::memory_order_relaxed);
-    auto payload = m_localMutationCodec.encode(beatmap, flags, snapshot);
+        host && !m_impl->m_replication.m_initialSnapshotQueued.load(
+                    std::memory_order_relaxed);
+    auto payload = m_impl->m_replication.m_localMutationCodec.encode(
+        beatmap, flags, snapshot);
     if ( !payload.has_value() ) return 0;
 
     // 只有 payload 非空且有效才消费序列，失败不会制造确认空洞。
-    const std::uint64_t sequence = m_nextLocalMutationSequence++;
-    m_localOperationQueue.push_back(
+    const std::uint64_t sequence =
+        m_impl->m_replication.m_nextLocalMutationSequence++;
+    m_impl->m_replication.m_localOperationQueue.push_back(
         LocalOperation{ std::move(payload.value()), sequence });
-    if ( m_remoteStateApplyPending ) m_localStateNeedsRebase = true;
+    if ( m_impl->m_replication.m_remoteStateApplyPending )
+        m_impl->m_replication.m_localStateNeedsRebase = true;
     if ( snapshot ) {
-        m_initialSnapshotQueued.store(true, std::memory_order_relaxed);
+        m_impl->m_replication.m_initialSnapshotQueued.store(
+            true, std::memory_order_relaxed);
     }
     return sequence;
 }
@@ -902,15 +1124,20 @@ std::uint64_t CollaborationRoom::onBeatmapMutated(
 /// 这样 encodingBaseline 始终对应用户当前可见并继续编辑的版本。
 void CollaborationRoom::onBeatmapSynchronized(const ::MMM::BeatMap& beatmap)
 {
-    if ( !m_acceptLocalMutations.load(std::memory_order_acquire) ) return;
-    std::lock_guard lock(m_localOperationMutex);
-    if ( !m_acceptLocalMutations.load(std::memory_order_acquire) ) return;
-    m_localMutationCodec.synchronizeEncodingBaseline(beatmap);
-    m_pendingObjectEncodingBaselines.clear();
-    m_remoteStateApplyPending = false;
-    if ( !m_localOperationQueue.empty() ||
-         !m_inFlightLocalOperations.empty() ) {
-        m_localStateNeedsRebase = true;
+    if ( !m_impl->m_replication.m_acceptLocalMutations.load(
+             std::memory_order_acquire) )
+        return;
+    std::lock_guard lock(m_impl->m_replication.m_localOperationMutex);
+    if ( !m_impl->m_replication.m_acceptLocalMutations.load(
+             std::memory_order_acquire) )
+        return;
+    m_impl->m_replication.m_localMutationCodec.synchronizeEncodingBaseline(
+        beatmap);
+    m_impl->m_replication.m_pendingObjectEncodingBaselines.clear();
+    m_impl->m_replication.m_remoteStateApplyPending = false;
+    if ( !m_impl->m_replication.m_localOperationQueue.empty() ||
+         !m_impl->m_replication.m_inFlightLocalOperations.empty() ) {
+        m_impl->m_replication.m_localStateNeedsRebase = true;
     }
 }
 
@@ -928,28 +1155,30 @@ void CollaborationRoom::onBeatmapSynchronized(const ::MMM::BeatMap& beatmap)
 void CollaborationRoom::onAuthoritativeBeatmapApplied(
     std::uint64_t revision, std::uint64_t includedLocalMutationSequence)
 {
-    std::lock_guard lock(m_localOperationMutex);
-    const auto      baseline =
-        std::find_if(m_pendingObjectEncodingBaselines.begin(),
-                     m_pendingObjectEncodingBaselines.end(),
-                     [revision](const PendingObjectEncodingBaseline& pending) {
-                         return pending.revision == revision;
-                     });
-    if ( baseline != m_pendingObjectEncodingBaselines.end() &&
+    std::lock_guard lock(m_impl->m_replication.m_localOperationMutex);
+    const auto      baseline = std::find_if(
+        m_impl->m_replication.m_pendingObjectEncodingBaselines.begin(),
+        m_impl->m_replication.m_pendingObjectEncodingBaselines.end(),
+        [revision](const PendingObjectEncodingBaseline& pending) {
+            return pending.revision == revision;
+        });
+    if ( baseline !=
+             m_impl->m_replication.m_pendingObjectEncodingBaselines.end() &&
          baseline->includedLocalMutationSequence ==
              includedLocalMutationSequence &&
-         m_nextLocalMutationSequence - 1U <= includedLocalMutationSequence ) {
-        m_localMutationCodec.synchronizeObjectEncodingBaseline(
-            std::move(baseline->baseline));
+         m_impl->m_replication.m_nextLocalMutationSequence - 1U <=
+             includedLocalMutationSequence ) {
+        m_impl->m_replication.m_localMutationCodec
+            .synchronizeObjectEncodingBaseline(std::move(baseline->baseline));
     }
-    std::erase_if(m_pendingObjectEncodingBaselines,
+    std::erase_if(m_impl->m_replication.m_pendingObjectEncodingBaselines,
                   [revision](const PendingObjectEncodingBaseline& pending) {
                       return pending.revision <= revision;
                   });
-    m_remoteStateApplyPending = false;
-    if ( !m_localOperationQueue.empty() ||
-         !m_inFlightLocalOperations.empty() ) {
-        m_localStateNeedsRebase = true;
+    m_impl->m_replication.m_remoteStateApplyPending = false;
+    if ( !m_impl->m_replication.m_localOperationQueue.empty() ||
+         !m_impl->m_replication.m_inFlightLocalOperations.empty() ) {
+        m_impl->m_replication.m_localStateNeedsRebase = true;
     }
 }
 
@@ -980,7 +1209,7 @@ void CollaborationRoom::disconnect()
 /// 派生状态。该顺序防止后台结果在清理末尾 重新填充队列或调用已经失效的传输。
 void CollaborationRoom::resetOnlineSessionState()
 {
-    stopAcceptingLocalMutations();
+    m_impl->m_replication.stopAcceptingLocalMutations();
     m_peer.reset();
     m_pendingTransport.reset();
     m_transport = nullptr;
@@ -992,23 +1221,24 @@ void CollaborationRoom::resetOnlineSessionState()
     m_participantId.clear();
     m_operationSessionId.clear();
     resetRemoteOperationPipeline();
-    m_resourceSync.reset();
-    m_resourceManifest.reset();
-    m_resourceManifestRecipients.clear();
+    m_impl->m_resources.reset();
     m_nextChatSequence = 1;
     m_chatMessages.clear();
-    m_pendingLocalViewport.reset();
-    m_lastPublishedLocalViewport.reset();
-    m_localViewportPublishDeferred = false;
-    m_followedParticipantId.clear();
-    m_followRequestPending = false;
-    m_followResumeSessionId.clear();
-    m_followPlaybackEnabled = false;
+    m_impl->m_viewport.m_pendingLocalViewport.reset();
+    m_impl->m_viewport.m_lastPublishedLocalViewport.reset();
+    m_impl->m_viewport.m_localViewportPublishDeferred = false;
+    m_impl->m_viewport.m_followedParticipantId.clear();
+    m_impl->m_viewport.m_followRequestPending = false;
+    m_impl->m_viewport.m_followResumeSessionId.clear();
+    m_impl->m_viewport.m_followPlaybackEnabled = false;
     m_pendingJoinRequests.clear();
-    m_hasDocument.store(false, std::memory_order_relaxed);
-    m_localPermissions.store(0U, std::memory_order_release);
-    m_initialSnapshotQueued.store(false, std::memory_order_relaxed);
-    m_hostRoleForObserver.store(false, std::memory_order_relaxed);
+    m_impl->m_replication.m_hasDocument.store(false, std::memory_order_relaxed);
+    m_impl->m_replication.m_localPermissions.store(0U,
+                                                   std::memory_order_release);
+    m_impl->m_replication.m_initialSnapshotQueued.store(
+        false, std::memory_order_relaxed);
+    m_impl->m_replication.m_hostRoleForObserver.store(
+        false, std::memory_order_relaxed);
 }
 
 /// @brief 推进目录、传输、Peer、后台结果、资源与视口状态机。
@@ -1036,13 +1266,14 @@ void CollaborationRoom::resetOnlineSessionState()
 void CollaborationRoom::update()
 {
     // 离线目录始终先推进，活动房间则由 updateDirectory 保证目录连接关闭。
-    updateDirectory();
+    m_impl->m_directoryConnection.update(isActive());
     if ( m_isHost &&
-         m_remoteOperationPipeline->hostSnapshotDirty.load(
-             std::memory_order_acquire) &&
+         m_impl->m_replication.m_remoteOperationPipeline->hostSnapshotDirty
+             .load(std::memory_order_acquire) &&
          steadyNowNanoseconds() >=
-             m_remoteOperationPipeline->nextHostSnapshotBuildNanoseconds.load(
-                 std::memory_order_relaxed) ) {
+             m_impl->m_replication.m_remoteOperationPipeline
+                 ->nextHostSnapshotBuildNanoseconds.load(
+                     std::memory_order_relaxed) ) {
         scheduleRemoteOperationWorker();
     }
     // 每帧只消费有界后台结果，再尝试释放等待快照发布的访客连接。
@@ -1062,41 +1293,46 @@ void CollaborationRoom::update()
     ensureGuestPeer();
     if ( m_peer ) {
         const auto previousPermissions =
-            m_localPermissions.load(std::memory_order_acquire);
+            m_impl->m_replication.m_localPermissions.load(
+                std::memory_order_acquire);
         // Peer 更新可能改变本地权限；前后快照用于精确处理收紧情况。
         // 在接收消息前登记跟随目标，边界队列只收集这一参与者的状态。
-        m_peer->probePlaybackClock(m_followPlaybackEnabled ? followedPeerId()
-                                                           : 0);
+        m_peer->probePlaybackClock(
+            m_impl->m_viewport.m_followPlaybackEnabled ? followedPeerId() : 0);
         m_peer->update();
         // 画布和音频只读取权威目标，稳定身份缓存不提前改变实际跟随。
         const PeerId confirmedFollow = followedPeerId();
         if ( auto confirmation = m_peer->popFollowConfirmation() ) {
             // 确认保存的是生效瞬间的目标身份，不能用本轮最终图的零值推断取消。
             // 明确取消或无原边的拒绝携带空目标；接受后离开仍携带原稳定目标。
-            m_followRequestPending = false;
-            m_followedParticipantId =
+            m_impl->m_viewport.m_followRequestPending = false;
+            m_impl->m_viewport.m_followedParticipantId =
                 std::move(confirmation->targetParticipantId);
-            m_followResumeSessionId = std::move(confirmation->targetSessionId);
+            m_impl->m_viewport.m_followResumeSessionId =
+                std::move(confirmation->targetSessionId);
         }
-        if ( !m_followRequestPending && confirmedFollow == 0 &&
-             !m_followedParticipantId.empty() ) {
+        if ( !m_impl->m_viewport.m_followRequestPending &&
+             confirmedFollow == 0 &&
+             !m_impl->m_viewport.m_followedParticipantId.empty() ) {
             // 断线清理只移除路由边，稳定身份保留；相同槽位的新身份不能匹配。
             // 只按稳定身份找人；即使旧槽位已经有人占用，也不能视为重连。
             const auto& identities = m_peer->participantIdentities();
-            const auto  target =
-                std::find_if(identities.begin(),
-                             identities.end(),
-                             [this](const auto& entry) {
-                                 return entry.second.participantId ==
-                                        m_followedParticipantId;
-                             });
+            const auto  target     = std::find_if(
+                identities.begin(),
+                identities.end(),
+                [this](const auto& entry) {
+                    return entry.second.participantId ==
+                           m_impl->m_viewport.m_followedParticipantId;
+                });
             if ( target != identities.end() &&
-                 target->second.sessionId != m_followResumeSessionId ) {
+                 target->second.sessionId !=
+                     m_impl->m_viewport.m_followResumeSessionId ) {
                 // 按加入会话去重：恢复失败也不在每帧重发，后续手动操作可重试。
                 // 重连恢复与普通点击复用权威入口，再次检查新图中的闭环。
-                m_followResumeSessionId = target->second.sessionId;
+                m_impl->m_viewport.m_followResumeSessionId =
+                    target->second.sessionId;
                 if ( m_peer->requestFollowPeer(target->first) )
-                    m_followRequestPending = true;
+                    m_impl->m_viewport.m_followRequestPending = true;
             }
         }
         const auto permission =
@@ -1105,9 +1341,10 @@ void CollaborationRoom::update()
             permission == m_peer->participantPermissions().end()
                 ? (m_isHost ? COLLABORATION_PERMISSION_ALL : 0U)
                 : permission->second;
-        m_localPermissions.store(currentPermissions, std::memory_order_release);
+        m_impl->m_replication.m_localPermissions.store(
+            currentPermissions, std::memory_order_release);
         if ( !m_isHost && previousPermissions != currentPermissions ) {
-            std::lock_guard lock(m_localOperationMutex);
+            std::lock_guard lock(m_impl->m_replication.m_localOperationMutex);
             const auto      unauthorized =
                 [currentPermissions](const LocalOperation& operation) {
                     const auto patch =
@@ -1117,11 +1354,13 @@ void CollaborationRoom::update()
                 };
             // 权限收紧时只丢弃已经失去授权的传输增量；不触碰逻辑线程当前
             // BeatMap、未结束手势或选择状态，仍获授权的其它类别继续排队。
-            std::erase_if(m_inFlightLocalOperations, unauthorized);
-            std::erase_if(m_localOperationQueue, unauthorized);
+            std::erase_if(m_impl->m_replication.m_inFlightLocalOperations,
+                          unauthorized);
+            std::erase_if(m_impl->m_replication.m_localOperationQueue,
+                          unauthorized);
         }
         submitQueuedLocalOperations();
-        flushLocalViewport();
+        m_impl->m_viewport.flush(m_peer.get());
     }
     processResourceEvents();
 }
@@ -1146,13 +1385,13 @@ SubmitOperationResult CollaborationRoom::submitOperation(
 bool CollaborationRoom::requestMemberUndo(std::string_view participantId)
 {
     if ( !m_isHost || !m_peer || participantId.empty() ||
-         m_memberHistoryRequestPending ) {
+         m_impl->m_replication.m_memberHistoryRequestPending ) {
         return false;
     }
-    m_memberHistoryError.clear();
+    m_impl->m_replication.m_memberHistoryError.clear();
     // UI 立即看到处理中状态；失败或实际补偿提交后才释放门闩。
-    m_memberHistoryRequestPending = true;
-    m_remoteOperationPipeline->historyRequests.enqueue(
+    m_impl->m_replication.m_memberHistoryRequestPending = true;
+    m_impl->m_replication.m_remoteOperationPipeline->historyRequests.enqueue(
         RemoteOperationPipeline::HistoryRequest{ std::string(participantId),
                                                  false });
     scheduleRemoteOperationWorker();
@@ -1168,13 +1407,13 @@ bool CollaborationRoom::requestMemberUndo(std::string_view participantId)
 bool CollaborationRoom::requestMemberRedo(std::string_view participantId)
 {
     if ( !m_isHost || !m_peer || participantId.empty() ||
-         m_memberHistoryRequestPending ) {
+         m_impl->m_replication.m_memberHistoryRequestPending ) {
         return false;
     }
-    m_memberHistoryError.clear();
+    m_impl->m_replication.m_memberHistoryError.clear();
     // 新编辑会淘汰该成员旧重做分支，按钮计数以后台摘要为准。
-    m_memberHistoryRequestPending = true;
-    m_remoteOperationPipeline->historyRequests.enqueue(
+    m_impl->m_replication.m_memberHistoryRequestPending = true;
+    m_impl->m_replication.m_remoteOperationPipeline->historyRequests.enqueue(
         RemoteOperationPipeline::HistoryRequest{ std::string(participantId),
                                                  true });
     scheduleRemoteOperationWorker();
@@ -1187,14 +1426,14 @@ bool CollaborationRoom::requestMemberRedo(std::string_view participantId)
 const std::vector<CollaborationMemberHistory>&
 CollaborationRoom::memberHistories() const
 {
-    return m_memberHistories;
+    return m_impl->m_replication.m_memberHistories;
 }
 
 /// @brief 读取最近一次房主成员历史请求的拒绝原因。
 /// @return 翻译键；空值表示最近一次请求没有错误。
 const std::string& CollaborationRoom::memberHistoryError() const
 {
-    return m_memberHistoryError;
+    return m_impl->m_replication.m_memberHistoryError;
 }
 
 /// @brief 向当前房间提交聊天文本。
@@ -1227,36 +1466,39 @@ void CollaborationRoom::publishLocalViewport(ParticipantViewport viewport,
          !std::isfinite(viewport.horizontalOffsetRatio) ) {
         return;
     }
-    const bool wasDeferred         = m_localViewportPublishDeferred;
-    m_localViewportPublishDeferred = deferUntilCommitted;
+    const bool wasDeferred = m_impl->m_viewport.m_localViewportPublishDeferred;
+    m_impl->m_viewport.m_localViewportPublishDeferred = deferUntilCommitted;
     if ( wasDeferred && !deferUntilCommitted ) {
-        m_nextViewportPublish = std::chrono::steady_clock::now();
+        m_impl->m_viewport.m_nextViewportPublish =
+            std::chrono::steady_clock::now();
     }
     if ( !m_peer ) return;
-    viewport.peerId        = 0;
-    viewport.sequence      = 0;
-    m_pendingLocalViewport = viewport;
+    viewport.peerId                           = 0;
+    viewport.sequence                         = 0;
+    m_impl->m_viewport.m_pendingLocalViewport = viewport;
     // 播放与暂停必须立即发送；不受视口限频或 Seek 拖动消抖影响。
     // 连续状态切换不能留在 pending 中被后续状态覆盖成最终值。
-    if ( !m_lastPublishedLocalViewport ||
-         m_lastPublishedLocalViewport->playing != viewport.playing ||
-         m_lastPublishedLocalViewport->playbackRate != viewport.playbackRate ) {
+    if ( !m_impl->m_viewport.m_lastPublishedLocalViewport ||
+         m_impl->m_viewport.m_lastPublishedLocalViewport->playing !=
+             viewport.playing ||
+         m_impl->m_viewport.m_lastPublishedLocalViewport->playbackRate !=
+             viewport.playbackRate ) {
         if ( m_peer->publishViewport(viewport) )
-            m_lastPublishedLocalViewport = viewport;
+            m_impl->m_viewport.m_lastPublishedLocalViewport = viewport;
     }
 }
 
 /// @brief 更新房间音频跟随选择，关闭时清空尚未消费的远端边界。
 void CollaborationRoom::setFollowPlaybackEnabled(bool enabled)
 {
-    m_followPlaybackEnabled = enabled;
+    m_impl->m_viewport.m_followPlaybackEnabled = enabled;
     if ( m_peer ) m_peer->probePlaybackClock(enabled ? followedPeerId() : 0);
 }
 
 /// @brief 返回当前房间是否启用跟随音频。
 bool CollaborationRoom::followPlaybackEnabled() const
 {
-    return m_followPlaybackEnabled;
+    return m_impl->m_viewport.m_followPlaybackEnabled;
 }
 
 /// @brief 使用 Peer 校准时钟进行位置外推；离线时保留原始位置。
@@ -1271,8 +1513,9 @@ double CollaborationRoom::estimateFollowPlaybackTime(
 std::optional<ParticipantViewport>
 CollaborationRoom::popFollowPlaybackTransition()
 {
-    return m_peer && m_followPlaybackEnabled ? m_peer->popPlaybackTransition()
-                                             : std::nullopt;
+    return m_peer && m_impl->m_viewport.m_followPlaybackEnabled
+               ? m_peer->popPlaybackTransition()
+               : std::nullopt;
 }
 
 /// @brief 设置视口广播频率并限制到安全范围。
@@ -1280,9 +1523,9 @@ CollaborationRoom::popFollowPlaybackTransition()
 /// @note 修改后允许下一帧立即发布，不等待旧频率周期。
 void CollaborationRoom::setViewportPublishRateHz(std::uint32_t rateHz)
 {
-    m_viewportPublishRateHz = std::clamp(
+    m_impl->m_viewport.m_viewportPublishRateHz = std::clamp(
         rateHz, MIN_VIEWPORT_PUBLISH_RATE_HZ, MAX_VIEWPORT_PUBLISH_RATE_HZ);
-    m_nextViewportPublish = std::chrono::steady_clock::now();
+    m_impl->m_viewport.m_nextViewportPublish = std::chrono::steady_clock::now();
 }
 
 /// @brief 请求修改持续跟随目标；访客等待最新确认期间暂停旧目标。
@@ -1294,19 +1537,21 @@ bool CollaborationRoom::setFollowedPeer(PeerId peerId)
     if ( !m_peer ) {
         // 离线时仍可清除恢复意图；非零目标必须有当前房间身份可验证。
         if ( peerId != 0 ) return false;
-        m_followedParticipantId.clear();
-        m_followResumeSessionId.clear();
-        m_followRequestPending = false;
+        m_impl->m_viewport.m_followedParticipantId.clear();
+        m_impl->m_viewport.m_followResumeSessionId.clear();
+        m_impl->m_viewport.m_followRequestPending = false;
         return true;
     }
     // 不在发送前写稳定身份，拒绝或发送失败都不能污染后续重连恢复。
     if ( !m_peer->requestFollowPeer(peerId) ) return false;
-    m_followRequestPending = true;
+    m_impl->m_viewport.m_followRequestPending = true;
     // 房主同步确认；访客等 update 收到对应序号后才更新稳定身份。
     if ( auto confirmation = m_peer->popFollowConfirmation() ) {
-        m_followRequestPending  = false;
-        m_followedParticipantId = std::move(confirmation->targetParticipantId);
-        m_followResumeSessionId = std::move(confirmation->targetSessionId);
+        m_impl->m_viewport.m_followRequestPending = false;
+        m_impl->m_viewport.m_followedParticipantId =
+            std::move(confirmation->targetParticipantId);
+        m_impl->m_viewport.m_followResumeSessionId =
+            std::move(confirmation->targetSessionId);
     }
     return true;
 }
@@ -1362,14 +1607,14 @@ const std::string& CollaborationRoom::roomName() const
 /// @return 房间内部端点引用。
 const CollaborationServerEndpoint& CollaborationRoom::serverEndpoint() const
 {
-    return m_serverEndpoint;
+    return m_impl->m_directoryConnection.m_serverEndpoint;
 }
 
 /// @brief 获取离线公开目录客户端状态。
 /// @return 目录状态快照。
 CollaborationDirectoryState CollaborationRoom::directoryState() const
 {
-    return m_directory.state();
+    return m_impl->m_directoryConnection.m_directory.state();
 }
 
 const std::vector<CollaborationDirectoryRoom>&
@@ -1377,7 +1622,7 @@ const std::vector<CollaborationDirectoryRoom>&
 /// @return 目录客户端持有的只读列表。
 CollaborationRoom::directoryRooms() const
 {
-    return m_directory.rooms();
+    return m_impl->m_directoryConnection.m_directory.rooms();
 }
 
 /// @brief 请求目录客户端按房间 ID 拉取封面。
@@ -1385,7 +1630,7 @@ CollaborationRoom::directoryRooms() const
 /// @return 请求成功排队时返回 true。
 bool CollaborationRoom::requestDirectoryRoomCover(std::string_view roomId)
 {
-    return m_directory.requestRoomCover(roomId);
+    return m_impl->m_directoryConnection.m_directory.requestRoomCover(roomId);
 }
 
 /// @brief 读取目录客户端缓存的房间封面 Base64 文本。
@@ -1394,14 +1639,14 @@ bool CollaborationRoom::requestDirectoryRoomCover(std::string_view roomId)
 std::string_view CollaborationRoom::directoryRoomCover(
     std::string_view roomId) const
 {
-    return m_directory.roomCover(roomId);
+    return m_impl->m_directoryConnection.m_directory.roomCover(roomId);
 }
 
 /// @brief 获取最近一次目录连接错误。
 /// @return 本地缓存的稳定错误文本。
 const std::string& CollaborationRoom::directoryError() const
 {
-    return m_directoryError;
+    return m_impl->m_directoryConnection.m_directoryError;
 }
 
 /// @brief 获取当前本地路由 peer ID。
@@ -1432,7 +1677,8 @@ CollaborationRoom::participantPermissions() const
 /// @return 最近一次 Peer update 发布的权限。
 CollaborationPermissionMask CollaborationRoom::localPermissions() const
 {
-    return m_localPermissions.load(std::memory_order_acquire);
+    return m_impl->m_replication.m_localPermissions.load(
+        std::memory_order_acquire);
 }
 
 /// @brief 把本地权限映射为允许提交的谱面分类位图。
@@ -1516,7 +1762,7 @@ PeerId CollaborationRoom::selectedFollowPeerId() const
 /// @return 已限制到安全范围的 Hz 值。
 std::uint32_t CollaborationRoom::viewportPublishRateHz() const
 {
-    return m_viewportPublishRateHz;
+    return m_impl->m_viewport.m_viewportPublishRateHz;
 }
 
 /// @brief 获取当前会话有界诊断日志。
@@ -1545,7 +1791,7 @@ const std::string& CollaborationRoom::lastError() const
 /// @return ResourceSync 的值语义进度对象。
 CollaborationResourceSyncProgress CollaborationRoom::resourceProgress() const
 {
-    return m_resourceSync.progress();
+    return m_impl->m_resources.m_resourceSync.progress();
 }
 
 /// @brief 在离线时维持目录连接，在活动房间中关闭独立目录客户端。
@@ -1558,9 +1804,9 @@ CollaborationResourceSyncProgress CollaborationRoom::resourceProgress() const
 /// DirectoryClient Error 在 disconnect 前复制到
 /// m_directoryError，确保重置客户端 状态后 UI 仍能展示原因。下一次 Connected
 /// 才清空，Connecting 期间继续保留。
-void CollaborationRoom::updateDirectory()
+void CollaborationRoom::Impl::DirectoryConnection::update(bool isActive)
 {
-    if ( isActive() ) {
+    if ( isActive ) {
         if ( m_directory.state() != CollaborationDirectoryState::Idle ) {
             m_directory.disconnect();
         }
@@ -1584,6 +1830,8 @@ void CollaborationRoom::updateDirectory()
     static_cast<void>(m_directory.connect(m_serverEndpoint));
     m_nextDirectoryReconnect = now + DIRECTORY_RECONNECT_INTERVAL;
 }
+
+
 
 /// @brief 追加带稳定身份和会话相对时间的有界日志。
 /// @param type 事件类型。
@@ -1771,16 +2019,17 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
     case WebRtcTransportEventType::PeerConnected:
         if ( m_isHost ) {
             // 新访客必须等待房主最新 snapshot 发布，否则加入后会先看到旧文档。
-            if ( m_peer &&
-                 m_publishedDocumentRevision < m_peer->appliedRevision() ) {
-                const bool alreadyPending =
-                    std::any_of(m_pendingPeerConnections.begin(),
-                                m_pendingPeerConnections.end(),
-                                [&event](const WebRtcTransportEvent& pending) {
-                                    return pending.peerId == event.peerId;
-                                });
+            if ( m_peer && m_impl->m_replication.m_publishedDocumentRevision <
+                               m_peer->appliedRevision() ) {
+                const bool alreadyPending = std::any_of(
+                    m_impl->m_replication.m_pendingPeerConnections.begin(),
+                    m_impl->m_replication.m_pendingPeerConnections.end(),
+                    [&event](const WebRtcTransportEvent& pending) {
+                        return pending.peerId == event.peerId;
+                    });
                 if ( !alreadyPending ) {
-                    m_pendingPeerConnections.push_back(event);
+                    m_impl->m_replication.m_pendingPeerConnections.push_back(
+                        event);
                 }
                 break;
             }
@@ -1812,12 +2061,13 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
     case WebRtcTransportEventType::PeerDisconnected:
         if ( m_isHost && m_peer ) {
             // peerId 释放时同时允许未来重连者重新接收当前资源清单。
-            std::erase_if(m_pendingPeerConnections,
+            std::erase_if(m_impl->m_replication.m_pendingPeerConnections,
                           [&event](const WebRtcTransportEvent& pending) {
                               return pending.peerId == event.peerId;
                           });
             m_peer->removeParticipant(event.peerId);
-            m_resourceManifestRecipients.erase(event.peerId);
+            m_impl->m_resources.m_resourceManifestRecipients.erase(
+                event.peerId);
         } else if ( !m_isHost ) {
             // 访客只有房主连接，任意 PeerDisconnected 都结束整个在线会话。
             m_lastError = event.detail;
@@ -1843,7 +2093,7 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
         if ( !m_isHost ) {
             m_state     = CollaborationRoomState::Error;
             m_lastError = event.detail;
-            stopAcceptingLocalMutations();
+            m_impl->m_replication.stopAcceptingLocalMutations();
         }
         break;
     case WebRtcTransportEventType::Error:
@@ -1854,7 +2104,8 @@ void CollaborationRoom::handleTransportEvent(const WebRtcTransportEvent& event)
         if ( !m_isHost || event.detail == "room_directory_connection_closed" ) {
             m_state     = CollaborationRoomState::Error;
             m_lastError = event.detail;
-            if ( !m_isHost ) stopAcceptingLocalMutations();
+            if ( !m_isHost )
+                m_impl->m_replication.stopAcceptingLocalMutations();
         }
         break;
     }
@@ -1888,7 +2139,7 @@ void CollaborationRoom::ensureGuestPeer()
             handleCommittedOperation(operation);
         },
         [this](PeerId senderId, const CollaborationMessage& message) {
-            handleResourceMessage(senderId, message);
+            m_impl->m_resources.receive(senderId, message);
         },
         [this](const CollaborationChatMessage& message) {
             handleChatMessage(message);
@@ -1940,32 +2191,34 @@ void CollaborationRoom::handleCommittedOperation(
     bool          reapplyLocalState              = false;
     std::uint64_t committedLocalMutationSequence = 0;
     {
-        std::lock_guard lock(m_localOperationMutex);
+        std::lock_guard lock(m_impl->m_replication.m_localOperationMutex);
         if ( !originatedLocally ) {
             // 远端权威状态交付前出现的本地编辑必须在后台结果上重放。
-            m_remoteStateApplyPending = true;
-            if ( !m_localOperationQueue.empty() ||
-                 !m_inFlightLocalOperations.empty() ) {
-                m_localStateNeedsRebase = true;
+            m_impl->m_replication.m_remoteStateApplyPending = true;
+            if ( !m_impl->m_replication.m_localOperationQueue.empty() ||
+                 !m_impl->m_replication.m_inFlightLocalOperations.empty() ) {
+                m_impl->m_replication.m_localStateNeedsRebase = true;
             }
         }
         if ( originatedLocally ) {
             // payload 匹配把权威回执关联到本地序列并从在途集合移除。
-            const auto matching =
-                std::find_if(m_inFlightLocalOperations.begin(),
-                             m_inFlightLocalOperations.end(),
-                             [&operation](const LocalOperation& pending) {
-                                 return pending.payload == operation.payload;
-                             });
-            if ( matching != m_inFlightLocalOperations.end() ) {
+            const auto matching = std::find_if(
+                m_impl->m_replication.m_inFlightLocalOperations.begin(),
+                m_impl->m_replication.m_inFlightLocalOperations.end(),
+                [&operation](const LocalOperation& pending) {
+                    return pending.payload == operation.payload;
+                });
+            if ( matching !=
+                 m_impl->m_replication.m_inFlightLocalOperations.end() ) {
                 committedLocalMutationSequence = matching->sequence;
-                m_latestCommittedLocalMutationSequence =
-                    std::max(m_latestCommittedLocalMutationSequence,
+                m_impl->m_replication.m_latestCommittedLocalMutationSequence =
+                    std::max(m_impl->m_replication
+                                 .m_latestCommittedLocalMutationSequence,
                              committedLocalMutationSequence);
-                m_inFlightLocalOperations.erase(matching);
+                m_impl->m_replication.m_inFlightLocalOperations.erase(matching);
             }
-            reapplyLocalState       = m_localStateNeedsRebase;
-            m_localStateNeedsRebase = false;
+            reapplyLocalState = m_impl->m_replication.m_localStateNeedsRebase;
+            m_impl->m_replication.m_localStateNeedsRebase = false;
         }
     }
     RemoteOperationPipeline::Task task;
@@ -1977,9 +2230,10 @@ void CollaborationRoom::handleCommittedOperation(
     task.originatedLocally              = originatedLocally;
     task.committedLocalMutationSequence = committedLocalMutationSequence;
     // 补偿提交在本线程同步回调，临时标记只覆盖这一条权威修订。
-    task.historyRevision = m_pendingHistoryRevision;
-    task.historyRedo     = m_pendingHistoryRedo;
-    m_remoteOperationPipeline->tasks.enqueue(std::move(task));
+    task.historyRevision = m_impl->m_replication.m_pendingHistoryRevision;
+    task.historyRedo     = m_impl->m_replication.m_pendingHistoryRedo;
+    m_impl->m_replication.m_remoteOperationPipeline->tasks.enqueue(
+        std::move(task));
     scheduleRemoteOperationWorker();
 }
 
@@ -2015,24 +2269,25 @@ bool CollaborationRoom::authorizeParticipantEdit(
 void CollaborationRoom::scheduleRemoteOperationWorker()
 {
     while ( true ) {
-        std::uint8_t state = m_remoteOperationPipeline->workerState.load(
-            std::memory_order_acquire);
+        std::uint8_t state =
+            m_impl->m_replication.m_remoteOperationPipeline->workerState.load(
+                std::memory_order_acquire);
         if ( state == 0U ) {
-            if ( m_remoteOperationPipeline->workerState.compare_exchange_weak(
-                     state,
-                     1U,
-                     std::memory_order_acq_rel,
-                     std::memory_order_acquire) ) {
+            if ( m_impl->m_replication.m_remoteOperationPipeline->workerState
+                     .compare_exchange_weak(state,
+                                            1U,
+                                            std::memory_order_acq_rel,
+                                            std::memory_order_acquire) ) {
                 break;
             }
             continue;
         }
         if ( state == 2U ||
-             m_remoteOperationPipeline->workerState.compare_exchange_weak(
-                 state,
-                 2U,
-                 std::memory_order_acq_rel,
-                 std::memory_order_acquire) ) {
+             m_impl->m_replication.m_remoteOperationPipeline->workerState
+                 .compare_exchange_weak(state,
+                                        2U,
+                                        std::memory_order_acq_rel,
+                                        std::memory_order_acquire) ) {
             return;
         }
     }
@@ -2044,12 +2299,13 @@ void CollaborationRoom::scheduleRemoteOperationWorker()
         processRemoteOperations();
         return;
     }
-    std::erase_if(m_remoteOperationPipeline->workerFutures,
-                  [](std::future<void>& task) {
-                      return task.wait_for(std::chrono::seconds(0)) ==
-                             std::future_status::ready;
-                  });
-    m_remoteOperationPipeline->workerFutures.push_back(
+    std::erase_if(
+        m_impl->m_replication.m_remoteOperationPipeline->workerFutures,
+        [](std::future<void>& task) {
+            return task.wait_for(std::chrono::seconds(0)) ==
+                   std::future_status::ready;
+        });
+    m_impl->m_replication.m_remoteOperationPipeline->workerFutures.push_back(
         threadPool->enqueue([this]() { processRemoteOperations(); }));
 }
 
@@ -2115,35 +2371,40 @@ void CollaborationRoom::processRemoteOperations()
     // 快照构建闭包只在 dirty 且截止时间到达时压缩最新 document。
     const auto buildHostSnapshotIfDue =
         [this](RemoteOperationPipeline::Result& delivery) {
-            if ( !m_remoteOperationPipeline->hostSnapshotDirty.load(
-                     std::memory_order_acquire) ) {
+            if ( !m_impl->m_replication.m_remoteOperationPipeline
+                      ->hostSnapshotDirty.load(std::memory_order_acquire) ) {
                 return;
             }
             const auto now = steadyNowNanoseconds();
             const auto deadline =
-                m_remoteOperationPipeline->nextHostSnapshotBuildNanoseconds
-                    .load(std::memory_order_relaxed);
+                m_impl->m_replication.m_remoteOperationPipeline
+                    ->nextHostSnapshotBuildNanoseconds.load(
+                        std::memory_order_relaxed);
             if ( now < deadline ) return;
 
-            m_remoteOperationPipeline->nextHostSnapshotBuildNanoseconds.store(
-                now + std::chrono::duration_cast<std::chrono::nanoseconds>(
-                          HOST_SNAPSHOT_REFRESH_INTERVAL)
-                          .count(),
-                std::memory_order_relaxed);
-            auto snapshot = m_documentCodec.encodeCurrentSnapshot();
+            m_impl->m_replication.m_remoteOperationPipeline
+                ->nextHostSnapshotBuildNanoseconds.store(
+                    now + std::chrono::duration_cast<std::chrono::nanoseconds>(
+                              HOST_SNAPSHOT_REFRESH_INTERVAL)
+                              .count(),
+                    std::memory_order_relaxed);
+            auto snapshot =
+                m_impl->m_replication.m_documentCodec.encodeCurrentSnapshot();
             if ( !snapshot.has_value() ) return;
 
-            delivery.revision =
-                m_remoteOperationPipeline->pendingHostSnapshotRevision.load(
-                    std::memory_order_acquire);
+            delivery.revision = m_impl->m_replication.m_remoteOperationPipeline
+                                    ->pendingHostSnapshotRevision.load(
+                                        std::memory_order_acquire);
             delivery.hostSnapshot.emplace(std::move(snapshot.value()));
-            m_remoteOperationPipeline->hostSnapshotDirty.store(
-                false, std::memory_order_release);
+            m_impl->m_replication.m_remoteOperationPipeline->hostSnapshotDirty
+                .store(false, std::memory_order_release);
         };
     while ( true ) {
         RemoteOperationPipeline::Task task;
         // 一次排空中的中间修订仅记日志，最终可见状态在排空边界统一物化。
-        while ( m_remoteOperationPipeline->tasks.try_dequeue(task) ) {
+        while (
+            m_impl->m_replication.m_remoteOperationPipeline->tasks.try_dequeue(
+                task) ) {
             RemoteOperationPipeline::Result result;
             result.peerId        = task.peerId;
             result.participantId = task.operation.participantId;
@@ -2153,62 +2414,71 @@ void CollaborationRoom::processRemoteOperations()
             // 历史仅保留本修订触及的双向增量；完整文档副本只活到本轮应用结束。
             // 只在房主记录原始编辑：访客无需保存别人的可执行历史，快照
             // 也没有单一成员的可撤销语义。
-            auto before = task.host && task.historyRevision == 0
-                              ? m_documentCodec.cloneDocument()
-                              : nullptr;
+            auto before =
+                task.host && task.historyRevision == 0
+                    ? m_impl->m_replication.m_documentCodec.cloneDocument()
+                    : nullptr;
             // Codec 失败不会推进文档；该修订只产生独立错误结果。
-            auto patch = m_documentCodec.apply(task.operation.payload);
+            auto patch = m_impl->m_replication.m_documentCodec.apply(
+                task.operation.payload);
             if ( !patch.has_value() ) {
                 result.error = "invalid_beatmap_operation";
                 batchResults.push_back(std::move(result));
                 continue;
             }
-            m_hasDocument.store(true, std::memory_order_release);
+            m_impl->m_replication.m_hasDocument.store(
+                true, std::memory_order_release);
             if ( task.operation.historyCorrection ) {
                 // 网络身份随权威修订记录，不能只靠房主侧临时标记推断原作者。
                 batchHistoryCorrections.push_back(
                     *task.operation.historyCorrection);
             }
-            m_remoteOperationPipeline->lastAppliedRevision =
-                task.operation.revision;
+            m_impl->m_replication.m_remoteOperationPipeline
+                ->lastAppliedRevision = task.operation.revision;
             if ( task.host && task.historyRevision != 0 ) {
                 // 原始记录保持不变；切换方向只更新可撤回/可重做计数。
                 const auto entry = std::find_if(
-                    m_remoteOperationPipeline->history.begin(),
-                    m_remoteOperationPipeline->history.end(),
+                    m_impl->m_replication.m_remoteOperationPipeline->history
+                        .begin(),
+                    m_impl->m_replication.m_remoteOperationPipeline->history
+                        .end(),
                     [&task](const auto& item) {
                         return item.revision == task.historyRevision;
                     });
-                if ( entry != m_remoteOperationPipeline->history.end() ) {
+                if ( entry != m_impl->m_replication.m_remoteOperationPipeline
+                                  ->history.end() ) {
                     entry->undone  = !task.historyRedo;
                     historyChanged = true;
                 }
             } else if ( task.host && before && !patch->isSnapshot ) {
                 // 两个方向均从同一原始编辑的前后状态计算，避免普通
                 // EditorAction 引用的 ECS 实体跨会话或断线后失效。
-                auto forward =
-                    before->makeHistoryDeltaTo(m_documentCodec, patch->flags);
+                auto forward = before->makeHistoryDeltaTo(
+                    m_impl->m_replication.m_documentCodec, patch->flags);
                 auto inverse =
-                    m_documentCodec.makeHistoryDeltaTo(*before, patch->flags);
+                    m_impl->m_replication.m_documentCodec.makeHistoryDeltaTo(
+                        *before, patch->flags);
                 if ( forward && inverse &&
                      forward->size() + inverse->size() <=
                          MAX_MEMBER_HISTORY_BYTES ) {
                     // 单个过大的补丁不入历史；它已正常提交谱面，不阻断编辑。
                     // 同一成员提交新编辑后，其原有重做分支不再可重放。
-                    auto& history = m_remoteOperationPipeline->history;
+                    auto& history = m_impl->m_replication
+                                        .m_remoteOperationPipeline->history;
                     for ( auto it = history.begin(); it != history.end(); ) {
                         if ( it->participantId ==
                                  task.operation.participantId &&
                              it->undone ) {
-                            m_remoteOperationPipeline->historyBytes -=
+                            m_impl->m_replication.m_remoteOperationPipeline
+                                ->historyBytes -=
                                 it->forward.size() + it->inverse.size();
                             it = history.erase(it);
                         } else {
                             ++it;
                         }
                     }
-                    m_remoteOperationPipeline->historyBytes +=
-                        forward->size() + inverse->size();
+                    m_impl->m_replication.m_remoteOperationPipeline
+                        ->historyBytes += forward->size() + inverse->size();
                     history.push_back(RemoteOperationPipeline::HistoryEntry{
                         .participantId  = task.operation.participantId,
                         .sessionId      = task.operation.sessionId,
@@ -2219,12 +2489,13 @@ void CollaborationRoom::processRemoteOperations()
                         .inverse        = std::move(*inverse),
                     });
                     while ( history.size() > MAX_MEMBER_HISTORY_ENTRIES ||
-                            m_remoteOperationPipeline->historyBytes >
+                            m_impl->m_replication.m_remoteOperationPipeline
+                                    ->historyBytes >
                                 MAX_MEMBER_HISTORY_BYTES ) {
                         // 同时更新字节预算，确保最旧的离线记录也可被淘汰。
-                        m_remoteOperationPipeline->historyBytes -=
-                            history.front().forward.size() +
-                            history.front().inverse.size();
+                        m_impl->m_replication.m_remoteOperationPipeline
+                            ->historyBytes -= history.front().forward.size() +
+                                              history.front().inverse.size();
                         history.pop_front();
                     }
                     historyChanged = true;
@@ -2243,8 +2514,9 @@ void CollaborationRoom::processRemoteOperations()
                 // 权威文档记为可见基线，避免下一名协作者编辑时重复回灌本机
                 // 此前写入的全部物件。若本批已含远端提交则保留旧基线，确保
                 // 远端差量不会被后续本机回执提前吞掉。
-                m_remoteOperationPipeline->visibleDocument =
-                    m_documentCodec.cloneDocument();
+                m_impl->m_replication.m_remoteOperationPipeline
+                    ->visibleDocument =
+                    m_impl->m_replication.m_documentCodec.cloneDocument();
             }
             lastSuccessfulResult = batchResults.size();
             batchResults.push_back(std::move(result));
@@ -2253,16 +2525,18 @@ void CollaborationRoom::processRemoteOperations()
         // 请求在全部已到达修订之后检查，保证冲突判断使用最新权威文档。
         // 此队列与谱面操作共享唯一消费者，因此候选与当前文档读取无需额外锁。
         RemoteOperationPipeline::HistoryRequest historyRequest;
-        while ( m_remoteOperationPipeline->historyRequests.try_dequeue(
-            historyRequest) ) {
+        while ( m_impl->m_replication.m_remoteOperationPipeline->historyRequests
+                    .try_dequeue(historyRequest) ) {
             RemoteOperationPipeline::HistoryProposal proposal;
             proposal.participantId = std::move(historyRequest.participantId);
             proposal.redo          = historyRequest.redo;
             proposal.expectedRevision =
-                m_remoteOperationPipeline->lastAppliedRevision;
+                m_impl->m_replication.m_remoteOperationPipeline
+                    ->lastAppliedRevision;
             // 离线成员已从 Peer 路由表消失，这里只能依据历史中的持久身份。
-            const auto& history = m_remoteOperationPipeline->history;
-            const auto  matches = [&proposal](const auto& item) {
+            const auto& history =
+                m_impl->m_replication.m_remoteOperationPipeline->history;
+            const auto matches = [&proposal](const auto& item) {
                 return item.participantId == proposal.participantId &&
                        item.undone == proposal.redo;
             };
@@ -2288,8 +2562,8 @@ void CollaborationRoom::processRemoteOperations()
                     proposal.redo ? selected->forward : selected->inverse;
                 const auto& opposite =
                     proposal.redo ? selected->inverse : selected->forward;
-                if ( !m_documentCodec.matchesHistoryDeltaSource(payload,
-                                                                opposite) ) {
+                if ( !m_impl->m_replication.m_documentCodec
+                          .matchesHistoryDeltaSource(payload, opposite) ) {
                     // 受影响值已被后续编辑改写时拒绝恢复，保留其他人的工作。
                     proposal.error = "member_history_conflict";
                 } else {
@@ -2299,14 +2573,15 @@ void CollaborationRoom::processRemoteOperations()
                     proposal.payload        = payload;
                 }
             }
-            m_remoteOperationPipeline->historyProposals.enqueue(
-                std::move(proposal));
+            m_impl->m_replication.m_remoteOperationPipeline->historyProposals
+                .enqueue(std::move(proposal));
         }
 
         if ( historyChanged ) {
             // UI 只接收汇总，不复制有界但可能很大的二进制补丁。
             std::vector<CollaborationMemberHistory> summary;
-            for ( const auto& entry : m_remoteOperationPipeline->history ) {
+            for ( const auto& entry :
+                  m_impl->m_replication.m_remoteOperationPipeline->history ) {
                 auto member = std::find_if(
                     summary.begin(), summary.end(), [&entry](const auto& item) {
                         return item.participantId == entry.participantId;
@@ -2327,18 +2602,18 @@ void CollaborationRoom::processRemoteOperations()
                     ++member->undoCount;
                 }
             }
-            m_remoteOperationPipeline->historySummaries.enqueue(
-                std::move(summary));
+            m_impl->m_replication.m_remoteOperationPipeline->historySummaries
+                .enqueue(std::move(summary));
             // 下一轮只有状态再次改变才重新发布，避免逐帧扫描历史。
             historyChanged = false;
         }
 
         std::uint8_t expected = 2U;
-        if ( m_remoteOperationPipeline->workerState.compare_exchange_strong(
-                 expected,
-                 1U,
-                 std::memory_order_acq_rel,
-                 std::memory_order_acquire) ) {
+        if ( m_impl->m_replication.m_remoteOperationPipeline->workerState
+                 .compare_exchange_strong(expected,
+                                          1U,
+                                          std::memory_order_acq_rel,
+                                          std::memory_order_acquire) ) {
             // 有新任务在本轮排空期间到达时继续合并，不为即将过时的中间
             // revision 重复物化整张 BeatMap 或压缩房主快照。
             continue;
@@ -2369,11 +2644,13 @@ void CollaborationRoom::processRemoteOperations()
                         ::MMM::BeatmapMutationFlags::Objects;
                     // 只有纯 Objects 批次才能安全提供窄对象 ID 列表和编码基线。
                     if ( onlyObjects &&
-                         m_remoteOperationPipeline->visibleDocument ) {
+                         m_impl->m_replication.m_remoteOperationPipeline
+                             ->visibleDocument ) {
                         delivery.objectDeltaIdentities =
                             rebased->document
                                 ->changedObjectIdentitiesComparedTo(
-                                    *m_remoteOperationPipeline
+                                    *m_impl->m_replication
+                                         .m_remoteOperationPipeline
                                          ->visibleDocument);
                         if ( delivery.objectDeltaIdentities ) {
                             delivery.objectEncodingBaseline =
@@ -2385,35 +2662,38 @@ void CollaborationRoom::processRemoteOperations()
                             }
                         }
                     }
-                    m_remoteOperationPipeline->visibleDocument =
-                        std::move(rebased->document);
-                    delivery.beatmap = std::move(rebased->beatmap);
+                    m_impl->m_replication.m_remoteOperationPipeline
+                        ->visibleDocument = std::move(rebased->document);
+                    delivery.beatmap      = std::move(rebased->beatmap);
                     delivery.includedLocalMutationSequence =
                         rebased->includedLocalMutationSequence;
                 }
             }
             // 房主成功应用新修订后安排低频完整快照供新访客或重同步使用。
             if ( batchHost && delivery.error.empty() ) {
-                m_remoteOperationPipeline->pendingHostSnapshotRevision.store(
-                    delivery.revision, std::memory_order_release);
-                m_remoteOperationPipeline->hostSnapshotDirty.store(
-                    true, std::memory_order_release);
+                m_impl->m_replication.m_remoteOperationPipeline
+                    ->pendingHostSnapshotRevision.store(
+                        delivery.revision, std::memory_order_release);
+                m_impl->m_replication.m_remoteOperationPipeline
+                    ->hostSnapshotDirty.store(true, std::memory_order_release);
             }
             buildHostSnapshotIfDue(delivery);
-            m_remoteOperationPipeline->results.enqueue(std::move(delivery));
-        } else if ( m_remoteOperationPipeline->hostSnapshotDirty.load(
-                        std::memory_order_acquire) ) {
+            m_impl->m_replication.m_remoteOperationPipeline->results.enqueue(
+                std::move(delivery));
+        } else if ( m_impl->m_replication.m_remoteOperationPipeline
+                        ->hostSnapshotDirty.load(std::memory_order_acquire) ) {
             RemoteOperationPipeline::Result snapshotDelivery;
             snapshotDelivery.logOperation = false;
             buildHostSnapshotIfDue(snapshotDelivery);
             if ( snapshotDelivery.hostSnapshot ) {
-                m_remoteOperationPipeline->results.enqueue(
-                    std::move(snapshotDelivery));
+                m_impl->m_replication.m_remoteOperationPipeline->results
+                    .enqueue(std::move(snapshotDelivery));
             }
         }
         // 每个权威修订仍独立进入日志队列，不因可见状态批量合并而丢审计记录。
         for ( auto& result : batchResults ) {
-            m_remoteOperationPipeline->operationLogs.enqueue(std::move(result));
+            m_impl->m_replication.m_remoteOperationPipeline->operationLogs
+                .enqueue(std::move(result));
         }
         batchResults.clear();
         batchVisibleFlags                   = ::MMM::BeatmapMutationFlags::None;
@@ -2423,11 +2703,11 @@ void CollaborationRoom::processRemoteOperations()
         lastSuccessfulResult.reset();
 
         expected = 1U;
-        if ( m_remoteOperationPipeline->workerState.compare_exchange_strong(
-                 expected,
-                 0U,
-                 std::memory_order_acq_rel,
-                 std::memory_order_acquire) ) {
+        if ( m_impl->m_replication.m_remoteOperationPipeline->workerState
+                 .compare_exchange_strong(expected,
+                                          0U,
+                                          std::memory_order_acq_rel,
+                                          std::memory_order_acquire) ) {
             return;
         }
     }
@@ -2453,64 +2733,66 @@ void CollaborationRoom::processMemberHistoryProposals()
     // 连续提交仅保留最新摘要，避免每帧重复重绘中间计数。
     // 摘要队列与建议队列各自消费，离线成员列表不依赖待处理请求。
     for ( std::size_t index = 0;
-          index < 16 &&
-          m_remoteOperationPipeline->historySummaries.try_dequeue(summary);
+          index < 16 && m_impl->m_replication.m_remoteOperationPipeline
+                            ->historySummaries.try_dequeue(summary);
           ++index ) {
-        m_memberHistories = std::move(summary);
+        m_impl->m_replication.m_memberHistories = std::move(summary);
     }
     RemoteOperationPipeline::HistoryProposal proposal;
-    if ( !m_remoteOperationPipeline->historyProposals.try_dequeue(proposal) ) {
+    if ( !m_impl->m_replication.m_remoteOperationPipeline->historyProposals
+              .try_dequeue(proposal) ) {
         return;
     }
     if ( !m_isHost || !m_peer ) {
         // 房间已经关闭时丢弃旧建议，不能跨下一次建房使用历史身份。
-        m_memberHistoryRequestPending = false;
+        m_impl->m_replication.m_memberHistoryRequestPending = false;
         return;
     }
     if ( !proposal.error.empty() ) {
         // UI 使用翻译键展示原因，网络层不依赖当前界面语言。
-        m_memberHistoryError =
+        m_impl->m_replication.m_memberHistoryError =
             proposal.error == "member_history_conflict"
                 ? "ui.collaboration.member_history_conflict"
                 : "ui.collaboration.member_history_unavailable";
-        m_memberHistoryRequestPending = false;
+        m_impl->m_replication.m_memberHistoryRequestPending = false;
         return;
     }
     // Peer 已分配但后台尚未应用的修订会使建议过期，重排请求后重新校验。
     if ( proposal.expectedRevision != m_peer->appliedRevision() ) {
         // 重新计算源值匹配，不能直接在更新后的文档上提交旧补丁。
-        m_remoteOperationPipeline->historyRequests.enqueue(
-            RemoteOperationPipeline::HistoryRequest{
+        m_impl->m_replication.m_remoteOperationPipeline->historyRequests
+            .enqueue(RemoteOperationPipeline::HistoryRequest{
                 std::move(proposal.participantId), proposal.redo });
         scheduleRemoteOperationWorker();
         return;
     }
-    m_pendingHistoryRevision = proposal.sourceRevision;
-    m_pendingHistoryRedo     = proposal.redo;
-    const auto submitted     = m_peer->commitHostCorrection(
+    m_impl->m_replication.m_pendingHistoryRevision = proposal.sourceRevision;
+    m_impl->m_replication.m_pendingHistoryRedo     = proposal.redo;
+    const auto submitted = m_peer->commitHostCorrection(
         proposal.payload,
         CollaborationHistoryCorrection{
-                .participantId  = proposal.participantId,
-                .sessionId      = proposal.sessionId,
-                .clientSequence = proposal.clientSequence,
-                .redo           = proposal.redo,
+            .participantId  = proposal.participantId,
+            .sessionId      = proposal.sessionId,
+            .clientSequence = proposal.clientSequence,
+            .redo           = proposal.redo,
         });
-    m_pendingHistoryRevision = 0;
-    m_pendingHistoryRedo     = false;
+    m_impl->m_replication.m_pendingHistoryRevision = 0;
+    m_impl->m_replication.m_pendingHistoryRedo     = false;
     if ( submitted == SubmitOperationResult::QueueFull ) {
         // 房主还有尚未排序的请求时，下帧先处理它们，再按最新文档重新校验。
-        m_remoteOperationPipeline->historyRequests.enqueue(
-            RemoteOperationPipeline::HistoryRequest{
+        m_impl->m_replication.m_remoteOperationPipeline->historyRequests
+            .enqueue(RemoteOperationPipeline::HistoryRequest{
                 std::move(proposal.participantId), proposal.redo });
         scheduleRemoteOperationWorker();
         return;
     }
-    m_memberHistoryRequestPending = false;
+    m_impl->m_replication.m_memberHistoryRequestPending = false;
     // 无论成功还是明确失败，都让下一次用户点击重新从最新文档生成候选。
     if ( submitted != SubmitOperationResult::Accepted ) {
-        m_memberHistoryError = "ui.collaboration.member_history_too_large";
+        m_impl->m_replication.m_memberHistoryError =
+            "ui.collaboration.member_history_too_large";
     } else {
-        m_memberHistoryError.clear();
+        m_impl->m_replication.m_memberHistoryError.clear();
     }
 }
 
@@ -2569,7 +2851,7 @@ void CollaborationRoom::processRemoteOperationResults()
                       std::move(result.participantId));
             return;
         }
-        if ( m_historyCorrectedCallback ) {
+        if ( m_impl->m_replication.m_historyCorrectedCallback ) {
             for ( const auto& correction : result.historyCorrections ) {
                 // 其他成员仍需应用谱面，但不能动当前成员自己的 Undo 栈。
                 if ( correction.participantId != m_participantId ||
@@ -2579,14 +2861,16 @@ void CollaborationRoom::processRemoteOperationResults()
                 correctedLocalHistory = true;
                 // 本地变化序号由 observer 分配，不能直接把网络序号当动作 ID。
                 const auto local = std::find_if(
-                    m_localSequenceByClientSequence.begin(),
-                    m_localSequenceByClientSequence.end(),
+                    m_impl->m_replication.m_localSequenceByClientSequence
+                        .begin(),
+                    m_impl->m_replication.m_localSequenceByClientSequence.end(),
                     [&correction](const auto& item) {
                         return item.first == correction.clientSequence;
                     });
                 // 映射被淘汰时以零通知逻辑层清理过期历史。
-                m_historyCorrectedCallback(
-                    local == m_localSequenceByClientSequence.end()
+                m_impl->m_replication.m_historyCorrectedCallback(
+                    local == m_impl->m_replication
+                                 .m_localSequenceByClientSequence.end()
                         ? 0
                         : local->second,
                     correction.redo);
@@ -2596,7 +2880,8 @@ void CollaborationRoom::processRemoteOperationResults()
         if ( result.hostSnapshot && m_isHost && m_peer ) {
             if ( m_peer->setStateSnapshot(result.revision,
                                           std::move(*result.hostSnapshot)) ) {
-                m_publishedDocumentRevision = result.revision;
+                m_impl->m_replication.m_publishedDocumentRevision =
+                    result.revision;
             }
         }
         if ( result.beatmap ) {
@@ -2638,19 +2923,22 @@ void CollaborationRoom::processRemoteOperationResults()
     for ( std::size_t index = 0; index < MAX_REMOTE_RESULTS_PER_UPDATE;
           ++index ) {
         RemoteOperationPipeline::Result result;
-        if ( !m_remoteOperationPipeline->results.try_dequeue(result) ) break;
+        if ( !m_impl->m_replication.m_remoteOperationPipeline->results
+                  .try_dequeue(result) )
+            break;
         consumeResult(std::move(result));
     }
     for ( std::size_t index = 0; index < MAX_REMOTE_LOG_RESULTS_PER_UPDATE;
           ++index ) {
         RemoteOperationPipeline::Result result;
-        if ( !m_remoteOperationPipeline->operationLogs.try_dequeue(result) ) {
+        if ( !m_impl->m_replication.m_remoteOperationPipeline->operationLogs
+                  .try_dequeue(result) ) {
             break;
         }
         consumeResult(std::move(result));
     }
     // 只有最新 BeatMap 回灌上层，中间修订的分类影响已合并进 mergedFlags。
-    if ( mergedBeatmap && m_applyBeatmapCallback ) {
+    if ( mergedBeatmap && m_impl->m_replication.m_applyBeatmapCallback ) {
         if ( mergedFlags != ::MMM::BeatmapMutationFlags::Objects ||
              !mergedObjectEncodingBaseline ) {
             mergedObjectDeltaIdentities.reset();
@@ -2660,8 +2948,8 @@ void CollaborationRoom::processRemoteOperationResults()
         // 因而本地手势、交互状态和未确认增量不会交给后台线程。
         // 预计算基线要等上层确认实际应用同一 revision 后才能安装到本地 Codec。
         if ( mergedObjectEncodingBaseline && mergedObjectDeltaIdentities ) {
-            std::lock_guard lock(m_localOperationMutex);
-            m_pendingObjectEncodingBaselines.push_back(
+            std::lock_guard lock(m_impl->m_replication.m_localOperationMutex);
+            m_impl->m_replication.m_pendingObjectEncodingBaselines.push_back(
                 PendingObjectEncodingBaseline{
                     .revision = mergedRevision,
                     .includedLocalMutationSequence =
@@ -2669,21 +2957,25 @@ void CollaborationRoom::processRemoteOperationResults()
                     .baseline = std::move(mergedObjectEncodingBaseline),
                 });
             constexpr std::size_t MAX_PENDING_OBJECT_BASELINES = 16U;
-            while ( m_pendingObjectEncodingBaselines.size() >
-                    MAX_PENDING_OBJECT_BASELINES ) {
-                m_pendingObjectEncodingBaselines.pop_front();
+            while (
+                m_impl->m_replication.m_pendingObjectEncodingBaselines.size() >
+                MAX_PENDING_OBJECT_BASELINES ) {
+                m_impl->m_replication.m_pendingObjectEncodingBaselines
+                    .pop_front();
             }
         }
-        m_applyBeatmapCallback(std::move(mergedBeatmap),
-                               mergedFlags,
-                               mergedLocalMutationSequence,
-                               mergedRevision,
-                               std::move(mergedObjectDeltaIdentities),
-                               correctedLocalHistory);
+        m_impl->m_replication.m_applyBeatmapCallback(
+            std::move(mergedBeatmap),
+            mergedFlags,
+            mergedLocalMutationSequence,
+            mergedRevision,
+            std::move(mergedObjectDeltaIdentities),
+            correctedLocalHistory);
     }
     if ( acknowledgedLocalMutationSequence != 0 &&
-         m_localMutationAcknowledgedCallback ) {
-        m_localMutationAcknowledgedCallback(acknowledgedLocalMutationSequence);
+         m_impl->m_replication.m_localMutationAcknowledgedCallback ) {
+        m_impl->m_replication.m_localMutationAcknowledgedCallback(
+            acknowledgedLocalMutationSequence);
     }
 }
 
@@ -2695,13 +2987,14 @@ void CollaborationRoom::processRemoteOperationResults()
 /// 的标准注册和资源清单发送路径。
 void CollaborationRoom::processPendingPeerConnections()
 {
-    if ( m_pendingPeerConnections.empty() || !m_peer ||
-         m_publishedDocumentRevision < m_peer->appliedRevision() ) {
+    if ( m_impl->m_replication.m_pendingPeerConnections.empty() || !m_peer ||
+         m_impl->m_replication.m_publishedDocumentRevision <
+             m_peer->appliedRevision() ) {
         return;
     }
 
-    auto pending = std::move(m_pendingPeerConnections);
-    m_pendingPeerConnections.clear();
+    auto pending = std::move(m_impl->m_replication.m_pendingPeerConnections);
+    m_impl->m_replication.m_pendingPeerConnections.clear();
     for ( const auto& event : pending ) {
         handleTransportEvent(event);
     }
@@ -2727,49 +3020,54 @@ void CollaborationRoom::processPendingPeerConnections()
 void CollaborationRoom::resetRemoteOperationPipeline()
 {
     // future 完成前后台闭包仍捕获 this，必须先 join 再修改流水线成员。
-    for ( auto& task : m_remoteOperationPipeline->workerFutures ) {
+    for ( auto& task :
+          m_impl->m_replication.m_remoteOperationPipeline->workerFutures ) {
         if ( task.valid() ) task.wait();
     }
-    m_remoteOperationPipeline->workerFutures.clear();
+    m_impl->m_replication.m_remoteOperationPipeline->workerFutures.clear();
     RemoteOperationPipeline::Task pendingTask;
-    while ( m_remoteOperationPipeline->tasks.try_dequeue(pendingTask) ) {}
+    while ( m_impl->m_replication.m_remoteOperationPipeline->tasks.try_dequeue(
+        pendingTask) ) {}
     RemoteOperationPipeline::Result pendingResult;
-    while ( m_remoteOperationPipeline->results.try_dequeue(pendingResult) ) {}
     while (
-        m_remoteOperationPipeline->operationLogs.try_dequeue(pendingResult) ) {}
+        m_impl->m_replication.m_remoteOperationPipeline->results.try_dequeue(
+            pendingResult) ) {}
+    while ( m_impl->m_replication.m_remoteOperationPipeline->operationLogs
+                .try_dequeue(pendingResult) ) {}
     RemoteOperationPipeline::HistoryRequest pendingHistoryRequest;
-    while ( m_remoteOperationPipeline->historyRequests.try_dequeue(
-        pendingHistoryRequest) ) {}
+    while ( m_impl->m_replication.m_remoteOperationPipeline->historyRequests
+                .try_dequeue(pendingHistoryRequest) ) {}
     RemoteOperationPipeline::HistoryProposal pendingHistoryProposal;
-    while ( m_remoteOperationPipeline->historyProposals.try_dequeue(
-        pendingHistoryProposal) ) {}
+    while ( m_impl->m_replication.m_remoteOperationPipeline->historyProposals
+                .try_dequeue(pendingHistoryProposal) ) {}
     std::vector<CollaborationMemberHistory> pendingHistorySummary;
-    while ( m_remoteOperationPipeline->historySummaries.try_dequeue(
-        pendingHistorySummary) ) {}
-    m_remoteOperationPipeline->history.clear();
-    m_remoteOperationPipeline->historyBytes        = 0;
-    m_remoteOperationPipeline->lastAppliedRevision = 0;
-    m_memberHistories.clear();
-    m_memberHistoryError.clear();
-    m_memberHistoryRequestPending = false;
-    m_pendingHistoryRevision      = 0;
-    m_pendingHistoryRedo          = false;
-    m_localSequenceByClientSequence.clear();
-    m_remoteOperationPipeline->workerState.store(0U, std::memory_order_release);
-    m_remoteOperationPipeline->visibleDocument.reset();
-    m_remoteOperationPipeline->hostSnapshotDirty.store(
-        false, std::memory_order_release);
-    m_remoteOperationPipeline->pendingHostSnapshotRevision.store(
+    while ( m_impl->m_replication.m_remoteOperationPipeline->historySummaries
+                .try_dequeue(pendingHistorySummary) ) {}
+    m_impl->m_replication.m_remoteOperationPipeline->history.clear();
+    m_impl->m_replication.m_remoteOperationPipeline->historyBytes        = 0;
+    m_impl->m_replication.m_remoteOperationPipeline->lastAppliedRevision = 0;
+    m_impl->m_replication.m_memberHistories.clear();
+    m_impl->m_replication.m_memberHistoryError.clear();
+    m_impl->m_replication.m_memberHistoryRequestPending = false;
+    m_impl->m_replication.m_pendingHistoryRevision      = 0;
+    m_impl->m_replication.m_pendingHistoryRedo          = false;
+    m_impl->m_replication.m_localSequenceByClientSequence.clear();
+    m_impl->m_replication.m_remoteOperationPipeline->workerState.store(
         0U, std::memory_order_release);
-    m_remoteOperationPipeline->nextHostSnapshotBuildNanoseconds.store(
-        0, std::memory_order_relaxed);
+    m_impl->m_replication.m_remoteOperationPipeline->visibleDocument.reset();
+    m_impl->m_replication.m_remoteOperationPipeline->hostSnapshotDirty.store(
+        false, std::memory_order_release);
+    m_impl->m_replication.m_remoteOperationPipeline->pendingHostSnapshotRevision
+        .store(0U, std::memory_order_release);
+    m_impl->m_replication.m_remoteOperationPipeline
+        ->nextHostSnapshotBuildNanoseconds.store(0, std::memory_order_relaxed);
     {
-        std::lock_guard lock(m_localOperationMutex);
-        m_pendingObjectEncodingBaselines.clear();
+        std::lock_guard lock(m_impl->m_replication.m_localOperationMutex);
+        m_impl->m_replication.m_pendingObjectEncodingBaselines.clear();
     }
-    m_pendingPeerConnections.clear();
-    m_publishedDocumentRevision = 0;
-    m_documentCodec.reset();
+    m_impl->m_replication.m_pendingPeerConnections.clear();
+    m_impl->m_replication.m_publishedDocumentRevision = 0;
+    m_impl->m_replication.m_documentCodec.reset();
 }
 
 /// @brief 按序向 Peer 提交本地编码队列并维护在途集合。
@@ -2794,7 +3092,8 @@ void CollaborationRoom::resetRemoteOperationPipeline()
 /// 原始编辑顺序。只有 update 检测到权限实际收紧时，才按分类清理确定失权的操作。
 void CollaborationRoom::submitQueuedLocalOperations()
 {
-    if ( !m_peer || !m_acceptLocalMutations.load(std::memory_order_acquire) ) {
+    if ( !m_peer || !m_impl->m_replication.m_acceptLocalMutations.load(
+                        std::memory_order_acquire) ) {
         return;
     }
     for ( std::size_t index = 0; index < MAX_LOCAL_OPERATIONS_PER_UPDATE;
@@ -2802,13 +3101,14 @@ void CollaborationRoom::submitQueuedLocalOperations()
         // 锁内只复制队首快照，网络提交在锁外执行，避免阻塞观察线程入队。
         LocalOperation operation;
         {
-            std::lock_guard lock(m_localOperationMutex);
-            if ( m_localOperationQueue.empty() ) return;
-            operation = m_localOperationQueue.front();
+            std::lock_guard lock(m_impl->m_replication.m_localOperationMutex);
+            if ( m_impl->m_replication.m_localOperationQueue.empty() ) return;
+            operation = m_impl->m_replication.m_localOperationQueue.front();
         }
         const auto patch = BeatmapDocumentCodec::inspect(operation.payload);
         if ( !patch || !permissionsAllowMutation(
-                           m_localPermissions.load(std::memory_order_acquire),
+                           m_impl->m_replication.m_localPermissions.load(
+                               std::memory_order_acquire),
                            patch->flags) ) {
             // 权限收紧时保留已经完成的本地编辑及其规范增量，不清空、不覆盖；
             // 房主重新授权后仍按原顺序提交。
@@ -2819,29 +3119,34 @@ void CollaborationRoom::submitQueuedLocalOperations()
         const auto    result =
             m_peer->submitOperation(operation.payload, &acceptedClientSequence);
         if ( result == SubmitOperationResult::Accepted ) {
-            std::lock_guard lock(m_localOperationMutex);
-            if ( !m_localOperationQueue.empty() &&
-                 m_localOperationQueue.front().sequence == operation.sequence &&
-                 m_localOperationQueue.front().payload == operation.payload ) {
-                m_inFlightLocalOperations.push_back(
-                    std::move(m_localOperationQueue.front()));
-                m_localOperationQueue.pop_front();
+            std::lock_guard lock(m_impl->m_replication.m_localOperationMutex);
+            if ( !m_impl->m_replication.m_localOperationQueue.empty() &&
+                 m_impl->m_replication.m_localOperationQueue.front().sequence ==
+                     operation.sequence &&
+                 m_impl->m_replication.m_localOperationQueue.front().payload ==
+                     operation.payload ) {
+                m_impl->m_replication.m_inFlightLocalOperations.push_back(
+                    std::move(
+                        m_impl->m_replication.m_localOperationQueue.front()));
+                m_impl->m_replication.m_localOperationQueue.pop_front();
             }
-            m_localSequenceByClientSequence.emplace_back(acceptedClientSequence,
-                                                         operation.sequence);
-            if ( m_localSequenceByClientSequence.size() > 4096U ) {
-                m_localSequenceByClientSequence.pop_front();
+            m_impl->m_replication.m_localSequenceByClientSequence.emplace_back(
+                acceptedClientSequence, operation.sequence);
+            if ( m_impl->m_replication.m_localSequenceByClientSequence.size() >
+                 4096U ) {
+                m_impl->m_replication.m_localSequenceByClientSequence
+                    .pop_front();
             }
-            m_localOperationSubmitBlocked = false;
+            m_impl->m_replication.m_localOperationSubmitBlocked = false;
             continue;
         }
 
-        if ( !m_localOperationSubmitBlocked ) {
+        if ( !m_impl->m_replication.m_localOperationSubmitBlocked ) {
             appendLog(CollaborationLogEventType::Error,
                       localPeerId(),
                       m_creator,
                       "local_operation_submit_failed");
-            m_localOperationSubmitBlocked = true;
+            m_impl->m_replication.m_localOperationSubmitBlocked = true;
         }
         return;
     }
@@ -2874,23 +3179,23 @@ CollaborationRoom::materializeRebasedLocalBeatmap(
     std::uint64_t               includedLocalMutationSequence =
         committedLocalMutationSequence;
     {
-        std::lock_guard lock(m_localOperationMutex);
-        includedLocalMutationSequence =
-            std::max(includedLocalMutationSequence,
-                     m_latestCommittedLocalMutationSequence);
-        pending.reserve(m_inFlightLocalOperations.size() +
-                        m_localOperationQueue.size());
+        std::lock_guard lock(m_impl->m_replication.m_localOperationMutex);
+        includedLocalMutationSequence = std::max(
+            includedLocalMutationSequence,
+            m_impl->m_replication.m_latestCommittedLocalMutationSequence);
+        pending.reserve(m_impl->m_replication.m_inFlightLocalOperations.size() +
+                        m_impl->m_replication.m_localOperationQueue.size());
         pending.insert(pending.end(),
-                       m_inFlightLocalOperations.begin(),
-                       m_inFlightLocalOperations.end());
+                       m_impl->m_replication.m_inFlightLocalOperations.begin(),
+                       m_impl->m_replication.m_inFlightLocalOperations.end());
         pending.insert(pending.end(),
-                       m_localOperationQueue.begin(),
-                       m_localOperationQueue.end());
+                       m_impl->m_replication.m_localOperationQueue.begin(),
+                       m_impl->m_replication.m_localOperationQueue.end());
     }
 
     // 即使无需重放也克隆 Codec，使 visibleDocument 与权威文档拥有独立所有权。
     if ( pending.empty() ) {
-        auto document = m_documentCodec.cloneDocument();
+        auto document = m_impl->m_replication.m_documentCodec.cloneDocument();
         if ( !document ) return std::nullopt;
         auto beatmap = document->materialize();
         if ( !beatmap ) return std::nullopt;
@@ -2901,7 +3206,7 @@ CollaborationRoom::materializeRebasedLocalBeatmap(
         };
     }
 
-    auto localView = m_documentCodec.cloneDocument();
+    auto localView = m_impl->m_replication.m_documentCodec.cloneDocument();
     if ( !localView ) return std::nullopt;
     // 任何本地补丁无法应用都取消整次交付，不能向 UI 暴露部分重放结果。
     for ( const auto& operation : pending ) {
@@ -2925,7 +3230,7 @@ CollaborationRoom::materializeRebasedLocalBeatmap(
 /// @details release store 先阻止无锁快速入口，随后在互斥锁下清除
 /// queued、in-flight、 错误门闩、重基标志和序列水位线。onBeatmapMutated
 /// 在取锁后会二次检查门闩， 因而不会在清理后重新入队。
-void CollaborationRoom::stopAcceptingLocalMutations()
+void CollaborationRoom::Impl::DocumentReplication::stopAcceptingLocalMutations()
 {
     m_acceptLocalMutations.store(false, std::memory_order_release);
     std::lock_guard lock(m_localOperationMutex);
@@ -2945,10 +3250,10 @@ void CollaborationRoom::stopAcceptingLocalMutations()
 /// 才更新 lastPublished 和下一截止时间，失败允许下一帧重试。
 ///
 /// @warning 每帧热路径，仅做常数次比较和一次可选 Peer 入队，不阻塞等待网络。
-void CollaborationRoom::flushLocalViewport()
+void CollaborationRoom::Impl::ViewportPublication::flush(
+    CollaborationPeer* peer)
 {
-    if ( !m_peer || !m_pendingLocalViewport ||
-         m_localViewportPublishDeferred ) {
+    if ( !peer || !m_pendingLocalViewport || m_localViewportPublishDeferred ) {
         return;
     }
     if ( m_lastPublishedLocalViewport &&
@@ -2962,7 +3267,7 @@ void CollaborationRoom::flushLocalViewport()
 
     // 复制最新值交给 Peer，发送失败不覆盖已发布基线。
     ParticipantViewport viewport = *m_pendingLocalViewport;
-    if ( !m_peer->publishViewport(viewport) ) return;
+    if ( !peer->publishViewport(viewport) ) return;
     m_lastPublishedLocalViewport = viewport;
     const auto interval          = std::chrono::microseconds(
         1'000'000 / std::max<std::uint32_t>(1, m_viewportPublishRateHz));
@@ -2973,7 +3278,7 @@ void CollaborationRoom::flushLocalViewport()
 /// @param senderId 请求或分块的远端 peer ID。
 /// @param message 已由 Peer 解码的资源协议消息。
 /// @note Manifest/Chunk 由访客消费，Request 携带 senderId 由房主响应。
-void CollaborationRoom::handleResourceMessage(
+void CollaborationRoom::Impl::ResourceTransfer::receive(
     PeerId senderId, const CollaborationMessage& message)
 {
     if ( const auto* manifest = std::get_if<ResourceManifest>(&message) ) {
@@ -3012,7 +3317,7 @@ void CollaborationRoom::processResourceEvents()
     for ( std::size_t index = 0; index < MAX_RESOURCE_EVENTS_PER_UPDATE;
           ++index ) {
         CollaborationResourceSyncEvent event;
-        if ( !m_resourceSync.pollEvent(event) ) return;
+        if ( !m_impl->m_resources.m_resourceSync.pollEvent(event) ) return;
         // 每种事件只做轻量路由，完整资源内容保持在消息或 bundle
         // 的移动所有权中。
         switch ( event.type ) {
@@ -3020,7 +3325,7 @@ void CollaborationRoom::processResourceEvents()
             const auto* manifest =
                 std::get_if<ResourceManifest>(&event.message);
             if ( !manifest ) break;
-            m_resourceManifest = *manifest;
+            m_impl->m_resources.m_resourceManifest = *manifest;
             // 新清单发布给当前全部远端；后加入者由 PeerConnected 路径补发。
             for ( const auto& [peerId, creator] : participants() ) {
                 static_cast<void>(creator);
@@ -3057,8 +3362,9 @@ void CollaborationRoom::processResourceEvents()
                       localPeerId(),
                       m_creator,
                       event.detail);
-            if ( m_resourceBundleCallback ) {
-                m_resourceBundleCallback(std::move(event.bundle));
+            if ( m_impl->m_resources.m_resourceBundleCallback ) {
+                m_impl->m_resources.m_resourceBundleCallback(
+                    std::move(event.bundle));
             }
             break;
         case CollaborationResourceSyncEvent::Type::Error:
@@ -3082,12 +3388,13 @@ void CollaborationRoom::processResourceEvents()
 ///       新连接仍可收到清单。
 void CollaborationRoom::sendResourceManifest(PeerId peerId)
 {
-    if ( !m_peer || !m_isHost || !m_resourceManifest ||
-         m_resourceManifestRecipients.contains(peerId) ) {
+    if ( !m_peer || !m_isHost || !m_impl->m_resources.m_resourceManifest ||
+         m_impl->m_resources.m_resourceManifestRecipients.contains(peerId) ) {
         return;
     }
-    if ( m_peer->sendResourceMessage(peerId, *m_resourceManifest) ) {
-        m_resourceManifestRecipients.insert(peerId);
+    if ( m_peer->sendResourceMessage(
+             peerId, *m_impl->m_resources.m_resourceManifest) ) {
+        m_impl->m_resources.m_resourceManifestRecipients.insert(peerId);
     }
 }
 
@@ -3103,7 +3410,7 @@ void CollaborationRoom::sendResourceManifest(PeerId peerId)
 ///       显式 disconnect 后才完全释放并回到 Idle。
 void CollaborationRoom::fail(std::string message)
 {
-    stopAcceptingLocalMutations();
+    m_impl->m_replication.stopAcceptingLocalMutations();
     m_pendingJoinRequests.clear();
     m_state     = CollaborationRoomState::Error;
     m_lastError = message;

@@ -57,6 +57,7 @@
 #include "logic/SessionTypes.h"
 #include "logic/ecs/system/render/SkinTextureScale.h"
 #include "logic/session/CanvasCamera.h"
+#include "network/collaboration/CollaborationPlaybackSync.h"
 #include "network/collaboration/CollaborationRoom.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"

@@ -1,29 +1,28 @@
 #pragma once
 
-#include "network/collaboration/BeatmapDocumentCodec.h"
-#include "network/collaboration/CollaborationDirectoryClient.h"
+#include "mmm/beatmap/BeatmapMutationObserver.h"
+#include "network/collaboration/CollaborationDirectoryTypes.h"
 #include "network/collaboration/CollaborationPeer.h"
-#include "network/collaboration/CollaborationResourceSync.h"
-#include "network/collaboration/WebRtcTransport.h"
+#include "network/collaboration/CollaborationResourceTypes.h"
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <deque>
 #include <filesystem>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <unordered_set>
-#include <utility>
 #include <vector>
 
 namespace MMM::Network::Collaboration
 {
+class WebRtcTransport;
+struct WebRtcTransportEvent;
+
 /// @brief 产品层协作房间生命周期状态。
 enum class CollaborationRoomState {
     Idle,
@@ -413,37 +412,12 @@ private:
     /// @brief 隔离无锁队列与后台任务生命周期的私有实现。
     class RemoteOperationPipeline;
 
-    /// @brief 一条已经编码且等待权威提交的本地谱面变化。
-    struct LocalOperation {
-        /// @brief 与进程内 ECS 无关的规范增量负载。
-        ByteBuffer payload;
-        /// @brief 当前房间内严格递增的本地变化序号。
-        std::uint64_t sequence{ 0 };
-    };
+    /// @brief 后台重放结果只在实现中组装和消费。
+    struct RebasedLocalBeatmap;
+    /// @brief 本地待确认增量与物件编码基线。
+    struct LocalOperation;
+    struct PendingObjectEncodingBaseline;
 
-    /// @brief 权威文档重放待确认本地变化后的可见谱面。
-    struct RebasedLocalBeatmap {
-        /// @brief 可安全回灌逻辑线程的领域谱面。
-        std::shared_ptr<::MMM::BeatMap> beatmap;
-        /// @brief 与领域谱面对应、供后台计算下一次可见差量的规范文档。
-        std::unique_ptr<BeatmapDocumentCodec> document;
-        /// @brief 该谱面已经包含的最新本地变化序号。
-        std::uint64_t includedLocalMutationSequence{ 0 };
-    };
-
-    /// @brief 等待逻辑线程确认应用的后台物件编码基线。
-    struct PendingObjectEncodingBaseline {
-        /// @brief 基线对应的权威文档修订号。
-        std::uint64_t revision{ 0 };
-        /// @brief 基线已经包含的最新本地变化序号。
-        std::uint64_t includedLocalMutationSequence{ 0 };
-        /// @brief 后台完整准备、逻辑线程只需移动安装的物件基线。
-        std::shared_ptr<BeatmapDocumentCodec::ObjectEncodingBaseline> baseline;
-    };
-
-    /// @brief 驱动目录订阅并在断线后低频重连。
-    /// @warning UI 热路径：只处理有界事件队列，重连受时间节流。
-    void updateDirectory();
     /// @brief 记录结构化协作日志。
     void appendLog(CollaborationLogEventType type, PeerId peerId,
                    std::string creator, std::string detail,
@@ -498,17 +472,6 @@ private:
     [[nodiscard]] std::optional<RebasedLocalBeatmap>
     materializeRebasedLocalBeatmap(
         std::uint64_t committedLocalMutationSequence);
-    /// @brief 关闭本地谱面变更入口并丢弃尚未提交的操作。
-    /// @warning UI 网络事件路径调用；会短暂获取本地操作队列锁，以与逻辑线程
-    /// 正在编码的 mutation 完成终止握手。
-    void stopAcceptingLocalMutations();
-    /// @brief 在节流周期到达时发布有变化的本地主画布状态。
-    /// @warning UI 热路径：每帧仅做时间点和固定大小数值比较，达到配置的
-    /// 5～60 Hz 周期后才编码并发送一个小消息。
-    void flushLocalViewport();
-    /// @brief 处理一个已校验的资源协议消息。
-    void handleResourceMessage(PeerId                      senderId,
-                               const CollaborationMessage& message);
     /// @brief 将已通过 Peer 身份与序号校验的聊天消息加入会话记录。
     /// @param message 已验证的聊天消息。
     void handleChatMessage(const CollaborationChatMessage& message);
@@ -519,6 +482,11 @@ private:
     /// @brief 将当前连接切换为错误状态。
     void fail(std::string message);
 
+    /// @brief 一次构造的目录、文档、资源与视口私有状态。
+    struct Impl;
+    /// @brief 析构先停止回调和文档消费者，随后释放各组件。
+    std::unique_ptr<Impl> m_impl;
+
     /// @brief 当前房间状态。
     CollaborationRoomState m_state = CollaborationRoomState::Idle;
     /// @brief 当前角色是否为房主。
@@ -527,14 +495,6 @@ private:
     std::string m_roomId;
     /// @brief 公网目录展示的房间名称。
     std::string m_roomName;
-    /// @brief 当前中心服务器配置。
-    CollaborationServerEndpoint m_serverEndpoint;
-    /// @brief 公网在线房间目录订阅客户端。
-    CollaborationDirectoryClient m_directory;
-    /// @brief 目录断线后的下一次重连时间。
-    std::chrono::steady_clock::time_point m_nextDirectoryReconnect;
-    /// @brief 跨重连保留的最近目录错误。
-    std::string m_directoryError;
     /// @brief 当前 Creator。
     std::string m_creator;
     /// @brief 当前应用配置持久化的稳定协作者标识。
@@ -553,77 +513,6 @@ private:
     WebRtcTransport* m_transport = nullptr;
     /// @brief 统一房主/访客协作状态机。
     std::unique_ptr<CollaborationPeer> m_peer;
-    /// @brief 当前客户端的规范化谱面文档。
-    BeatmapDocumentCodec m_documentCodec;
-    /// @brief 逻辑线程专用的本地编辑增量编码器。
-    BeatmapDocumentCodec m_localMutationCodec;
-    /// @brief 远端提交数据的本地逻辑命令入口。
-    ApplyBeatmapCallback m_applyBeatmapCallback;
-    /// @brief 本地提交无需整谱回灌时使用的序号确认入口。
-    LocalMutationAcknowledgedCallback m_localMutationAcknowledgedCallback;
-    /// @brief 房主历史补偿对应的本地动作栈入口。
-    HistoryCorrectedCallback m_historyCorrectedCallback;
-    /// @brief 本会话已提交客户端序号到逻辑观察序号的有界对应表。
-    std::deque<std::pair<std::uint64_t, std::uint64_t>>
-        m_localSequenceByClientSequence;
-    /// @brief 私有无锁队列、消费者状态与后台任务生命周期。
-    std::unique_ptr<RemoteOperationPipeline> m_remoteOperationPipeline;
-    /// @brief UI 线程最近收到的房主成员历史摘要。
-    std::vector<CollaborationMemberHistory> m_memberHistories;
-    /// @brief 最近一次成员历史请求的失败原因。
-    std::string m_memberHistoryError;
-    /// @brief 防止用户连续点击时重复提交同一历史步骤。
-    bool m_memberHistoryRequestPending{ false };
-    /// @brief 即将同步提交的补偿操作原始修订；回调入队时消费。
-    std::uint64_t m_pendingHistoryRevision{ 0 };
-    /// @brief 即将同步提交的补偿操作是否为重做。
-    bool m_pendingHistoryRedo{ false };
-    /// @brief 房主等待最新文档快照完成后再登记的访客连接事件。
-    std::deque<WebRtcTransportEvent> m_pendingPeerConnections;
-    /// @brief 已发布给 Peer 且可安全交给新访客的文档修订号。
-    std::uint64_t m_publishedDocumentRevision{ 0 };
-    /// @brief 访客完成资源校验后的会话绑定入口。
-    ResourceBundleCallback m_resourceBundleCallback;
-    /// @brief 后台资源清单和分块状态机。
-    CollaborationResourceSync m_resourceSync;
-    /// @brief 房主当前已经准备好的资源清单。
-    std::optional<ResourceManifest> m_resourceManifest;
-    /// @brief 已发送当前清单的访客集合。
-    std::unordered_set<PeerId> m_resourceManifestRecipients;
-    /// @brief 逻辑线程等待 UI 网络循环提交的本地操作。
-    std::deque<LocalOperation> m_localOperationQueue;
-    /// @brief 已交给可靠传输且等待房主提交回执的本地操作。
-    std::deque<LocalOperation> m_inFlightLocalOperations;
-    /// @brief 已交付且等待逻辑线程按修订顺序确认的物件编码基线。
-    std::deque<PendingObjectEncodingBaseline> m_pendingObjectEncodingBaselines;
-    /// @brief 保护本地操作队列。
-    std::mutex m_localOperationMutex;
-    /// @brief 当前房间是否接受逻辑线程发布的谱面变化。
-    std::atomic_bool m_acceptLocalMutations{ false };
-    /// @brief 本地队首因传输背压暂时无法提交时抑制重复错误日志。
-    bool m_localOperationSubmitBlocked = false;
-    /// @brief 远端回灌曾覆盖含待确认编辑的本地状态，需要由本人提交回执重放。
-    bool m_localStateNeedsRebase = false;
-    /// @brief 已收到但逻辑线程尚未确认应用的远端权威状态。
-    /// 由本地操作互斥锁保护，用于保证此期间产生的本地编辑在提交回执时取得
-    /// 一次合并后的权威结果，而不是仅收到轻量序号确认。
-    bool m_remoteStateApplyPending = false;
-    /// @brief 下一条成功编码的本地谱面变化序号。
-    std::uint64_t m_nextLocalMutationSequence{ 1 };
-    /// @brief 房主权威文档已经确认的最新本地变化序号。
-    /// 由本地操作互斥锁保护，并附加到后续所有物化结果，防止较早完成的后台
-    /// 快照在确认到达后反向覆盖本地状态。
-    std::uint64_t m_latestCommittedLocalMutationSequence{ 0 };
-    /// @brief 当前房间角色是否为房主。
-    std::atomic_bool m_hostRoleForObserver{ false };
-    /// @brief 房主是否已经排队初始完整快照。
-    std::atomic_bool m_initialSnapshotQueued{ false };
-    /// @brief 当前客户端是否已应用完整房主文档。
-    std::atomic_bool m_hasDocument{ false };
-    /// @brief 当前客户端的权限镜像。
-    /// @warning UI 线程在 Peer 更新后写，逻辑线程发布本地变更前读；使用
-    /// acquire/release 保证权限收紧可及时阻止后续增量编码。
-    std::atomic_uint32_t m_localPermissions{ 0U };
     /// @brief 房间启动时钟，用于日志相对时间。
     std::chrono::steady_clock::time_point m_startedAt;
     /// @brief 下一日志序号。
@@ -634,24 +523,6 @@ private:
     std::uint64_t m_nextChatSequence = 1;
     /// @brief 当前联机会话内的有界聊天记录。
     std::vector<CollaborationChatEntry> m_chatMessages;
-    /// @brief 主画布最近写入且等待节流发布的本地状态。
-    std::optional<ParticipantViewport> m_pendingLocalViewport;
-    /// @brief 最近一次成功交给 Peer 发布的本地状态。
-    std::optional<ParticipantViewport> m_lastPublishedLocalViewport;
-    /// @brief 连续本地 Seek 预览期间是否暂缓发送视口，直至最终位置提交。
-    bool m_localViewportPublishDeferred{ false };
-    /// @brief 允许下一次视口状态发送的时间点。
-    std::chrono::steady_clock::time_point m_nextViewportPublish;
-    /// @brief P2P 主画布状态的本地发送频率，限制为 5～60 Hz。
-    std::uint32_t m_viewportPublishRateHz = 10;
-    /// @brief 最新跟随请求是否等待完成，避免旧回复覆盖稳定身份意图。
-    bool m_followRequestPending{ false };
-    /// @brief 已尝试恢复跟随的目标会话；每次重连最多重新请求一次。
-    OperationSessionId m_followResumeSessionId;
-    /// @brief 已确认的持续跟随稳定身份；离线后保留以安全恢复同一参与者。
-    ParticipantId m_followedParticipantId;
-    /// @brief 当前房间的跟随音频选择，结束房间时恢复关闭。
-    bool m_followPlaybackEnabled{ false };
     /// @brief 尚未获准建立 P2P 连接的访客请求。
     std::vector<CollaborationPendingJoinRequest> m_pendingJoinRequests;
     /// @brief 无 Peer 时返回的空参与者表。
