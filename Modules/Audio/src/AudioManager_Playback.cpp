@@ -1,3 +1,4 @@
+#include "AudioManagerTimelinePlayback.h"
 #include "audio/AudioManager.h"
 #include "audio/AudioTimelineMixerNode.h"
 
@@ -85,13 +86,13 @@ ice::TimeStretchQuality toIceStretchQuality(
 /// 已自然结束的流需要先清除拉伸历史；暂停恢复则保留当前历史以连续输出。
 void AudioManager::play()
 {
-    if ( m_audioTimelineLoaded && m_audioTimelineNode ) {
-        const bool restartFinishedStream = m_audioTimelineNode->finished();
+    if ( m_timeline->m_loaded && m_timeline->m_node ) {
+        const bool restartFinishedStream = m_timeline->m_node->finished();
         // finished 表示上次 final 已提交，重新播放必须建立新的 discontinuity。
         if ( restartFinishedStream ) {
             resetMainTimeStretcher();
         }
-        m_audioTimelineNode->play();
+        m_timeline->m_node->play();
         if ( m_stretcher ) {
             // 先发布时间线请求，再解除下游暂停，防止拉取到旧停止状态。
             m_stretcher->set_paused(false);
@@ -104,8 +105,8 @@ void AudioManager::play()
 /// 同时暂停时间线时钟和拉伸器输出；恢复时不重置位置或 DSP 历史。
 void AudioManager::pause()
 {
-    if ( m_audioTimelineLoaded && m_audioTimelineNode ) {
-        m_audioTimelineNode->pause();
+    if ( m_timeline->m_loaded && m_timeline->m_node ) {
+        m_timeline->m_node->pause();
         if ( m_stretcher ) {
             // 下游暂停阻止已缓存采样在时间线冻结后继续送往设备。
             m_stretcher->set_paused(
@@ -119,8 +120,8 @@ void AudioManager::pause()
 /// Stop 是完整提交操作：重置时间线、拉伸历史和全部排定音效。
 void AudioManager::stop()
 {
-    if ( m_audioTimelineLoaded && m_audioTimelineNode ) {
-        m_audioTimelineNode->stop();
+    if ( m_timeline->m_loaded && m_timeline->m_node ) {
+        m_timeline->m_node->stop();
         // stop 改变上游 epoch，手动请求同时覆盖下游尚未观察到新 epoch 的窗口。
         resetMainTimeStretcher();
         if ( m_stretcher ) {
@@ -139,8 +140,8 @@ void AudioManager::stop()
 /// 才允许遍历并停止音效池。
 void AudioManager::seek(double seconds, AudioSeekMode mode)
 {
-    if ( m_audioTimelineLoaded && m_audioTimelineNode ) {
-        m_audioTimelineNode->seek(playbackSecondsToFrame(seconds));
+    if ( m_timeline->m_loaded && m_timeline->m_node ) {
+        m_timeline->m_node->seek(playbackSecondsToFrame(seconds));
         // 节点内部负责钳制到有效循环或时间线范围。
         if ( mode == AudioSeekMode::ScrubUpdate ) {
             // 时间线应用 seek 时会增加 epoch，主拉伸器的代际读取器会在音频
@@ -163,17 +164,17 @@ PlaybackStatus AudioManager::getStatus() const
     const auto snapshot = getAudioTimelineClockSnapshot();
     if ( !snapshot.valid ) {
         // 没有有效图时统一报告停止，不暴露内部未初始化状态。
-        if ( !m_audioTimelineLoaded || !m_audioTimelineNode ) {
+        if ( !m_timeline->m_loaded || !m_timeline->m_node ) {
             return PlaybackStatus::Stopped;
         }
-        const auto requestedState = m_audioTimelineNode->requestedState();
+        const auto requestedState = m_timeline->m_node->requestedState();
         if ( m_stretcher && m_stretcher->is_paused() ) {
             // 下游暂停时，节点的 Playing 请求尚不能形成可听播放。
             return requestedState == AudioTimelinePlaybackState::Paused
                        ? PlaybackStatus::Paused
                        : PlaybackStatus::Stopped;
         }
-        if ( m_audioTimelineNode->finished() ) {
+        if ( m_timeline->m_node->finished() ) {
             if ( m_auditionPlaying.load(std::memory_order_relaxed) )
                 return PlaybackStatus::Stopped;
             // final 输入仍在拉伸器时继续报告 Playing，直到输出完全排空。
@@ -210,11 +211,11 @@ double AudioManager::getCurrentTime() const
     const auto snapshot = getAudioTimelineClockSnapshot();
     if ( snapshot.valid ) return snapshot.positionSeconds();
     // 回退换算仍验证采样率，防止异常配置产生无穷或除零结果。
-    if ( !m_audioTimelineLoaded || !m_audioTimelineNode ) return 0.0;
+    if ( !m_timeline->m_loaded || !m_timeline->m_node ) return 0.0;
     const double sampleRate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
     if ( sampleRate <= 0.0 ) return 0.0;
-    return static_cast<double>(m_audioTimelineNode->positionFrame()) /
+    return static_cast<double>(m_timeline->m_node->positionFrame()) /
            sampleRate;
 }
 
@@ -222,9 +223,9 @@ AudioTimelineClockSnapshot
 AudioManager::getAudioTimelineClockSnapshot() const noexcept
 {
     // 空时间线仍可有效；只有尚未 load 或节点不存在时返回空快照。
-    if ( !m_audioTimelineLoaded || !m_audioTimelineNode ) return {};
+    if ( !m_timeline->m_loaded || !m_timeline->m_node ) return {};
 
-    auto snapshot = m_audioTimelineNode->clockSnapshot();
+    auto snapshot = m_timeline->m_node->clockSnapshot();
     snapshot.sampleRate =
         static_cast<std::uint32_t>(ice::ICEConfig::internal_format.samplerate);
     snapshot.playbackRate = m_speed;
@@ -261,11 +262,11 @@ AudioManager::getAudioTimelineClockSnapshot() const noexcept
 /// 时长属于资源定义，不除以全局播放倍率；倍率只改变实际经过的墙钟时间。
 double AudioManager::getTotalTime() const
 {
-    if ( !m_audioTimelineLoaded || !m_audioTimelineNode ) return 0.0;
+    if ( !m_timeline->m_loaded || !m_timeline->m_node ) return 0.0;
     const double sampleRate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
     if ( sampleRate <= 0.0 ) return 0.0;
-    return static_cast<double>(m_audioTimelineNode->timelineEndFrame()) /
+    return static_cast<double>(m_timeline->m_node->timelineEndFrame()) /
            sampleRate;
 }
 
@@ -400,10 +401,10 @@ void AudioManager::pauseAudition()
     // 读取的是请求状态，无需等待主音频块确认暂停或启动。
     // 只有非结束的主 Playing 请求需要共同下游继续工作。
     // 单独暂停歌曲；主谱面仍在播放时不能冻结共同下游。
-    const bool mainPlaying = m_audioTimelineNode &&
-                             m_audioTimelineNode->requestedState() ==
+    const bool mainPlaying = m_timeline->m_node &&
+                             m_timeline->m_node->requestedState() ==
                                  AudioTimelinePlaybackState::Playing &&
-                             !m_audioTimelineNode->finished();
+                             !m_timeline->m_node->finished();
     if ( m_stretcher ) m_stretcher->set_paused(!mainPlaying);
     resetMainTimeStretcher();
     if ( m_auditionStatus != PlaybackStatus::Stopped ) {
@@ -428,10 +429,10 @@ void AudioManager::stopAudition()
     if ( hadAudition ) {
         // 生命周期清理与暂停使用相同条件，空资源重复卸载不操作共享 DSP。
         // 不能用试听缓存状态推断主谱面是否需要输出。
-        const bool mainPlaying = m_audioTimelineNode &&
-                                 m_audioTimelineNode->requestedState() ==
+        const bool mainPlaying = m_timeline->m_node &&
+                                 m_timeline->m_node->requestedState() ==
                                      AudioTimelinePlaybackState::Playing &&
-                                 !m_audioTimelineNode->finished();
+                                 !m_timeline->m_node->finished();
         if ( m_stretcher ) m_stretcher->set_paused(!mainPlaying);
         resetMainTimeStretcher();
     }

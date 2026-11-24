@@ -1,3 +1,4 @@
+#include "AudioManagerTimelinePlayback.h"
 #include "BackgroundSpectrumAnalyzer.h"
 #include "audio/AudioManager.h"
 #include "audio/AudioTimelineMixerNode.h"
@@ -82,14 +83,14 @@ namespace
 // 音频在谱面零点前已经开始。非有限或负的 chartEndSeconds 回退到零，但片段尾端
 // 仍可独立延长时间线。缺失单个资源属于可恢复诊断，不使完整加载结果失败。
 //
-// m_audioTimelineResourceCache 使用弱引用连接 AudioTrack 与
+// m_timeline->m_resourceCache 使用弱引用连接 AudioTrack 与
 // PreparedTimelineAudio。 它只提供跨时间线和 HitEffect
 // 的复用线索，不拥有二者。每次加载和显式缓存 清理都会删除失效项，避免路径 key
 // 长期积累或文件重载后复用过期内容。
 //
 // 旧 BGM getter 只用于仍期待单轨的波形与兼容调用方。复合时间线超过一个事件
-// 时 m_bgmPath 必须为空，调用者应使用 fingerprint 判断完整时间线身份，不能把
-// 首个成功资源误认为整个谱面音频。
+// 时 m_timeline->m_singleFilePath 必须为空，调用者应使用 fingerprint
+// 判断完整时间线身份，不能把 首个成功资源误认为整个谱面音频。
 // 试听同步键则始终按自身文件规范路径生成，不与主时间线 fingerprint 混用。
 
 /// @brief 将音频文件路径转换为稳定的规范化绝对路径键。
@@ -225,7 +226,7 @@ bool waitForTimelineScheduleRetirement(AudioTimelineMixerNode& node,
 /// @return 可供时间线和音效池共享的不可变 PCM；输入无效或处理失败时为空。
 /// @warning 低频控制路径：缓存未命中且无候选时会执行完整离线 DSP。
 std::shared_ptr<const PreparedTimelineAudio>
-AudioManager::getOrPrepareAudioTimelineResource(
+AudioManager::TimelinePlayback::getOrPrepareResource(
     const std::string& filePath, const std::shared_ptr<ice::AudioTrack>& track,
     const AudioTrackConfig&                      resourceConfig,
     std::shared_ptr<const PreparedTimelineAudio> preparedCandidate)
@@ -236,11 +237,10 @@ AudioManager::getOrPrepareAudioTimelineResource(
     const auto processingCacheKey =
         makeAudioResourceProcessingCacheKey(filePath, resourceConfig);
     {
-        std::lock_guard lock(m_audioTimelineResourceCacheMutex);
-        const auto      existing =
-            m_audioTimelineResourceCache.find(processingCacheKey);
+        std::lock_guard lock(m_resourceCacheMutex);
+        const auto      existing = m_resourceCache.find(processingCacheKey);
         // 路径和设置相同仍需验证源音轨身份，避免复用替换前的文件内容。
-        if ( existing != m_audioTimelineResourceCache.end() &&
+        if ( existing != m_resourceCache.end() &&
              existing->second.sourceTrack.lock() == track ) {
             if ( auto prepared = existing->second.preparedAudio.lock() ) {
                 return prepared;
@@ -255,24 +255,50 @@ AudioManager::getOrPrepareAudioTimelineResource(
     }
     if ( preparedAudio ) {
         // 两端都用 weak_ptr，缓存本身不延长源轨或处理结果生命周期。
-        std::lock_guard lock(m_audioTimelineResourceCacheMutex);
+        std::lock_guard lock(m_resourceCacheMutex);
         // 控制侧与后台可能同时准备同一轨道；优先采用已经发布的 PCM 身份。
-        const auto existing =
-            m_audioTimelineResourceCache.find(processingCacheKey);
-        if ( existing != m_audioTimelineResourceCache.end() &&
+        const auto existing = m_resourceCache.find(processingCacheKey);
+        if ( existing != m_resourceCache.end() &&
              existing->second.sourceTrack.lock() == track ) {
             if ( auto published = existing->second.preparedAudio.lock() ) {
                 return published;
             }
         }
-        m_audioTimelineResourceCache.insert_or_assign(
-            processingCacheKey,
-            CachedTimelineResourceAudio{
-                .sourceTrack   = track,
-                .preparedAudio = preparedAudio,
-            });
+        m_resourceCache.insert_or_assign(processingCacheKey,
+                                         CachedTimelineResourceAudio{
+                                             .sourceTrack   = track,
+                                             .preparedAudio = preparedAudio,
+                                         });
     }
     return preparedAudio;
+}
+
+/// @brief 在短临界区内锁定 PCM 弱引用，交由调用者在锁外比较。
+std::shared_ptr<const PreparedTimelineAudio>
+AudioManager::TimelinePlayback::findPreparedResource(
+    const std::string& cacheKey) const
+{
+    const std::lock_guard lock(m_resourceCacheMutex);
+    const auto            entry = m_resourceCache.find(cacheKey);
+    return entry == m_resourceCache.end() ? nullptr
+                                          : entry->second.preparedAudio.lock();
+}
+
+/// @brief 删除已无 PCM 或源音轨的条目，避免索引随工程切换增长。
+void AudioManager::TimelinePlayback::pruneResourceCache()
+{
+    std::lock_guard lock(m_resourceCacheMutex);
+    std::erase_if(m_resourceCache, [](const auto& cacheEntry) {
+        return cacheEntry.second.sourceTrack.expired() ||
+               cacheEntry.second.preparedAudio.expired();
+    });
+}
+
+/// @brief 关闭路径清空 DSP 缓存，各来源的释放不依赖缓存锁。
+void AudioManager::TimelinePlayback::clearResourceCache()
+{
+    const std::lock_guard lock(m_resourceCacheMutex);
+    m_resourceCache.clear();
 }
 
 /// @brief 在非实时路径准备全部资源并替换复合音频时间线。
@@ -300,9 +326,23 @@ AudioTimelineLoadResult AudioManager::loadAudioTimeline(
 std::shared_ptr<PreparedAudioTimeline> AudioManager::prepareAudioTimeline(
     const std::vector<AudioTimelineLoadEvent>& events)
 {
+    return m_timeline->prepare(
+        events, m_audioPool.get(), m_threadPool, m_decodingMode);
+}
+
+/// @brief 批量提交解码任务并按事件准备片段。
+/// @param pool 管理器的文件缓存，后台准备结束前必须保持有效。
+/// @param threadPool 由应用持有的任务池；后端未初始化时为空。
+/// @param decodingMode 由控制线程独立发布，只决定下一次文件加载的策略。
+/// @warning 时间线准备路径，可能等待解码和处理完整 PCM。
+std::shared_ptr<PreparedAudioTimeline> AudioManager::TimelinePlayback::prepare(
+    const std::vector<AudioTimelineLoadEvent>& events, ice::AudioPool* pool,
+    ice::ThreadPool*                              threadPool,
+    const std::atomic<Config::AudioDecodingMode>& decodingMode)
+{
     auto  prepared = std::make_shared<PreparedAudioTimeline>();
     auto& result   = prepared->m_result;
-    if ( !m_audioPool || !m_threadPool || !m_audioTimelineNode ) {
+    if ( !pool || !threadPool || !m_node ) {
         result.diagnostics.push_back(AudioTimelineLoadDiagnostic{
             .code    = AudioTimelineLoadDiagnosticCode::AudioSystemUnavailable,
             .message = "音频系统尚未初始化",
@@ -340,13 +380,12 @@ std::shared_ptr<PreparedAudioTimeline> AudioManager::prepareAudioTimeline(
         // 同一文件只要有资源级离线 DSP，就完整缓存以提供稳定 PCM 视图。
         const bool needsOfflinePcm = offlinePaths.contains(event.filePath);
         const auto strategy =
-            !needsOfflinePcm &&
-                    decodingMode() == Config::AudioDecodingMode::Streaming
+            !needsOfflinePcm && decodingMode.load(std::memory_order_relaxed) ==
+                                    Config::AudioDecodingMode::Streaming
                 ? ice::CachingStrategy::STREAMING
                 : ice::CachingStrategy::CACHY;
         auto track =
-            m_audioPool->get_or_load(*m_threadPool, event.filePath, strategy)
-                .lock();
+            pool->get_or_load(*threadPool, event.filePath, strategy).lock();
         // 失败也记录空项，后续同路径事件不会重复发起相同加载任务。
         tracksByPath.emplace(event.filePath, std::move(track));
     }
@@ -393,7 +432,7 @@ std::shared_ptr<PreparedAudioTimeline> AudioManager::prepareAudioTimeline(
             preparedAudio = existingPreparedAudio->second;
         } else {
             // 跨加载弱缓存命中或新建 DSP 的细节由统一 helper 负责。
-            preparedAudio = getOrPrepareAudioTimelineResource(
+            preparedAudio = getOrPrepareResource(
                 event.filePath, track, event.resourceConfig);
             preparedAudioByProcessingKey.emplace(processingCacheKey,
                                                  preparedAudio);
@@ -441,17 +480,30 @@ AudioTimelineLoadResult AudioManager::installAudioTimeline(
     PreparedAudioTimeline& prepared, double chartEndSeconds,
     const std::string& fingerprint, const std::vector<AudioTimelineStop>& stops)
 {
+    return m_timeline->install(
+        *this, prepared, chartEndSeconds, fingerprint, stops);
+}
+
+/// @brief 发布片段状态，重新同步依赖新时间线身份的混音配置。
+/// @param manager 所属控制门面，负责重新协调拉伸器和效果总线。
+/// @param prepared 后台准备所得的片段与诊断，提交时移交所有权。
+/// @return 诊断、已提交片段数和可供回调接管的调度代次。
+AudioTimelineLoadResult AudioManager::TimelinePlayback::install(
+    AudioManager& manager, PreparedAudioTimeline& prepared,
+    double chartEndSeconds, const std::string& fingerprint,
+    const std::vector<AudioTimelineStop>& stops)
+{
     auto result = std::move(prepared.m_result);
     // 准备失败时保留现有图，调用方负责决定是否停用旧时间线。
-    if ( !m_audioTimelineNode || !m_audioPool || !m_threadPool ) return result;
+    if ( !m_node || !manager.m_audioPool || !manager.m_threadPool )
+        return result;
 
     const double normalizedChartEnd =
         std::isfinite(chartEndSeconds) ? std::max(chartEndSeconds, 0.0) : 0.0;
     // MixerNode 会取谱面尾端和全部片段尾端的最大值。
-    m_audioTimelineBaseClips = std::move(prepared.m_clips);
-    m_audioTimelineRequestedEndFrame =
-        secondsToTimelineFrame(normalizedChartEnd);
-    m_audioTimelineMaximumProcessFrames =
+    m_baseClips         = std::move(prepared.m_clips);
+    m_requestedEndFrame = secondsToTimelineFrame(normalizedChartEnd);
+    m_maximumProcessFrames =
         std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U);
     // 等待定义在低频载入阶段转换为引擎帧，不在实时回调解析秒数。
     // 使用与歌曲相同的采样率，倍速仅由共享拉伸器处理一次。
@@ -466,43 +518,43 @@ AudioTimelineLoadResult AudioManager::installAudioTimeline(
         preparedStops.push_back({ secondsToTimelineFrame(stop.position),
                                   secondsToTimelineFrame(stop.duration) });
         // 最后一个 STOP 仍需进入边界处理，保留其后一帧的正常结束位置。
-        m_audioTimelineRequestedEndFrame =
-            std::max(m_audioTimelineRequestedEndFrame,
-                     secondsToTimelineFrame(stop.position + 0.001));
+        m_requestedEndFrame = std::max(
+            m_requestedEndFrame, secondsToTimelineFrame(stop.position + 0.001));
     }
     // Key 路由与调度一同刷新，避免沿用上个无 STOP 谱面的旁路。
     // 卸载时恢复用户选项，不把此次强制路由写回持久配置。
-    m_timelineHasStops = !preparedStops.empty();
-    updateSFXSyncSpeedRouting(Config::AppConfig::instance()
-                                  .getEditorSettings()
-                                  .sfxConfig.hitSfxSyncSpeed);
-    result.scheduleGeneration = m_audioTimelineNode->replaceSchedule(
-        m_audioTimelineBaseClips,
-        m_audioTimelineRequestedEndFrame,
-        m_audioTimelineMaximumProcessFrames,
-        std::move(preparedStops));
+    m_hasStops = !preparedStops.empty();
+    manager.updateSFXSyncSpeedRouting(Config::AppConfig::instance()
+                                          .getEditorSettings()
+                                          .sfxConfig.hitSfxSyncSpeed);
+    result.scheduleGeneration =
+        m_node->replaceSchedule(m_baseClips,
+                                m_requestedEndFrame,
+                                m_maximumProcessFrames,
+                                std::move(preparedStops));
     // 发布新代次后清理拉伸历史，避免上一调度残留进入首个 block。
-    resetMainTimeStretcher();
-    m_audioTimelineLoaded = true;
+    manager.resetMainTimeStretcher();
+    m_loaded = true;
     // 先保存完整兼容状态，再刷新图增益和全局拉伸参数。
-    m_audioTimelineFingerprint      = fingerprint;
-    m_audioTimelineClipCount        = m_audioTimelineNode->clipCount();
-    m_missingAudioTimelineClipCount = result.missingClipCount;
+    m_fingerprint      = fingerprint;
+    m_clipCount        = m_node->clipCount();
+    m_missingClipCount = result.missingClipCount;
     // 调度已经就位，长度与这次准备的首轨公开为一个值。
     // 读者无需接触 Mixer 或先读音轨再读取可能已经更新的时长。
-    publishBgmAnalysisSource(std::move(prepared.m_firstTrack), getTotalTime());
-    m_bgmPath = std::move(prepared.m_singlePath);
+    publishAnalysisSource(std::move(prepared.m_firstTrack),
+                          manager.getTotalTime());
+    m_singleFilePath = std::move(prepared.m_singlePath);
     // 只有严格单事件时间线可暴露旧“单 BGM 路径”语义。
-    m_bgmSyncKey = fingerprint;
+    m_syncKey = fingerprint;
 
-    refreshAudioTimelineVolume();
+    manager.refreshAudioTimelineVolume();
     // setter 同步现有 stretcher，使换图后延续用户预览参数。
-    setPlaybackSpeed(m_speed);
-    setPlaybackPitch(getPlaybackPitch());
-    setPlaybackQuality(m_playbackQuality);
+    manager.setPlaybackSpeed(manager.m_speed);
+    manager.setPlaybackPitch(manager.getPlaybackPitch());
+    manager.setPlaybackQuality(manager.m_playbackQuality);
 
     result.success         = true;
-    result.loadedClipCount = m_audioTimelineClipCount;
+    result.loadedClipCount = m_clipCount;
     XINFO(
         "Audio timeline loaded: sources={}, prepared={}, clips={}, missing={}, "
         "end={}s, fingerprint={}",
@@ -510,7 +562,7 @@ AudioTimelineLoadResult AudioManager::installAudioTimeline(
         result.preparedResourceCount,
         result.loadedClipCount,
         result.missingClipCount,
-        getTotalTime(),
+        manager.getTotalTime(),
         fingerprint);
     return result;
 }
@@ -523,66 +575,71 @@ AudioTimelineLoadResult AudioManager::installAudioTimeline(
 /// @warning 低频项目生命周期路径，可能等待音频回调并释放完整 PCM。
 void AudioManager::unloadAudioTimeline(bool waitForRetirement)
 {
-    if ( !m_audioTimelineNode || !m_audioTimelineLoaded ) {
+    m_timeline->unload(*this, waitForRetirement);
+}
+
+/// @brief 退役旧调度，保留尚未被设备接管的节点快照。
+/// @details 先撤销时间线状态，随后只在调用者要求时等待设备切换代次。
+void AudioManager::TimelinePlayback::unload(AudioManager& manager,
+                                            bool          waitForRetirement)
+{
+    if ( !m_node || !m_loaded ) {
         return;
     }
 
-    static_cast<void>(m_audioTimelineNode->reclaimRetiredSchedules());
+    static_cast<void>(m_node->reclaimRetiredSchedules());
     // 先停止时钟和循环，再清理可能跨项目存活的排定音效。
-    m_audioTimelineNode->stop();
-    m_audioTimelineNode->clearLoop();
-    clearAllScheduledSoundEffects();
-    const std::uint64_t emptyScheduleGeneration =
-        m_audioTimelineNode->replaceSchedule(
-            {},
-            0,
-            std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U));
+    m_node->stop();
+    m_node->clearLoop();
+    manager.clearAllScheduledSoundEffects();
+    const std::uint64_t emptyScheduleGeneration = m_node->replaceSchedule(
+        {}, 0, std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U));
     // 空调度仍有 generation，用于证明回调不再引用旧 clip 快照。
-    m_audioTimelineBaseClips.clear();
-    m_timelineHasStops = false;
-    updateSFXSyncSpeedRouting(Config::AppConfig::instance()
-                                  .getEditorSettings()
-                                  .sfxConfig.hitSfxSyncSpeed);
+    m_baseClips.clear();
+    m_hasStops = false;
+    manager.updateSFXSyncSpeedRouting(Config::AppConfig::instance()
+                                          .getEditorSettings()
+                                          .sfxConfig.hitSfxSyncSpeed);
     // 控制线程副本立即清空；退休调度由回调接管后再释放。
-    m_audioTimelineRequestedEndFrame    = 0;
-    m_audioTimelineMaximumProcessFrames = 1U;
-    resetMainTimeStretcher();
+    m_requestedEndFrame    = 0;
+    m_maximumProcessFrames = 1U;
+    manager.resetMainTimeStretcher();
     // discontinuity 丢弃旧调度已经缓存但尚未输出的拉伸采样。
-    m_audioTimelineLoaded = false;
-    m_audioTimelineFingerprint.clear();
-    m_audioTimelineClipCount        = 0U;
-    m_missingAudioTimelineClipCount = 0U;
-    publishBgmAnalysisSource({}, 0.0);
-    m_bgmPath.clear();
-    m_bgmSyncKey.clear();
+    m_loaded = false;
+    m_fingerprint.clear();
+    m_clipCount        = 0U;
+    m_missingClipCount = 0U;
+    publishAnalysisSource({}, 0.0);
+    m_singleFilePath.clear();
+    m_syncKey.clear();
     // 交互模式同样先清理可查询状态，随后才决定如何让设备接管新代次。
     // 暂停设备时不等待确认，否则调用线程可能无法在合理时间内继续运行。
     if ( !waitForRetirement ) {
         // 停用立即对调用方生效。设备的下一次有效拉取会接管空调度；
         // 后续调度发布或 AudioManager 关闭时回收仍由节点持有的旧状态。
-        if ( m_stretcher ) {
-            m_stretcher->set_paused(
-                !m_auditionPlaying.load(std::memory_order_relaxed));
+        if ( manager.m_stretcher ) {
+            manager.m_stretcher->set_paused(
+                !manager.m_auditionPlaying.load(std::memory_order_relaxed));
         }
         return;
     }
-    if ( m_stretcher ) {
+    if ( manager.m_stretcher ) {
         // 停止状态下拉伸器不会拉取上游；短暂恢复空时间线分支，确保音频
         // 回调能在下一 block 接管空调度，期间不会产生可听输出。
-        m_stretcher->set_paused(false);
+        manager.m_stretcher->set_paused(false);
     }
-    if ( !waitForTimelineScheduleRetirement(*m_audioTimelineNode,
+    if ( !waitForTimelineScheduleRetirement(*m_node,
                                             emptyScheduleGeneration) ) {
         XWARN(
             "Timed out waiting for the audio callback to retire the unloaded "
             "timeline schedule.");
     }
-    if ( m_stretcher ) {
+    if ( manager.m_stretcher ) {
         // 卸载主谱面不能暂停仍在播放的资源试听。
-        m_stretcher->set_paused(
-            !m_auditionPlaying.load(std::memory_order_relaxed));
+        manager.m_stretcher->set_paused(
+            !manager.m_auditionPlaying.load(std::memory_order_relaxed));
     }
-    static_cast<void>(releaseUnusedTrackCache());
+    static_cast<void>(manager.releaseUnusedTrackCache());
     // 最后清理 AudioPool，避免旧项目源轨被缓存自身长期保活。
     XINFO("Audio timeline unloaded.");
 }
@@ -591,28 +648,28 @@ void AudioManager::unloadAudioTimeline(bool waitForRetirement)
 /// @return 未加载时为空字符串。
 const std::string& AudioManager::getLoadedAudioTimelineFingerprint() const
 {
-    return m_audioTimelineFingerprint;
+    return m_timeline->m_fingerprint;
 }
 
 /// @brief 获取当前有效采样片段数量。
 /// @return 调度表中的片段数量。
 std::size_t AudioManager::getLoadedAudioTimelineClipCount() const
 {
-    return m_audioTimelineClipCount;
+    return m_timeline->m_clipCount;
 }
 
 /// @brief 获取上次加载时缺失的片段数量。
 /// @return 缺失或无法解码的事件数量。
 std::size_t AudioManager::getMissingAudioTimelineClipCount() const
 {
-    return m_missingAudioTimelineClipCount;
+    return m_timeline->m_missingClipCount;
 }
 
 /// @brief 判断当前是否已构造时间线时钟。
 /// @return 即使零片段时间线也在已构造时返回 true。
 bool AudioManager::hasLoadedAudioTimeline() const
 {
-    return m_audioTimelineLoaded;
+    return m_timeline->m_loaded;
 }
 
 /// @brief 设置整个玩家打击音区的运行时静音覆盖。
@@ -810,15 +867,15 @@ float AudioManager::getKeySoundEffectGroupGain(
 /// 边界。具体范围钳制和最小宽度由 MixerNode 统一验证。
 bool AudioManager::setAudioTimelineLoop(double startSeconds, double endSeconds)
 {
-    if ( !m_audioTimelineLoaded || !m_audioTimelineNode ||
+    if ( !m_timeline->m_loaded || !m_timeline->m_node ||
          !std::isfinite(startSeconds) || !std::isfinite(endSeconds) ||
          startSeconds >= endSeconds ) {
         return false;
     }
     // 先清理下游历史，再把新范围作为控制命令交给时间线节点。
     resetMainTimeStretcher();
-    return m_audioTimelineNode->setLoop({ secondsToTimelineFrame(startSeconds),
-                                          secondsToTimelineFrame(endSeconds) });
+    return m_timeline->m_node->setLoop({ secondsToTimelineFrame(startSeconds),
+                                         secondsToTimelineFrame(endSeconds) });
 }
 
 /// @brief 关闭主时间线循环并清除拉伸历史。
@@ -826,9 +883,9 @@ bool AudioManager::setAudioTimelineLoop(double startSeconds, double endSeconds)
 /// 未加载时保持幂等；有效时间线中先清理下游，再撤销上游循环边界。
 void AudioManager::clearAudioTimelineLoop()
 {
-    if ( m_audioTimelineLoaded && m_audioTimelineNode ) {
+    if ( m_timeline->m_loaded && m_timeline->m_node ) {
         resetMainTimeStretcher();
-        m_audioTimelineNode->clearLoop();
+        m_timeline->m_node->clearLoop();
     }
 }
 
@@ -866,7 +923,7 @@ void AudioManager::unloadBGM()
 /// @brief 将一份轨道与时间线时长同时提交给 UI。
 /// @param track 由调度准备阶段提供，空值代表清除可分析来源。
 /// @param duration 调度提交时的复合长度，单位为秒。
-void AudioManager::publishBgmAnalysisSource(
+void AudioManager::TimelinePlayback::publishAnalysisSource(
     std::shared_ptr<ice::AudioTrack> track, double duration)
 {
     // 参数接收旧音轨，离开锁域后才允许释放解码器和 PCM。
@@ -880,6 +937,13 @@ void AudioManager::publishBgmAnalysisSource(
 
 /// @brief 获取单次发布中的轨道、时长与代次。
 AudioManager::BgmAnalysisSource AudioManager::getBgmAnalysisSource() const
+{
+    return m_timeline->analysisSource();
+}
+
+/// @brief 读取同一代次的来源与时长。
+AudioManager::BgmAnalysisSource
+AudioManager::TimelinePlayback::analysisSource() const
 {
     std::lock_guard lock(m_bgmAnalysisMutex);
     return m_bgmAnalysisSource;
@@ -896,7 +960,7 @@ std::shared_ptr<ice::AudioTrack> AudioManager::getBGMTrack() const
 /// @return 复合时间线或未加载时返回空字符串。
 const std::string& AudioManager::getLoadedBGMPath() const
 {
-    return m_bgmPath;
+    return m_timeline->m_singleFilePath;
 }
 
 /// @brief 将音轨加载到独立试听通道并接入主混音器。
@@ -1002,7 +1066,7 @@ const std::string& AudioManager::getLoadedAuditionPath() const
 /// @return 完整时间线指纹；未加载时为空。
 const std::string& AudioManager::getLoadedBGMSyncKey() const
 {
-    return m_bgmSyncKey;
+    return m_timeline->m_syncKey;
 }
 
 /// @brief 获取独立试听文件的规范化绝对路径键。
@@ -1032,13 +1096,7 @@ std::size_t AudioManager::releaseUnusedTrackCache()
 {
     if ( !m_audioPool ) return 0U;
 
-    {
-        std::lock_guard lock(m_audioTimelineResourceCacheMutex);
-        std::erase_if(m_audioTimelineResourceCache, [](const auto& cacheEntry) {
-            return cacheEntry.second.sourceTrack.expired() ||
-                   cacheEntry.second.preparedAudio.expired();
-        });
-    }
+    m_timeline->pruneResourceCache();
     // 音轨析构可能归还大块 PCM 或清理后端解码器；保持在弱缓存锁外。
     // AudioPool 对自己的索引有独立同步，不让析构阻塞弱值查询。
     const std::size_t releasedCount = m_audioPool->release_unused();

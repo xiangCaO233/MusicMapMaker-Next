@@ -1,3 +1,5 @@
+#include "AudioManagerSoundEffectBank.h"
+#include "AudioManagerTimelinePlayback.h"
 #include "audio/AudioManager.h"
 #include "audio/AudioTimelineMixerNode.h"
 #include "audio/SoundEffectPool.h"
@@ -104,7 +106,7 @@ void AudioManager::refreshAuditionTrackVolume()
     // 歌曲服从 BGM 总控；音效仍服从 SFX，节拍器不被歌曲总线静音。
     const bool music           = m_auditionTrackType == AudioTrackType::Main;
     float      effectiveVolume = m_auditionTrackVolume * m_globalVolume *
-                                 (music ? m_bgmGain : m_sfxGain);
+                            (music ? m_bgmGain : m_sfxGain);
     if ( m_auditionTrackMuted || m_globalMuted ||
          (music ? m_bgmGainMuted : m_sfxGainMuted) ) {
         effectiveVolume = 0.0f;
@@ -125,7 +127,7 @@ float AudioManager::getAuditionEffectiveVolume() const
 /// 时间线未加载时不做节点操作，成员值仍会在后续加载流程中使用。
 void AudioManager::refreshAudioTimelineVolume()
 {
-    if ( !m_audioTimelineNode ) {
+    if ( !m_timeline->m_node ) {
         return;
     }
 
@@ -134,7 +136,7 @@ void AudioManager::refreshAudioTimelineVolume()
     if ( m_mainTrackMuted || m_globalMuted || m_bgmGainMuted ) {
         effectiveVolume = 0.0F;
     }
-    m_audioTimelineNode->setMasterGain(effectiveVolume);
+    m_timeline->m_node->setMasterGain(effectiveVolume);
 }
 
 /// @brief 设置全局音量、保存配置并刷新所有轨道有效音量。
@@ -202,7 +204,7 @@ float AudioManager::getOutputLevelR() const
 /// @return 左声道电平。
 float AudioManager::getMainTrackLevelL() const
 {
-    if ( m_audioTimelineNode ) return m_audioTimelineNode->leftLevel();
+    if ( m_timeline->m_node ) return m_timeline->m_node->leftLevel();
     return 0.0f;
 }
 
@@ -210,7 +212,7 @@ float AudioManager::getMainTrackLevelL() const
 /// @return 右声道电平。
 float AudioManager::getMainTrackLevelR() const
 {
-    if ( m_audioTimelineNode ) return m_audioTimelineNode->rightLevel();
+    if ( m_timeline->m_node ) return m_timeline->m_node->rightLevel();
     return 0.0f;
 }
 
@@ -219,8 +221,8 @@ float AudioManager::getMainTrackLevelR() const
 /// @return 左声道电平。
 float AudioManager::getSFXPoolLevelL(const std::string& key) const
 {
-    auto it = m_sfxPools.find(key);
-    if ( it != m_sfxPools.end() ) {
+    auto it = m_soundEffects->m_sfxPools.find(key);
+    if ( it != m_soundEffects->m_sfxPools.end() ) {
         if ( auto mixer = it->second->getMixer() ) {
             return mixer->get_left_level();
         }
@@ -233,8 +235,8 @@ float AudioManager::getSFXPoolLevelL(const std::string& key) const
 /// @return 右声道电平。
 float AudioManager::getSFXPoolLevelR(const std::string& key) const
 {
-    auto it = m_sfxPools.find(key);
-    if ( it != m_sfxPools.end() ) {
+    auto it = m_soundEffects->m_sfxPools.find(key);
+    if ( it != m_soundEffects->m_sfxPools.end() ) {
         if ( auto mixer = it->second->getMixer() ) {
             return mixer->get_right_level();
         }
@@ -256,7 +258,7 @@ float AudioManager::getGlobalVolume() const
 void AudioManager::refreshSFXEffectiveVolumes()
 {
     // 低频控制路径遍历池；实时播放只读取池内已发布的有效音量。
-    for ( auto& [key, pool] : m_sfxPools ) {
+    for ( auto& [key, pool] : m_soundEffects->m_sfxPools ) {
         pool->updateEffectiveVolume(getSFXEffectiveGain(key),
                                     getSFXPoolMute(key));
     }

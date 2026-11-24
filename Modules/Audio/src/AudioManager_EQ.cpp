@@ -1,3 +1,4 @@
+#include "AudioManagerTimelinePlayback.h"
 #include "BackgroundSpectrumAnalyzer.h"
 #include "audio/AudioManager.h"
 #include "audio/AudioTimelineMixerNode.h"
@@ -58,9 +59,9 @@ void AudioManager::createMainTrackEQ(EQPreset preset)
         std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U));
 
     // 如果当前已加载复合时间线，需要热插拔全局预览 EQ。
-    if ( m_audioTimelineNode && m_preStretcherMixer ) {
+    if ( m_timeline->m_node && m_preStretcherMixer ) {
         std::shared_ptr<ice::IAudioNode> input = m_bgmSpectrumCapture;
-        if ( !input ) input = m_audioTimelineNode;
+        if ( !input ) input = m_timeline->m_node;
         newEQ->set_inputnode(input);
 
         // replace_source 需要当前实际路由身份；没有旧 EQ 时当前路由就是 input。
@@ -87,9 +88,9 @@ void AudioManager::destroyMainTrackEQ()
 {
     if ( !m_mainEQ ) return;
 
-    if ( m_audioTimelineNode && m_preStretcherMixer ) {
+    if ( m_timeline->m_node && m_preStretcherMixer ) {
         std::shared_ptr<ice::IAudioNode> restoredRoute = m_bgmSpectrumCapture;
-        if ( !restoredRoute ) restoredRoute = m_audioTimelineNode;
+        if ( !restoredRoute ) restoredRoute = m_timeline->m_node;
         if ( !m_preStretcherMixer->replace_source(m_mainEQ, restoredRoute) ) {
             XERROR(
                 "Failed to preserve main timeline route while destroying EQ.");
