@@ -22,11 +22,13 @@
 
   已验证。将保存调度、后台任务、文件哈希与资源改名映射归入 Persistence，将时间点和批注快照归入 TableProjection。原命令队列继续负责保存顺序。Linux RelWithDebInfo 全量构建及 18 项相关 CTest 通过。同一 Ninja 构建的活动对象依赖数如下。BeatmapSession.h 53,BeatmapSession_Domains.h 4。
 
-- [ ] **R64 · P0 · AudioManager 同时拥有时间线安装退休与音效资产池**
+- [x] **R64 · P0 · AudioManager 同时拥有时间线安装退休与音效资产池**
 
   44 个对象依赖；私有准备缓存的锁与 map、时间线 clip、音效资产池直接影响公开布局，拆成 BGM/SFX 实现文件并未隔离所有权。 门面保留公有 DTO。按现有锁和寿命把准备/安装/退休放入 TimelinePlayback，把音效加载池放入 SoundEffectBank；回调持有稳定节点。设备与后台工作先停，再释放组件；验证时间线切换、重启与并发音效加载。
 
   [AudioManager.h L792](../Modules/Audio/include/audio/AudioManager.h#L792)、[AudioManager_BGM.cpp L300](../Modules/Audio/src/AudioManager_BGM.cpp#L300)
+
+  已验证。将时间线准备、安装、退休与分析源归入 TimelinePlayback，将音效池和后台加载归入 SoundEffectBank。保留公开入口及音频回调节点的稳定地址。Linux RelWithDebInfo 全量构建及 11 项相关 CTest 通过。同一 Ninja 构建的活动对象依赖数如下。AudioManager.h 44,AudioManagerTimelinePlayback.h 6,AudioManagerSoundEffectBank.h 4。
 
 - [ ] **R65 · P0 · CollaborationRoom 同时承担文档事务、目录连接与资源收发**
 

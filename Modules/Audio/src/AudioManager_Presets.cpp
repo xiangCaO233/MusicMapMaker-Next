@@ -1,7 +1,7 @@
 #include "audio/AudioManager.h"
 #include "config/EditorSettings.h"
 
-#include "AudioManagerSoundEffectLoadingState.h"
+#include "AudioManagerSoundEffectBank.h"
 #include "audio/KeySoundControl.h"
 #include "audio/SoundEffectPool.h"
 #include "config/AppConfig.h"
@@ -48,12 +48,16 @@ void AudioManager::applyAudioPreset(bool applyPlayback)
     // 尚未加载的池后续从 SFX 配置读取覆盖值，无需为切换预设强制加载。
     // 只扫描登记表，不触碰实体系统或执行文件探测。
     // 只借用稳定私有状态中的登记，不复制容器或延长资源所有权。
-    for ( auto& [key, registration] : m_sfxLoading->m_registeredSoundEffects ) {
+    for ( auto& [key, registration] :
+          m_soundEffects->m_registeredSoundEffects ) {
+        // 工程轨的增益来自独立的项目配置，不消费客户端预设。
         if ( registration.m_usesProjectResourceConfig ) continue;
         const auto gain = sfx.permanentSfxVolumes.find(key);
         const auto mute = sfx.permanentSfxMutes.find(key);
-        m_sfxMutes[key] = mute != sfx.permanentSfxMutes.end() && mute->second;
-        if ( auto pool = m_sfxPools.find(key); pool != m_sfxPools.end() ) {
+        m_soundEffects->m_sfxMutes[key] =
+            mute != sfx.permanentSfxMutes.end() && mute->second;
+        if ( auto pool = m_soundEffects->m_sfxPools.find(key);
+             pool != m_soundEffects->m_sfxPools.end() ) {
             pool->second->setVolume(gain != sfx.permanentSfxVolumes.end()
                                         ? gain->second
                                         : registration.m_defaultVolume);

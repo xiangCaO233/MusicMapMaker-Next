@@ -11,9 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace ice
@@ -33,12 +31,9 @@ class GraphicEqualizer;
 namespace MMM::Audio
 {
 
-class SoundEffectPool;
 class AuditionSourceMixerNode;
 class KeySoundControlBank;
-class AudioTimelineMixerNode;
 class PreparedTimelineAudio;
-struct PreparedTimelineClip;
 struct PreparedAudioTimeline;
 struct BackgroundSpectrumLevels;
 class BackgroundSpectrumAnalyzer;
@@ -830,24 +825,6 @@ private:
                                  double                  leadInSeconds,
                                  bool usesProjectResourceConfig);
 
-    /// @brief 查找或建立自动采样与 HitEffect 共用的资源 DSP PCM。
-    /// @param filePath 音频文件绝对路径。
-    /// @param track 已完成解码的原始音轨。
-    /// @param resourceConfig 资源 DSP 配置。
-    /// @param preparedCandidate 后台线程可预先提供的处理结果。
-    /// @return 缓存命中或处理成功时返回共享只读 PCM。
-    /// @warning 低频控制路径：缓存未命中且无候选时会执行完整离线 DSP。
-    std::shared_ptr<const PreparedTimelineAudio>
-    getOrPrepareAudioTimelineResource(
-        const std::string&                           filePath,
-        const std::shared_ptr<ice::AudioTrack>&      track,
-        const AudioTrackConfig&                      resourceConfig,
-        std::shared_ptr<const PreparedTimelineAudio> preparedCandidate = {});
-
-    /// @brief 等待所有后台音效文件探测任务完成。
-    /// @warning 仅允许在 AudioManager 关闭路径调用，会阻塞等待线程池任务。
-    void waitForQueuedSoundEffectLoads();
-
     /// @brief 刷新所有音效池当前播放节点的有效音量。
     void refreshSFXEffectiveVolumes();
 
@@ -921,68 +898,13 @@ private:
     /// @brief OpenAL 空间化输出配置缓存。
     Config::OpenALSpatialConfig m_openALSpatialConfig;
 
-    /// @brief 发布一份完整可视化来源，旧音轨所有权在锁外释放。
-    void publishBgmAnalysisSource(std::shared_ptr<ice::AudioTrack> track,
-                                  double                           duration);
-    /// @brief 保护分析来源交换，不用于加载、设备访问或实时回调。
-    mutable std::mutex m_bgmAnalysisMutex;
-    /// @brief 独立发布的可视化音轨、时长和代次。
-    BgmAnalysisSource m_bgmAnalysisSource;
-
-    /// @brief 当前加载的主音轨文件路径。
-    std::string m_bgmPath;
-
-    /// @brief 当前主音轨文件的规范化绝对路径键。
-    std::string m_bgmSyncKey;
-
     /// @brief UI、逻辑线程和音频线程共享的固定容量 Key 音控制库。
     std::unique_ptr<KeySoundControlBank> m_keySoundControls;
 
-    /// @brief 当前自动采样时间线的唯一传输和混音节点。
-    std::shared_ptr<AudioTimelineMixerNode> m_audioTimelineNode;
-
-    /// @brief 稳定输出节点中是否已经提交一份谱面时间线。
-    bool m_audioTimelineLoaded{ false };
-
-    /// @brief 当前完整自动采样时间线的稳定指纹。
-    std::string m_audioTimelineFingerprint;
-
-    /// @brief 当前有效自动采样片段数量。
-    std::size_t m_audioTimelineClipCount{ 0U };
-
-    /// @brief 未应用运行时逐轨静音的当前自动采样片段表。
-    std::vector<PreparedTimelineClip> m_audioTimelineBaseClips;
-    /// @brief 当前谱面含暂停事件时强制 Key 音走统一拉伸前级。
-    /// @warning 只由逻辑控制线程读写，音频线程消费独立不可变调度。
-    bool m_timelineHasStops{ false };
-
-    /// @brief 当前自动采样时间线由谱面内容要求的排除结束帧。
-    std::int64_t m_audioTimelineRequestedEndFrame{ 0 };
-
-    /// @brief 当前自动采样时间线每个回调 block 的最大帧数。
-    std::size_t m_audioTimelineMaximumProcessFrames{ 1U };
-
-    /// @brief 上次加载时缺失的自动采样片段数量。
-    std::size_t m_missingAudioTimelineClipCount{ 0U };
-
-    /// @brief 跨相邻时间线提交复用的资源级 DSP 弱缓存项。
-    struct CachedTimelineResourceAudio {
-        /// @brief 生成 PCM 时对应的原始音轨。
-        std::weak_ptr<ice::AudioTrack> sourceTrack;
-
-        /// @brief 已完成资源级 DSP 的只读 PCM。
-        std::weak_ptr<const PreparedTimelineAudio> preparedAudio;
-    };
-
-    /// @brief 短时保护后台准备与控制侧查询共用的弱缓存，锁内禁止执行 DSP。
-    mutable std::mutex m_audioTimelineResourceCacheMutex;
-
-    /// @brief 按文件和资源 DSP 配置索引的弱缓存。
-    ///
-    /// 弱引用避免时间线卸载后常驻大块 PCM；提交新时间线时，旧节点仍保持强
-    /// 引用，因此连续编辑可以直接复用未变化资源。
-    std::unordered_map<std::string, CachedTimelineResourceAudio>
-        m_audioTimelineResourceCache;
+    /// @brief 控制侧的时间线调度、资源准备缓存及分析来源。
+    struct TimelinePlayback;
+    /// @brief 仅构造一次。设备已停且后台任务均已结束后才能释放。
+    std::unique_ptr<TimelinePlayback> m_timeline;
 
     /// @brief 当前主音轨图形均衡器节点。
     std::shared_ptr<ice::GraphicEqualizer> m_mainEQ;
@@ -1054,24 +976,10 @@ private:
     /// @brief 逻辑线程使用的固定容量实时频谱分析器。
     std::unique_ptr<BackgroundSpectrumAnalyzer> m_backgroundSpectrumAnalyzer;
 
-    /// @brief 音效登记描述的私有完整定义位于实现头。
-    struct RegisteredSoundEffect;
-    /// @brief 后台请求载荷的私有完整定义位于实现头。
-    struct QueuedSoundEffectLoad;
-    /// @brief 后台结果载荷的私有完整定义位于实现头。
-    struct PreparedSoundEffectLoad;
-    /// @brief 隔离登记表、任务队列及其同步设施。
-    struct SoundEffectLoadingState;
-    /// @brief 与管理器同寿命的加载状态，资源重载和 shutdown 不重建此对象。
-    /// @warning worker 捕获 this 后访问该对象；shutdown 必须先等待全部任务。
-    std::unique_ptr<SoundEffectLoadingState> m_sfxLoading;
-
-    /// @brief 已加载的音效池表。
-    std::unordered_map<std::string, std::shared_ptr<SoundEffectPool>>
-        m_sfxPools;
-
-    /// @brief 音效文件开头到有效出声点的延迟表，单位为秒。
-    std::unordered_map<std::string, double> m_sfxLeadInSeconds;
+    /// @brief 音效登记、加载任务及已装入图的资源池。
+    struct SoundEffectBank;
+    /// @brief 后台任务捕获管理器；关闭时先回收任务，再释放设备和资源。
+    std::unique_ptr<SoundEffectBank> m_soundEffects;
 
     /// @brief 当前主音轨音量。
     float m_mainTrackVolume{ 1.0f };
@@ -1124,9 +1032,6 @@ private:
 
     /// @brief 当前复合时间线全局拉伸质量。
     StretchQuality m_playbackQuality{ StretchQuality::Finer };
-
-    /// @brief 音效池静音状态表。
-    std::unordered_map<std::string, bool> m_sfxMutes;
 };
 
 }  // namespace MMM::Audio

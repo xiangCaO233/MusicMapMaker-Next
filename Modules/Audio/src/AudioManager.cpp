@@ -1,5 +1,6 @@
 #include "audio/AudioManager.h"
-#include "AudioManagerSoundEffectLoadingState.h"
+#include "AudioManagerSoundEffectBank.h"
+#include "AudioManagerTimelinePlayback.h"
 #include "BackgroundSpectrumAnalyzer.h"
 #include "audio/AudioTimelineMixerNode.h"
 #include "audio/KeySoundControl.h"
@@ -288,7 +289,8 @@ AudioManager& AudioManager::instance()
 /// 只恢复配置中明确保存的 key，尚未注册的池会在创建时读取这份映射。
 AudioManager::AudioManager()
     : m_keySoundControls(std::make_unique<KeySoundControlBank>())
-    , m_sfxLoading(std::make_unique<SoundEffectLoadingState>())
+    , m_timeline(std::make_unique<TimelinePlayback>())
+    , m_soundEffects(std::make_unique<SoundEffectBank>())
 {
     // 只持有配置单例的短期引用，AudioManager 内部保存独立运行时副本。
     auto& settings       = Config::AppConfig::instance().getEditorSettings();
@@ -320,7 +322,7 @@ AudioManager::AudioManager()
 
     // 池可能稍后才注册，先保存 key 到静音状态的持久映射。
     for ( const auto& [key, muted] : settings.sfxConfig.permanentSfxMutes ) {
-        m_sfxMutes[key] = muted;
+        m_soundEffects->m_sfxMutes[key] = muted;
     }
 }
 
@@ -374,24 +376,24 @@ void AudioManager::init()
                                     maximumBlockFrames * 10U + 1U);
     m_timingEffectMixer->add_source(std::make_shared<EditorMetronomeInputGate>(
         m_editorMetronomeMixer, m_editorMetronomeInputActive));
-    m_audioTimelineNode = std::make_shared<AudioTimelineMixerNode>(
+    m_timeline->m_node = std::make_shared<AudioTimelineMixerNode>(
         std::vector<PreparedTimelineClip>{},
         0,
         maximumBlockFrames,
         m_keySoundControls.get());
     // 时间线节点持有调度时钟，频谱捕获只包装它并转发 PCM。
     m_bgmSpectrumCapture =
-        std::make_shared<BackgroundSpectrumCaptureNode>(m_audioTimelineNode);
+        std::make_shared<BackgroundSpectrumCaptureNode>(m_timeline->m_node);
     m_stretcher = std::make_shared<ice::TimeStretcher>();
     // 变速器唯一上游是预拉伸混音器，资源级速度已在加载阶段离线处理。
     m_stretcher->set_inputnode(std::make_shared<TimelineStopGateNode>(
-        m_preStretcherMixer, *m_audioTimelineNode));
+        m_preStretcherMixer, *m_timeline->m_node));
     static_cast<void>(m_stretcher->prepare(ice::ICEConfig::internal_format,
                                            maximumBlockFrames));
     m_stretcher->set_playback_ratio(m_speed);
     m_stretcher->set_pitch_semitones(getPlaybackPitch());
-    m_stretcher->set_discontinuity_generation_provider(
-        m_audioTimelineNode.get(), &readTimelineEpoch);
+    m_stretcher->set_discontinuity_generation_provider(m_timeline->m_node.get(),
+                                                       &readTimelineEpoch);
     // epoch 与输入边界回调让拉伸器在 Seek、循环和自然结束时清空旧缓存。
     /// @warning 下列两个回调每音频块执行，只借用常驻图指针及读取 relaxed
     /// 播放标量，禁止复制共享所有权、分配和等待。
@@ -401,7 +403,7 @@ void AudioManager::init()
         this, [](void* context, std::size_t maximumFrames) noexcept {
             auto& manager = *static_cast<AudioManager*>(context);
             auto  span    = readTimelineInputBoundary(
-                manager.m_audioTimelineNode.get(), maximumFrames);
+                manager.m_timeline->m_node.get(), maximumFrames);
             // 必须先记录真实谱面区间；后续为试听补出的输入不能带动编辑器节拍。
             // 正常末段仍可消费拍点，谱面自然结束后的试听段才关闭节拍门控。
             manager.m_editorMetronomeInputActive = span.frameCount != 0U;
@@ -416,13 +418,12 @@ void AudioManager::init()
             }
             return span;
         });
-    m_audioTimelineNode->setFinalInputListener(
-        this, [](void* context) noexcept {
-            auto& manager = *static_cast<AudioManager*>(context);
-            // 主谱面停止时，试听仍必须经同一个拉伸器完成自己的输出。
-            if ( !manager.m_auditionPlaying.load(std::memory_order_relaxed) )
-                requestFinalStretcherInput(manager.m_stretcher.get());
-        });
+    m_timeline->m_node->setFinalInputListener(this, [](void* context) noexcept {
+        auto& manager = *static_cast<AudioManager*>(context);
+        // 主谱面停止时，试听仍必须经同一个拉伸器完成自己的输出。
+        if ( !manager.m_auditionPlaying.load(std::memory_order_relaxed) )
+            requestFinalStretcherInput(manager.m_stretcher.get());
+    });
     // 主时间线先进入频谱捕获，再加入预拉伸总线。
     m_preStretcherMixer->add_source(m_bgmSpectrumCapture);
     // 效果音轨的时序子总线固定在主拉伸器之前，不服从打击音效的可选路由。
@@ -473,23 +474,23 @@ void AudioManager::init()
 void AudioManager::shutdown()
 {
     XINFO("Shutting down AudioManager...");
-    waitForQueuedSoundEffectLoads();
+    m_soundEffects->waitForLoads();
     // 队列任务可能捕获 AudioPool；必须在释放池之前全部完成。
     unloadAudioTimeline();
     destroyPlaybackBackend();
     clearSoundEffects();
     unloadAuditionTrack();
 
-    publishBgmAnalysisSource({}, 0.0);
+    m_timeline->publishAnalysisSource({}, 0.0);
     // 兼容 BGM 观察状态与新复合时间线状态一起清空。
-    m_bgmPath.clear();
-    m_bgmSyncKey.clear();
-    m_audioTimelineNode.reset();
-    m_audioTimelineLoaded = false;
-    m_audioTimelineFingerprint.clear();
-    m_audioTimelineClipCount        = 0U;
-    m_missingAudioTimelineClipCount = 0U;
-    m_audioTimelineResourceCache.clear();
+    m_timeline->m_singleFilePath.clear();
+    m_timeline->m_syncKey.clear();
+    m_timeline->m_node.reset();
+    m_timeline->m_loaded = false;
+    m_timeline->m_fingerprint.clear();
+    m_timeline->m_clipCount        = 0U;
+    m_timeline->m_missingClipCount = 0U;
+    m_timeline->clearResourceCache();
     // 先断开时间线资源，再释放频谱包装、拉伸器和各级总线。
     m_bgmSpectrumCapture.reset();
     m_stretcher.reset();
