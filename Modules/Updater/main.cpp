@@ -70,41 +70,23 @@ namespace
 
 #if defined(_WIN32)
 
-/// @brief 检查指定 PID 进程是否仍在运行。
-/// @param pid 需要检查的 Windows 进程 ID。
-/// @return 进程仍在运行时返回 true。
-///
-/// 只申请 SYNCHRONIZE 权限，避免普通用户因过高访问权限导致无谓失败。
-bool isProcessAlive(DWORD pid)
+/// @brief 等待 Windows 父进程明确退出，超时或无法验证时返回 false。
+/// @param pid 调用者传入的正数 Windows 进程 ID。
+/// @return 进程已退出或 PID 已不存在时返回 true。
+/// @note 同一个句柄固定进程身份，等待期间不再按 PID 重新打开。
+/// @details 只请求等待所需权限，访问拒绝无法用于推断进程状态。
+/// @warning 最多阻塞三十秒，只能在独立更新器进程调用。
+bool waitForParent(DWORD pid)
 {
-    // 无法打开句柄按“不再可等待”处理，由后续替换操作给出真实错误。
-    HANDLE hProcess = OpenProcess(SYNCHRONIZE, FALSE, pid);
-    if ( !hProcess ) return false;
-    // 零超时只探测当前状态，不阻塞轮询路径。
-    const DWORD waitResult = WaitForSingleObject(hProcess, 0);
-    CloseHandle(hProcess);
-    return waitResult == WAIT_TIMEOUT;
-}
-
-/// @brief 等待父进程退出，最多等待 30 秒。
-/// @param pid 父进程 ID。
-///
-/// 正常路径直接等待进程句柄；句柄不可用时退回有限次数存活探测。超时后仍
-/// 继续替换，让文件系统操作返回可诊断错误而不是永久挂起更新器。
-void waitForParent(DWORD pid)
-{
-    HANDLE hProcess = OpenProcess(SYNCHRONIZE, FALSE, pid);
-    if ( hProcess ) {
-        // 最长三十秒覆盖主程序保存配置和释放图形资源的正常收尾时间。
-        WaitForSingleObject(hProcess, 30000);
-        CloseHandle(hProcess);
-    } else {
-        // 每半秒探测一次，总等待上限与句柄路径一致。
-        for ( int i = 0; i < 60; ++i ) {
-            if ( !isProcessAlive(pid) ) break;
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        }
-    }
+    HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
+    // 正数 PID 不存在时系统返回
+    // ERROR_INVALID_PARAMETER。拒绝权限不足等其他错误。
+    if ( !process ) return GetLastError() == ERROR_INVALID_PARAMETER;
+    // 句柄变为有信号状态才代表退出。WAIT_FAILED 和 WAIT_TIMEOUT 均阻止写入。
+    // 关闭句柄前保存等待结果，后续清理不会覆盖用于决策的状态。
+    const DWORD result = WaitForSingleObject(process, 30000);
+    CloseHandle(process);
+    return result == WAIT_OBJECT_0;
 }
 
 /// @brief 启动更新后的 Windows 可执行文件。
@@ -127,28 +109,23 @@ bool launchTarget(const std::wstring& targetPath)
 
 #else
 
-/// @brief 检查指定 PID 进程是否仍在运行。
-/// @param pid 需要检查的 POSIX 进程 ID。
-/// @return 进程仍在运行或无权探测时返回 true。
-///
-/// kill(pid, 0) 不发送信号；EPERM 表示进程存在但当前用户无权操作。
-bool isProcessAlive(pid_t pid)
+/// @brief 有限等待 POSIX 父进程退出，只有 ESRCH 证明该 PID 已不存在。
+/// @param pid 已检查范围的正数进程标识，避开进程组语义。
+/// @return 仅进程探测报告 ESRCH 时返回 true。
+/// @note 探测不会发信号。权限不足仍可能有旧进程，安全起见不得继续安装。
+/// @details POSIX 不依赖父进程作为更新器的子进程，因此这里不调用 waitpid。
+/// @warning 低频更新阶段有三十秒等待上限，主应用线程不参与这段等待。
+bool waitForParent(pid_t pid)
 {
-    return kill(pid, 0) == 0 || errno == EPERM;
-}
-
-/// @brief 等待父进程退出，最多等待 30 秒。
-/// @param pid 父进程 ID。
-///
-/// 有限轮询避免父进程卡死时更新器永久驻留；超时后由 rename/copy 判断目标
-/// 是否已经可替换。固定等待只存在于独立更新进程，不阻塞应用 UI 或渲染。
-void waitForParent(pid_t pid)
-{
-    // 六十次半秒间隔构成三十秒上限。
-    for ( int i = 0; i < 60; ++i ) {
-        if ( !isProcessAlive(pid) ) break;
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    // 每半秒检查一次，最后一次检查包含完整三十秒等待窗口。
+    // 探测返回成功或 EPERM 表示 PID 仍存在。其他错误直接结束探测，
+    // 其中只有 ESRCH 可作为继续替换安装文件的依据。
+    for ( int i = 0; i <= 60; ++i ) {
+        if ( kill(pid, 0) == -1 && errno != EPERM ) return errno == ESRCH;
+        if ( i < 60 )
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
+    return false;
 }
 
 #    if defined(__APPLE__)
@@ -627,7 +604,7 @@ long parseParentPid(std::wstring_view text)
 ///
 /// 退出码约定：
 /// - 参数数量或 PID 非法返回 1，且不触碰下载文件与目标；
-/// - 平台目标规范化失败返回 1；
+/// - 平台目标规范化失败或无法确认父进程退出时返回 1；
 /// - 备份、复制、重命名或 bundle 验证失败返回 1；
 /// - 新版本启动请求失败返回 1，但保留已安装文件；
 /// - 全部步骤成功返回 0。
@@ -670,10 +647,17 @@ int main(int argc, char* argv[])
 
     // 必须先等待主程序退出，确保待替换目标不再使用旧文件。
 #if defined(_WIN32)
-    waitForParent(static_cast<DWORD>(parentPid));
+    const bool parentExited = waitForParent(static_cast<DWORD>(parentPid));
 #else
-    waitForParent(static_cast<pid_t>(parentPid));
+    // long 可能比 pid_t 宽，拒绝会被截断为其他进程或进程组的值。
+    const bool parentExited = parentPid <= std::numeric_limits<pid_t>::max() &&
+                              waitForParent(static_cast<pid_t>(parentPid));
 #endif
+    if ( !parentExited ) {
+        // 正式目标、下载源和成功标记都必须留待下一次安全重试。
+        writeStderr("Cannot confirm that the parent process exited\n");
+        return 1;
+    }
     // 父进程退出后留出短暂时间给系统释放映像和防病毒扫描句柄。
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
