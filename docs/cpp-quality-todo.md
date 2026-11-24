@@ -645,7 +645,9 @@
 
 ### P2 · R21 · 音轨缓存池在共享写锁内探测、解码和析构
 
-- [ ] 慢资源创建及释放预读线程会挡住其他资源的缓存命中。锁外准备和析构，按资源协调并发创建；验证一条慢轨加载或回收时可立即取得另一条已缓存轨道。
+- [x] 慢资源创建及释放预读线程会挡住其他资源的缓存命中。锁外准备和析构，按资源协调并发创建；验证一条慢轨加载或回收时可立即取得另一条已缓存轨道。
+
+  已验证。IEC Linux RelWithDebInfo 独立全量构建和 3 项 CTest 通过。并发回归连续通过 300 次，覆盖慢探测期间其他音轨仍可命中、同资源并发去重、失效后拒绝旧结果，以及慢轨析构期间其他音轨仍可命中。 主仓 Linux 全量构建和 6 项音频回归通过。ICE 来源 [IonCachyEngine #9](https://github.com/xiangCaO233/IonCachyEngine/pull/9)，指针指向合并提交 `e719df373c5273c5220b946976499fddec2b517f`。默认构建采用仓库内的预编译 ICE，源码修复待指定环境刷新预编译包后才由默认构建使用。
 
 [3rdpty/sources/IonCachyEngine/include/ice/manage/AudioPool.hpp:82](../3rdpty/sources/IonCachyEngine/include/ice/manage/AudioPool.hpp#L82) [3rdpty/sources/IonCachyEngine/include/ice/manage/AudioPool.hpp:138](../3rdpty/sources/IonCachyEngine/include/ice/manage/AudioPool.hpp#L138) [3rdpty/sources/IonCachyEngine/src/ice/manage/AudioTrack.cpp:88](../3rdpty/sources/IonCachyEngine/src/ice/manage/AudioTrack.cpp#L88) [3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp:224](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp#L224)
 
