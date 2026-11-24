@@ -12,6 +12,13 @@
 #include <string>
 #include <system_error>
 
+#if defined(__linux__) && !defined(__ANDROID__)
+#    include <cerrno>
+#    include <cstdlib>
+#    include <sys/wait.h>
+#    include <unistd.h>
+#endif
+
 using namespace MMM::Network;
 
 /// @brief 验证 UpdateStatus 枚举的稳定整数映射。
@@ -505,6 +512,71 @@ static int testUpdateSuccessMarker()
     return fail;
 }
 
+#if defined(__linux__) && !defined(__ANDROID__)
+/// @brief 验证 exec 失败后，主程序仍在运行而且有具体错误。
+/// @return 夹具成功创建且主进程正确处理不可执行更新器时返回 0。
+/// @details 调用实际 applyUpdateAndRestart 经过路径复核和执行权限设置，
+/// 所以通过条件必须同时包含函数返回和启动错误诊断两部分。
+/// 父进程监督测试子进程。成功装载更新器时调用本来会主动退出，只有装载
+/// 失败后回到调用点才允许写入专用退出码。
+/// 测试只提供临时普通文件，更新器永远不能装载，无需打包发布产物或联网。
+/// @note 运行本用例的测试进程无后台工作者，fork 后的子进程单独调用更新入口。
+/// @note macOS 的更新目标要求实际 .app bundle，此夹具只运行于 Linux。
+static int testInvalidUpdaterExec()
+{
+    // 原生路径内含空格，且用 mkdtemp 隔离并行测试的本地文件。
+    std::error_code error;
+    // 明确检查临时根路径，失败时不能把空路径传给 mkdtemp 写进工作区。
+    auto temporary = std::filesystem::temp_directory_path(error);
+    if ( error ) return 1;
+    auto pattern = (temporary / "mmm update exec-XXXXXX").native();
+    if ( !mkdtemp(pattern.data()) ) return 1;
+    // 固定文件名只在独占目录中复用，防止并行 CTest 互相打开或删除夹具。
+    const std::filesystem::path directory(pattern);
+    const auto                  download = directory / "update payload";
+    const auto                  updater  = directory / "invalid updater";
+    // 两个路径都存在且是普通文件。更新器是无有效程序格式的文本，
+    // 所以必须由实际装载检查报告错误，不能被前置路径检查挡住。
+    std::ofstream(download) << "update fixture";
+    std::ofstream(updater) << "not an executable image";
+    const auto downloadArgument = download.native();
+    const auto updaterArgument  = updater.native();
+    // 主测试进程保持可观察状态，即使生产代码错误地从内部 exit(0)。
+    const pid_t child = fork();
+    if ( child == 0 ) {
+        std::string restartError;
+        const bool  applied = UpdateChecker::applyUpdateAndRestart(
+            downloadArgument, updaterArgument, &restartError);
+        // 只有调用返回 false 并留下诊断才能产生专用退出码。
+        // 旧实现会在内部 exit(0)，父测试进程因此能检出错误成功。
+        const bool rejected =
+            !applied && restartError.starts_with("Failed to launch updater:");
+        _exit(rejected ? 42 : 1);
+    }
+
+    // fork 失败时没有子进程可等待，仍走共用目录清理和失败报告。
+    int   waitStatus = 0;
+    pid_t waited     = -1;
+    if ( child > 0 ) {
+        // 被信号中断时等待同一子进程，不重启测试或重复触碰文件。
+        do {
+            waited = waitpid(child, &waitStatus, 0);
+        } while ( waited < 0 && errno == EINTR );
+    }
+    // 只删除 mkdtemp 确认归本次测试独占的目录。
+    // 等待子进程结束后再清理，避免把装载失败变成路径不存在的错误。
+    std::filesystem::remove_all(directory, error);
+    if ( child <= 0 || waited != child || !WIFEXITED(waitStatus) ||
+         WEXITSTATUS(waitStatus) != 42 || error ) {
+        XERROR(
+            "Invalid updater must show an exec error and keep the caller "
+            "alive");
+        return 1;
+    }
+    return 0;
+}
+#endif
+
 /// @brief 依次运行全部无网络更新检查单元测试并汇总失败数。
 /// @return 所有断言通过时返回 0，否则返回 1。
 int main()
@@ -540,6 +612,9 @@ int main()
     // 摘要规范化和标记文件覆盖发布完整性与启动收尾路径。
     totalFail += testNormalizeSha256();
     totalFail += testUpdateSuccessMarker();
+#if defined(__linux__) && !defined(__ANDROID__)
+    totalFail += testInvalidUpdaterExec();
+#endif
 
     if ( totalFail == 0 ) {
         // 所有组零失败时才向 CTest 返回成功。
