@@ -7,7 +7,6 @@
 
 namespace ice
 {
-class GraphicEqualizer;
 class AudioBuffer;
 }  // namespace ice
 
@@ -16,7 +15,7 @@ namespace MMM::UI
 
 /// @brief 展示活动音轨双声道波形包络和均衡器预览的 UI 视图。
 /// @details 视图持有降采样后的全局缓存与当前视野切片；音频缓冲由该对象独占，
-/// GraphicEqualizer 与音频管理器共享生命周期。
+/// 均衡器按重算任务的参数快照建立，递推历史只在本次任务内保留。
 class AudioWaveformView : public IUIView
 {
 public:
@@ -45,14 +44,10 @@ private:
     /// @param waveformVisualOffset 波形采样内容使用的专用偏移，单位为秒。
     void updateEnvelopes(double visualTime, double duration, double speed,
                          float waveformVisualOffset);
-    /// @brief 将预览均衡器状态同步到波形处理链。
-    void syncEQ();
     /// @brief 低频重建整段音频的固定分辨率包络缓存。
     /// @warning 可能遍历完整音频，仅允许在音轨或均衡器状态变化后调用。
     void fullRecalculate();
 
-    /// @brief 与音频预览共享的均衡器实例，用于生成处理后波形。
-    std::shared_ptr<ice::GraphicEqualizer> m_previewEQ;
     /// @brief 独占的均衡器处理结果缓冲。
     std::unique_ptr<ice::AudioBuffer> m_processBuffer;
     /// @brief 独占的原始音频采样缓冲。

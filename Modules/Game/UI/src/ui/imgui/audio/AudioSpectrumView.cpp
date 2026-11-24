@@ -1,5 +1,6 @@
 #include "ui/imgui/audio/AudioSpectrumView.h"
 #include "audio/AudioManager.h"
+#include "audio/OfflineAnalysisEQ.h"
 #include "common/LogicCommands.h"
 // 频谱视野映射读取快照字段，显式依赖渲染定义而非时间格式化工具的传递包含。
 #include "common/render/RenderSnapshot.h"
@@ -31,11 +32,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <fftw3.h>
 #include <filesystem>
 #include <ice/config/config.hpp>
-#include <ice/core/effect/GraphicEqualizer.hpp>
 #include <ice/manage/AudioBuffer.hpp>
 #include <ice/manage/AudioTrack.hpp>
 #include <ice/thread/ThreadPool.hpp>
@@ -51,47 +50,11 @@
 namespace MMM::UI
 {
 
-/// @brief 把离线 AudioBuffer 适配为 GraphicEqualizer 的输入节点。
-///
-/// 节点不拥有 PCM，只在紧随 setBuffer 的同步 process 调用中复制当前块。它不参与
-/// 实时音频图，也不执行格式转换或采样率转换。
-class BufferSourceNodeProxy : public ice::IAudioNode
-{
-public:
-    /// @brief 设置下一次同步处理读取的非拥有输入缓冲。
-    /// @param buffer 输入 PCM，可为空以禁用复制。
-    void setBuffer(const ice::AudioBuffer* buffer) { m_buffer = buffer; }
-
-    /// @brief 把当前输入缓冲复制到效果链提供的输出缓冲。
-    /// @param buffer 目标音频缓冲。
-    /// @warning 低频离线计算路径；不分配内存，但逐通道复制 PCM。
-    void process(ice::AudioBuffer& buffer) override
-    {
-        // 空输入保持目标缓冲不变。
-        if ( !m_buffer ) return;
-        // 逐通道处理，格式由调用方提前保证一致。
-        for ( uint16_t ch = 0; ch < m_buffer->num_channels(); ++ch ) {
-            // 只复制输入与目标共同有效的帧数。
-            size_t frames =
-                std::min(buffer.num_frames(), m_buffer->num_frames());
-            // raw_ptrs 暴露连续 float PCM，按帧数换算字节。
-            std::memcpy(buffer.raw_ptrs()[ch],
-                        m_buffer->raw_ptrs()[ch],
-                        frames * sizeof(float));
-        }
-    }
-
-private:
-    /// @brief 当前离线输入块的非拥有观察指针。
-    /// @warning 不得跨异步任务或下一次缓冲生命周期保留使用。
-    const ice::AudioBuffer* m_buffer{ nullptr };
-};
-
 /// @brief 构造频谱视图并按当前配置初始化分析细节和工作缓冲。
 /// @param name 窗口可见名称。
 ///
 /// 活动与待提交细节参数初始一致；后台计算成功后才把 pending 参数切换为活动值。
-/// PCM 工作缓冲在构造阶段分配对象，但具体容量由计算任务按块准备。
+/// PCM 块和滤波器由各离线工作者按计算参数准备。
 AudioSpectrumView::AudioSpectrumView(const std::string& name)
     : IUIView(name), IRenderableView(name)
 {
@@ -106,9 +69,6 @@ AudioSpectrumView::AudioSpectrumView(const std::string& name)
     m_pendingSpectrumDetailLevel    = m_spectrumDetailLevel;
     m_pendingCacheSegmentsPerSecond = m_cacheSegmentsPerSecond;
     m_pendingNumFrequencyBins       = m_numFrequencyBins;
-    // 两个缓冲分别保存原始 PCM 和应用预览 EQ 后的 PCM。
-    m_processBuffer = std::make_unique<ice::AudioBuffer>();
-    m_rawBuffer     = std::make_unique<ice::AudioBuffer>();
 }
 
 /// @brief 停止后台频谱计算并等待 GPU 停止使用视图资源。
@@ -451,9 +411,6 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     ImVec2 sz       = topContainer.renderInCurrent(
         startPos, { ImGui::GetContentRegionAvail().x, 0 });
     ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
-
-    // 每帧轻量同步预览 EQ 参数；完整 FFT 只由显式重算任务执行。
-    syncEQ();
 
     // 频谱主体由离屏 Vulkan 绘制，ImGui 在其上叠加交互层。
     ImVec2 surfacePos = ImGui::GetCursorScreenPos();
@@ -1047,43 +1004,6 @@ void AudioSpectrumView::reloadTextures(vk::PhysicalDevice& physicalDevice,
     }
 }
 
-/// @brief 把主音轨 EQ 拓扑和参数同步到频谱预览节点。
-///
-/// EQ 关闭时释放预览效果链；频段数量变化时重建节点，普通增益和 Q 改变只更新已有
-/// 频段。该对象供同步状态展示，后台任务会复制 EQSettings 并创建独立工作者节点。
-/// @warning UI 热路径：每帧调用；只有频段拓扑变化时允许分配节点。
-void AudioSpectrumView::syncEQ()
-{
-    // AudioManager 是当前主音轨 EQ 配置真值。
-    auto& audioManager = Audio::AudioManager::instance();
-    if ( !audioManager.isMainTrackEQEnabled() ) {
-        // 关闭时后台重算直接分析原始 PCM。
-        m_previewEQ.reset();
-        return;
-    }
-
-    if ( !m_previewEQ || m_previewEQ->get_band_count() !=
-                             audioManager.getMainTrackEQBandCount() ) {
-        // 频率列表决定 GraphicEqualizer 拓扑和频段顺序。
-        std::vector<double> freqs;
-        size_t              count = audioManager.getMainTrackEQBandCount();
-        for ( size_t i = 0; i < count; ++i ) {
-            // 按 AudioManager 稳定索引提取中心频率。
-            freqs.push_back(audioManager.getMainTrackEQBandFrequency(i));
-        }
-        // 预览链使用独立代理源，不持有实际 PCM。
-        m_previewEQ = std::make_shared<ice::GraphicEqualizer>(freqs);
-        m_previewEQ->set_inputnode(std::make_shared<BufferSourceNodeProxy>());
-    }
-
-    // 增益与 Q 不改变频段数量，可逐项更新而无需重建。
-    for ( size_t i = 0; i < m_previewEQ->get_band_count(); ++i ) {
-        m_previewEQ->set_band_gain_db(i,
-                                      audioManager.getMainTrackEQBandGain(i));
-        m_previewEQ->set_band_q_factor(i, audioManager.getMainTrackEQBandQ(i));
-    }
-}
-
 /// @brief 捕获当前分析参数并在应用线程池启动一次完整频谱重算。
 ///
 /// 同一时刻只允许一个任务。已完成但尚未清空的 future
@@ -1106,19 +1026,8 @@ void AudioSpectrumView::startAsyncRecalculate()
         m_calcFuture = std::future<void>{};
     }
 
-    // 把 AudioManager EQ 状态复制为自包含后台设置。
-    auto&      audioManager = Audio::AudioManager::instance();
-    EQSettings eq;
-    eq.enabled = audioManager.isMainTrackEQEnabled();
-    if ( eq.enabled ) {
-        // 三个数组按频段索引一一对应。
-        size_t count = audioManager.getMainTrackEQBandCount();
-        for ( size_t i = 0; i < count; ++i ) {
-            eq.freqs.push_back(audioManager.getMainTrackEQBandFrequency(i));
-            eq.gains.push_back(audioManager.getMainTrackEQBandGain(i));
-            eq.qs.push_back(audioManager.getMainTrackEQBandQ(i));
-        }
-    }
+    // 只在启动一次重算时捕获主轨 EQ，普通绘制只读已经完成的缓存。
+    auto eq = Audio::captureOfflineAnalysisEQ(Audio::AudioManager::instance());
 
     // 先发布计算态和零进度，再重置本轮完成标志。
     m_isCalculating.store(true);
@@ -1149,7 +1058,7 @@ void AudioSpectrumView::startAsyncRecalculate()
     // 每轮使用新的 stop_source，析构可请求当前任务协作停止。
     m_calcStopSource                = std::stop_source{};
     const std::stop_token stopToken = m_calcStopSource.get_token();
-    m_calcFuture = appThreadPool->enqueue([this,
+    m_calcFuture                    = appThreadPool->enqueue([this,
                                            stopToken,
                                            eq      = std::move(eq),
                                            maxFreq = m_maxFreq,
@@ -1182,8 +1091,8 @@ void AudioSpectrumView::startAsyncRecalculate()
 /// RGBA 块并安排 GPU 上传。
 /// @warning 仅由低频后台任务调用，允许加载和等待 PCM，不能移入绘制回调。
 void AudioSpectrumView::backgroundRecalculate(
-    std::stop_token stopToken, const EQSettings& eq, float maxFreq,
-    float logBias, Config::SpectrumDetailLevel detailLevel,
+    std::stop_token stopToken, const Audio::OfflineAnalysisEQSettings& eq,
+    float maxFreq, float logBias, Config::SpectrumDetailLevel detailLevel,
     Config::SpectrumDetailProfile detailProfile)
 {
     // 启动后立即收到停止请求时不读取音轨或分配 FFT 资源。
@@ -1339,27 +1248,15 @@ void AudioSpectrumView::backgroundRecalculate(
                 fftw_plan_dft_r2c_1d(fftSize, localIn, localOut, FFTW_ESTIMATE);
         }
 
-        // 原始与 EQ 后缓冲按固定 FFT 窗大小预分配。
-        auto localRawBuffer  = std::make_unique<ice::AudioBuffer>();
-        auto localProcBuffer = std::make_unique<ice::AudioBuffer>();
-        localRawBuffer->resize(ice::ICEConfig::internal_format, fftSize);
-        localProcBuffer->resize(ice::ICEConfig::internal_format, fftSize);
-
-        // 每个工作者使用独立输入代理和 EQ 状态，滤波器历史不会跨线程竞争。
-        auto localBufferSource = std::make_shared<BufferSourceNodeProxy>();
-        std::shared_ptr<ice::GraphicEqualizer> localEQ;
-        if ( eq.enabled ) {
-            // 频率列表构造拓扑，prepare 使用内部音频格式与 FFT 块上限。
-            localEQ = std::make_shared<ice::GraphicEqualizer>(eq.freqs);
-            localEQ->prepare(ice::ICEConfig::internal_format,
-                             static_cast<std::size_t>(fftSize));
-            localEQ->set_inputnode(localBufferSource);
-            for ( size_t i = 0; i < eq.gains.size(); ++i ) {
-                // 捕获数组按频段索引对应，工作者节点获得相同增益和 Q。
-                localEQ->set_band_gain_db(i, eq.gains[i]);
-                localEQ->set_band_q_factor(i, eq.qs[i]);
-            }
-        }
+        // FFT 工作窗只有完整读入才会送入变换，因此可以原位处理 PCM。
+        // 上一个窗口的样本即使已经被滤波，也会被完整覆盖再使用。
+        // 频谱仍沿用每位工作者独立的历史，禁止让同一组历史跨工作者复用。
+        // 工作缓冲与滤波历史由每个 FFT 工作者独占，系数按快照一次建好。
+        const auto&      format = ice::ICEConfig::internal_format;
+        ice::AudioBuffer localBuffer;
+        localBuffer.resize(format, fftSize);
+        Audio::OfflineAnalysisEQ localEQ(
+            eq, format.samplerate, format.channels);
 
         for ( int t = startSeg; t < endSeg; ++t ) {
             // 每个时间段边界检查协作停止，限制析构等待时间。
@@ -1373,16 +1270,12 @@ void AudioSpectrumView::backgroundRecalculate(
             if ( startFrame + fftSize > track->num_frames() ) break;
 
             // 分析音轨按绝对帧读取完整窗口。
-            track->read(*localRawBuffer, startFrame, fftSize);
-
-            // 默认直接分析原始声道数据。
-            float* chanData = localRawBuffer->raw_ptrs()[chIdx];
-            if ( localEQ ) {
-                // EQ 启用时同步处理同一多声道块，再选择目标声道。
-                localBufferSource->setBuffer(localRawBuffer.get());
-                localEQ->process(*localProcBuffer);
-                chanData = localProcBuffer->raw_ptrs()[chIdx];
-            }
+            if ( track->read(localBuffer, startFrame, fftSize) !=
+                 static_cast<std::size_t>(fftSize) )
+                break;
+            // 在工作缓冲中原位滤波，禁用 EQ 时直接保留音轨返回的 PCM。
+            localEQ.process(localBuffer);
+            const float* chanData = localBuffer.raw_ptrs()[chIdx];
 
             // 把 float PCM 乘 Hann 窗并转换到 FFTW double 输入。
             for ( int i = 0; i < fftSize; ++i )
