@@ -49,14 +49,20 @@ namespace MMM::UI
 ///
 /// 事件回调只把外部状态复制到 UI 成员，不直接绘制控件。窗口最大化状态由
 /// 原生层回报，音频导入请求则暂存路径并在下一 UI 帧打开类型选择弹窗。
-/// @warning 回调可能位于主更新流程之外；不得捕获短生命周期局部对象，也不得
-/// 在回调中执行纹理创建、文件选择或 ImGui 绘制。
+/// @warning 原生窗口回调与文件对话框完成通知均在 UI 所有者线程同步分发。
+/// 回调不得执行纹理创建、文件选择或 ImGui 绘制。
 MainDockSpaceUI::MainDockSpaceUI(const std::string& name)
-    : IUIView(name), ITextureLoader(name)
+    : IUIView(name)
+    , ITextureLoader(name)
+    , m_eventLifetime(std::make_shared<const bool>(true))
 {
+    auto&                           bus      = Event::EventBus::instance();
+    const std::weak_ptr<const bool> lifetime = m_eventLifetime;
     // 原生层完成最大化或还原后回报权威状态，菜单栏据此选择下一操作图标。
-    Event::EventBus::instance().subscribe<Event::GLFWNativeEvent>(
-        [&](Event::GLFWNativeEvent event) {
+    m_windowStateSubscription = bus.subscribe<Event::GLFWNativeEvent>(
+        [this, lifetime](const Event::GLFWNativeEvent& event) {
+            // 同一轮分发可能已复制回调，先确认前序订阅没有重入销毁视图。
+            if ( lifetime.expired() ) return;
             if ( event.hasStateChange &&
                  event.type ==
                      Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE ) {
@@ -65,8 +71,10 @@ MainDockSpaceUI::MainDockSpaceUI(const std::string& name)
         });
 
     // 菜单和其他 UI 入口统一发送导入触发事件，由此处汇聚到同一模态流程。
-    Event::EventBus::instance().subscribe<Event::AudioImportTriggerEvent>(
-        [&](Event::AudioImportTriggerEvent event) {
+    m_audioImportSubscription = bus.subscribe<Event::AudioImportTriggerEvent>(
+        [this, lifetime](const Event::AudioImportTriggerEvent& event) {
+            // 生命周期校验与成员更新均由 UI 所有者线程完成。
+            if ( lifetime.expired() ) return;
             m_pendingImportPath   = event.path;
             m_showImportTypeModal = true;
         });
@@ -74,8 +82,15 @@ MainDockSpaceUI::MainDockSpaceUI(const std::string& name)
 
 /// @brief 销毁主窗口视图。
 ///
-/// 资源成员使用 RAII 释放；事件总线订阅遵循视图既有生命周期约定。
-MainDockSpaceUI::~MainDockSpaceUI() = default;
+/// @warning 与这两种通知的发布入口同属 UI 所有者线程，不等待其他发布者。
+MainDockSpaceUI::~MainDockSpaceUI()
+{
+    // 先撤销已复制快照的访问资格，再从总线删除两条订阅。
+    m_eventLifetime.reset();
+    auto& bus = Event::EventBus::instance();
+    bus.unsubscribe<Event::GLFWNativeEvent>(m_windowStateSubscription);
+    bus.unsubscribe<Event::AudioImportTriggerEvent>(m_audioImportSubscription);
+}
 
 /// @brief 在皮肤切换后刷新工具栏依赖的调色板缓存。
 ///

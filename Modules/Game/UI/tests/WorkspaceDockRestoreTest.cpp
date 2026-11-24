@@ -6,6 +6,8 @@
 #include "config/ShortcutConfig.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "event/ui/GLFWNativeEvent.h"
+#include "event/ui/menu/AudioImportTriggerEvent.h"
 #include "ui/IEditorApplicationService.h"
 #include "ui/UIManager.h"
 
@@ -2003,6 +2005,53 @@ bool checkMouseDrawingOptions()
     if ( !passed ) XERROR("Mouse drawing toolbar options regression");
     return passed;
 }
+/// @brief 验证视图销毁使旧订阅失效，包括同轮分发中已经复制的回调。
+/// @return 初始视图与重建视图都能接收事件，旧视图不再参与后续分发时为真。
+/// @details 两个通知使用真实全局总线，与窗口后端和导入菜单采用同一个入口。
+/// 重入销毁覆盖“注销发生在复制快照后”的窗口，不能用一次空队列退订代替。
+/// 音频路径使用长字符串，让旧回调误写悬空成员时涉及独立堆缓冲。
+/// 重建使用同名窗口，验证名称并不承担订阅的对象身份。
+bool checkDockEventLifetime()
+{
+    using namespace MMM;
+    auto&                                bus = Event::EventBus::instance();
+    std::unique_ptr<UI::MainDockSpaceUI> view;
+    bool                                 destroyInDispatch = false;
+    // 先登记测试订阅，令视图恰好在同轮快照到达其窗口回调前销毁。
+    Event::ScopedSubscription<Event::GLFWNativeEvent> killer(
+        bus.subscribe<Event::GLFWNativeEvent>([&](const auto&) {
+            if ( destroyInDispatch ) view.reset();
+        }));
+    view = std::make_unique<UI::MainDockSpaceUI>("DockEventLifetime");
+    // 只回放原生状态报告。普通窗口控制命令没有 hasStateChange，不更新视图。
+    Event::GLFWNativeEvent window{};
+    window.type           = Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE;
+    window.hasStateChange = true;
+    window.isMaximized    = true;
+    Event::AudioImportTriggerEvent audio{ std::string(256, 'a') };
+    // 先验证两个订阅都存活，避免没有注册任何回调也能通过销毁路径。
+    bus.publish(window);
+    bus.publish(audio);
+    if ( !view->m_isMaximized || !view->m_showImportTypeModal ||
+         view->m_pendingImportPath != audio.path )
+        return false;
+    // EventBus 在锁外调用已复制的快照，前序回调可以同步销毁后续订阅的所有者。
+    // 此次通知全部使用同一线程，不依赖窗口系统、GPU 或任务队列的时间顺序。
+    destroyInDispatch = true;
+    bus.publish(window);
+    // 上一轮回调已经入队，这一次导入则发生在注销之后。
+    // 长度增长可检出旧回调仍使用上一个视图已释放的字符串容量。
+    audio.path.assign(512, 'b');
+    bus.publish(audio);
+    if ( view ) return false;
+    // 重建仅注册自己的两个订阅，且不会继承前一个视图的导入路径。
+    destroyInDispatch = false;
+    view = std::make_unique<UI::MainDockSpaceUI>("DockEventLifetime");
+    bus.publish(window);
+    bus.publish(audio);
+    // 本次状态必须由后续正常发布写入，适合与重入销毁分支使用同一事件。
+    return view->m_isMaximized && view->m_pendingImportPath == audio.path;
+}
 }  // namespace
 
 /// @brief 独立运行默认工作区到项目工作区的停靠恢复回归场景。
@@ -2021,7 +2070,7 @@ int main()
                    checkToolbarResize() && checkToolbarEdgeDocking() &&
                    checkToolbarAfterManager() && checkToolbarPopupPlacement() &&
                    checkMouseOnlyTimelineZoom() && checkMouseDrawingOptions() &&
-                   checkDrawingPlaybackShortcut()
+                   checkDrawingPlaybackShortcut() && checkDockEventLifetime()
                ? 0
                : 1;
 }

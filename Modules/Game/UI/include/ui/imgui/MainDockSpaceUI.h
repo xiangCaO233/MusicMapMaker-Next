@@ -2,6 +2,7 @@
 
 #include <imgui.h>
 
+#include "event/core/SubscriptionID.h"
 #include "ui/ITextureLoader.h"
 #include "ui/imgui/feedback/BeatmapLoadDiagnosticFeedback.h"
 #include "ui/imgui/feedback/SaveResultFeedback.h"
@@ -55,6 +56,13 @@ public:
     }
 
 private:
+    /// @brief 同线程分发快照用的寿命令牌，不拥有视图或其资源。
+    std::shared_ptr<const bool> m_eventLifetime;
+    /// @brief 原生窗口状态订阅，随视图销毁明确注销。
+    Event::SubscriptionID m_windowStateSubscription{};
+    /// @brief 音频导入请求订阅，随视图销毁明确注销。
+    Event::SubscriptionID m_audioImportSubscription{};
+
     static inline ImGuiID s_centerDockId{ 0 };
     static inline ImGuiID s_toolDockId{ 0 };
     static inline bool    s_projectWorkspaceLayoutLoaded{ false };
