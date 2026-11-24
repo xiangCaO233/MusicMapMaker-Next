@@ -605,7 +605,9 @@
 
 ### P2 · R16 · 音频分析面板静置时逐帧重建 EQ
 
-- [ ] 启用 EQ 时，每个面板每帧对 B 个频段各设两次参数；每次设置都加锁并重建各声道完整滤波链。单面板每帧约 2B 次发布，系数构造随声道数和 B² 增长。按修订批量更新；静置时发布数应为零，调参后核对 PCM。
+- [x] 启用 EQ 时，每个面板每帧对 B 个频段各设两次参数；每次设置都加锁并重建各声道完整滤波链。单面板每帧约 2B 次发布，系数构造随声道数和 B² 增长。按修订批量更新；静置时发布数应为零，调参后核对 PCM。
+
+  已验证。Linux RelWithDebInfo 全量构建和 5 项相关 CTest 通过。波形与频谱静置绘制不发布 EQ，重算时捕获频率、增益和 Q，每套链只生成一次系数。PCM 回归与既有 ICE GraphicEqualizer 对照，覆盖改参、非等长分块、双声道历史隔离、重算清零及禁用透传。
 
 [Modules/Game/UI/src/ui/imgui/audio/AudioSpectrumView.cpp:456](../Modules/Game/UI/src/ui/imgui/audio/AudioSpectrumView.cpp#L456) [Modules/Game/UI/src/ui/imgui/audio/AudioSpectrumView.cpp:1080](../Modules/Game/UI/src/ui/imgui/audio/AudioSpectrumView.cpp#L1080) [Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp:360](../Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp#L360) [Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp:683](../Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp#L683) [3rdpty/sources/IonCachyEngine/src/ice/core/effect/GraphicEqualizer.cpp:78](../3rdpty/sources/IonCachyEngine/src/ice/core/effect/GraphicEqualizer.cpp#L78) [3rdpty/sources/IonCachyEngine/src/ice/core/effect/GraphicEqualizer.cpp:232](../3rdpty/sources/IonCachyEngine/src/ice/core/effect/GraphicEqualizer.cpp#L232)
 

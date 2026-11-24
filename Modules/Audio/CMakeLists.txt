@@ -60,6 +60,8 @@ add_library(
   src/AudioMarkerXmp.cpp
   src/AudioSpeedExportService.cpp
   src/KeySoundControl.cpp
+  # 离线分析按任务捕获均衡参数，不向实时音频图发布中间状态。
+  src/OfflineAnalysisEQ.cpp
   src/SoundEffectPool.cpp)
 
 target_link_libraries(
@@ -125,6 +127,12 @@ mmm_register_test_case(
   NAME AudioSpeedExportServiceTest COMMAND AudioSpeedExportServiceTest
   "${MMM_TEST_RESOURCE_DIR}/ma"
   "${CMAKE_BINARY_DIR}/test_output/audio_speed_export_coverage")
+
+# 分段双声道 PCM 和实际播放均衡器逐样本比较，预编译模式同样执行。
+mmm_add_test_executable(Audio OfflineAnalysisEQTest
+                        tests/OfflineAnalysisEQTest.cpp)
+target_link_libraries(OfflineAnalysisEQTest PRIVATE Audio)
+mmm_register_test_case(NAME OfflineAnalysisEQTest COMMAND OfflineAnalysisEQTest)
 
 # 原点对齐测试覆盖裁切开头、补前置静音和零相位重编码。
 mmm_add_test_executable(Audio AudioOriginAlignmentServiceTest

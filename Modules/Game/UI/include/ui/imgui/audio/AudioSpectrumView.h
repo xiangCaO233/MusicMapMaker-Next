@@ -14,11 +14,10 @@
 #include <unordered_map>
 #include <vector>
 
-namespace ice
+namespace MMM::Audio
 {
-class GraphicEqualizer;
-class AudioBuffer;
-}  // namespace ice
+struct OfflineAnalysisEQBand;
+}  // namespace MMM::Audio
 
 namespace MMM::Common::Render
 {
@@ -72,19 +71,9 @@ private:
         uint32_t indexOffset{ 0 };
     };
 
-    /// @brief 同步 EQ 参数到预览 EQ
-    void syncEQ();
-
     /// @brief 启动异步全局预计算 (非阻塞)
     void startAsyncRecalculate();
 
-    /// @brief 后台线程执行体：多核并行 FFT 计算
-    struct EQSettings {
-        bool                enabled{ false };
-        std::vector<double> freqs;
-        std::vector<double> gains;
-        std::vector<double> qs;
-    };
     /// @brief 后台重新计算完整频谱缓存。
     /// @param eq 计算时捕获的 EQ 设置。
     /// @param maxFreq 最高显示频率。
@@ -92,10 +81,11 @@ private:
     /// @param detailLevel 计算时捕获的频谱精细度枚举。
     /// @param detailProfile 计算时捕获的频谱精细度参数。
     /// @warning 后台耗时路径：执行完整音频 FFT 计算，不在 UI/渲染热路径运行。
-    void backgroundRecalculate(std::stop_token stopToken, const EQSettings& eq,
-                               float maxFreq, float logBias,
-                               Config::SpectrumDetailLevel   detailLevel,
-                               Config::SpectrumDetailProfile detailProfile);
+    void backgroundRecalculate(
+        std::stop_token                                  stopToken,
+        const std::vector<Audio::OfflineAnalysisEQBand>& eq, float maxFreq,
+        float logBias, Config::SpectrumDetailLevel detailLevel,
+        Config::SpectrumDetailProfile detailProfile);
 
     /// @brief 添加一个带自定义 UV 的频谱分块矩形。
     void addSpectrumQuad(float x, float y, float w, float h, float uv0X,
@@ -130,10 +120,6 @@ private:
         double viewStart, double viewEnd, float globalVisualOffset,
         double totalTime, double visualTime,
         const Common::Render::RenderSnapshot* snapshot);
-
-    std::shared_ptr<ice::GraphicEqualizer> m_previewEQ;
-    std::unique_ptr<ice::AudioBuffer>      m_processBuffer;
-    std::unique_ptr<ice::AudioBuffer>      m_rawBuffer;
 
     // --- 全局缓存数据 ---
     /// @brief R8 高分辨率强度缓存，行优先 [bin * totalSegments + t]。

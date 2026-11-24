@@ -1,5 +1,6 @@
 #include "ui/imgui/audio/AudioWaveformView.h"
 #include "audio/AudioManager.h"
+#include "audio/OfflineAnalysisEQ.h"
 #include "common/LogicCommands.h"
 #include "common/render/RenderSnapshot.h"
 #include "common/render/RenderSnapshotBuffer.h"
@@ -23,8 +24,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <ice/config/config.hpp>
-#include <ice/core/effect/GraphicEqualizer.hpp>
 #include <ice/manage/AudioBuffer.hpp>
 #include <ice/manage/AudioTrack.hpp>
 
@@ -34,57 +35,6 @@ namespace MMM::UI
 ///
 /// 使用一秒内部采样率作为有界工作块，限制离线重算时临时缓冲容量。
 constexpr std::size_t WAVEFORM_EQ_BLOCK_FRAMES{ 44100U };
-
-/// @brief 把已有 AudioBuffer 暴露给离线 EffectNode 的轻量源节点。
-///
-/// 节点不拥有输入缓冲，只在 `GraphicEqualizer::process`
-/// 同步调用期间复制当前块。 调用方必须保证 `setBuffer`
-/// 指向的对象在一次处理结束前保持有效。
-///
-/// 输出帧数取输入与目标容量的较小值，避免越界；通道数按输入缓冲遍历。该节点只
-/// 用于设置窗口的显式波形重算，不连接实时音频回调。
-///
-/// 节点不会转换采样率、声道布局或样本格式。调用方应使用
-/// `ICEConfig::internal_format`
-/// 准备输入和输出，使这里保持为单一职责的数据桥接层。
-class BufferSourceNode : public ice::IAudioNode
-{
-public:
-    /// @brief 设置下一次离线处理读取的非拥有缓冲指针。
-    /// @param buffer 输入 PCM 缓冲，可为空以禁用复制。
-    void setBuffer(const ice::AudioBuffer* buffer) { m_buffer = buffer; }
-
-    /// @brief 把当前输入块复制到 EffectNode 请求的目标缓冲。
-    /// @param buffer 由效果链提供的输出缓冲。
-    /// @warning 仅用于低频离线计算；不会分配内存，但执行逐通道 PCM 复制。
-    void process(ice::AudioBuffer& buffer) override
-    {
-        // 空输入表示当前没有可提供的 PCM，保持目标缓冲现状。
-        if ( !m_buffer ) return;
-        // 每个输入通道复制相同帧范围，目标格式由调用方预先准备。
-        for ( uint16_t ch = 0; ch < m_buffer->num_channels(); ++ch ) {
-            // 输入不足或目标较小时只复制共同有效的帧数。
-            size_t frames =
-                std::min(buffer.num_frames(), m_buffer->num_frames());
-            // raw_ptrs 指向连续 float PCM，按实际帧数复制字节。
-            std::memcpy(buffer.raw_ptrs()[ch],
-                        m_buffer->raw_ptrs()[ch],
-                        frames * sizeof(float));
-        }
-    }
-
-private:
-    /// @brief 当前离线输入缓冲的非拥有观察指针。
-    /// @warning 只在同步 `process` 调用前设置，不得跨异步任务保留。
-    const ice::AudioBuffer* m_buffer{ nullptr };
-};
-
-/// @brief 波形预览 EQ 共用的缓冲源节点。
-///
-/// 当前波形视图处理在 UI 低频重算路径串行执行，因此节点可复用；若未来并行计算，
-/// 必须改为每任务独立实例，不能并发改写输入指针。
-static std::shared_ptr<BufferSourceNode> g_bufferSource =
-    std::make_shared<BufferSourceNode>();
 
 /// @brief 构造波形视图并预分配固定采样点数组。
 /// @param name 视图显示名称。
@@ -97,6 +47,8 @@ static std::shared_ptr<BufferSourceNode> g_bufferSource =
 AudioWaveformView::AudioWaveformView(const std::string& name) : IUIView(name)
 {
     // processBuffer 保存 EQ 后 PCM，rawBuffer 保存音轨原始块。
+    // 原始工作缓冲总是保留整个桶的容量；滤波工作块限制到此次请求的帧长。
+    // 复用两者避免各时间桶重复申请声道缓冲，也避免把处理后历史写回原始块。
     m_processBuffer = std::make_unique<ice::AudioBuffer>();
     m_rawBuffer     = std::make_unique<ice::AudioBuffer>();
     // 时间轴与左右声道最小/最大包络必须保持完全相同长度。
@@ -147,6 +99,7 @@ void AudioWaveformView::update(UIManager* sourceManager)
     LayoutContext layoutContext(
         *this, windowTitle, true, ImGuiWindowFlags_None, &m_isOpen);
     if ( !m_isOpen ) {
+        // 不再绘制时也要结束本地寻位，防止关闭前正在播放的预览留在激活态。
         m_touchNavigation.suspend();
         return;
     }
@@ -185,6 +138,8 @@ void AudioWaveformView::update(UIManager* sourceManager)
     }
 
     // 通用与波形专用视觉偏移分别读取，避免混淆音频 Seek 时间。
+    // 修改波形专用偏移只改变从已有包络中采样的位置，不要求重新跑 EQ。
+    // 逻辑快照与音频实现的回退分别使用同一方向的通用偏移。
     const auto& visualConfig = Config::AppConfig::instance().getVisualConfig();
     float       globalVisualOffset = visualConfig.getEffectiveVisualOffset();
     float       waveformVisualOffset =
@@ -221,6 +176,7 @@ void AudioWaveformView::update(UIManager* sourceManager)
 
     // 原始触控图表保持本地连续浏览中心，经典方案仍跟随既有播放快照。
     const bool touchInput = Interaction::activeProfile().touchGestures();
+    // 实例 ID 改变意味着显示中心已无原来的谱面坐标，需要交给导航状态重置。
     // 显示中心只在触控活动浏览期间由本地导航维护，平时继续跟随快照。
     // 本地中心不改波形专用偏移，后者仍只控制采样缓存的时间对齐。
     // 两个声道以相同中心采样，连续输入不能让左右图表使用不同基线。
@@ -356,8 +312,9 @@ void AudioWaveformView::update(UIManager* sourceManager)
         startPos, { ImGui::GetContentRegionAvail().x, 0 });
     ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
 
-    // 每帧轻量同步 EQ 参数；包络抽样只读取已经存在的缓存。
-    syncEQ();
+    // 包络抽样只读取已经存在的缓存，EQ 仅在启动重算时配置。
+    // 即使用户在其他窗口调节了增益，未触发同步也可以继续显示当前包络。
+    // 点击发生在上方控件回调，重算完成后本帧可采样刚刚写好的缓存。
     updateEnvelopes(visualTime, totalTime, speed, waveformVisualOffset);
 
     // 两个声道和本帧包络必须使用同一旧半窗；输入的新缩放在下一帧统一绘制。
@@ -474,9 +431,9 @@ void AudioWaveformView::update(UIManager* sourceManager)
             }
 
             if ( touchInput ) {
-                const ImVec2 min     = ImPlot::GetPlotPos(),
-                             size    = ImPlot::GetPlotSize();
-                const bool   blocked = ImGui::IsPopupOpen(
+                const ImVec2 min   = ImPlot::GetPlotPos(),
+                             size  = ImPlot::GetPlotSize();
+                const bool blocked = ImGui::IsPopupOpen(
                     nullptr,
                     ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
                 // 命中仅限实际 Plot 内容，坐标轴和顶部滑块不能成为定位起点。
@@ -514,9 +471,9 @@ void AudioWaveformView::update(UIManager* sourceManager)
             if ( !touchInput &&
                  (ImPlot::IsPlotHovered() || s_lastActive[chanIdx]) ) {
                 // Plot 屏幕矩形用于后续鼠标坐标归一化命令。
-                ImVec2 plotMin = ImPlot::GetPlotPos();
-                ImVec2 plotMax = { plotMin.x + ImPlot::GetPlotSize().x,
-                                   plotMin.y + ImPlot::GetPlotSize().y };
+                ImVec2 plotMin         = ImPlot::GetPlotPos();
+                ImVec2 plotMax         = { plotMin.x + ImPlot::GetPlotSize().x,
+                                           plotMin.y + ImPlot::GetPlotSize().y };
                 double hoverVisualTime = currentHoverVisualTime;
                 double hoverAudioTime  = currentHoverAudioTime;
 
@@ -641,57 +598,13 @@ void AudioWaveformView::update(UIManager* sourceManager)
                   TR("ui.waveform.channel_r").data());
 }
 
-/// @brief 把主音轨 EQ 拓扑与参数同步到波形离线预览链。
-///
-/// EQ 关闭时释放预览节点；频段数量变化时重建 GraphicEqualizer，普通增益与 Q
-/// 变化 只更新已有节点参数。该函数不读取 PCM，也不执行完整波形重算。
-///
-/// 频率决定滤波器拓扑，增益和 Q 只影响现有频段参数。这个差异使普通滑块调整可以
-/// 避免重复分配节点，同时保证频段增删后不会沿用尺寸不匹配的效果链。
-/// @warning UI 热路径：波形窗口每帧调用；仅在频段拓扑改变时允许分配节点。
-void AudioWaveformView::syncEQ()
-{
-    // AudioManager 是主音轨 EQ 开关、频率和参数的运行态真值。
-    auto& audioManager = Audio::AudioManager::instance();
-    if ( !audioManager.isMainTrackEQEnabled() ) {
-        // 关闭 EQ 后波形重算直接复制原始 PCM。
-        m_previewEQ.reset();
-        return;
-    }
-
-    if ( !m_previewEQ || m_previewEQ->get_band_count() !=
-                             audioManager.getMainTrackEQBandCount() ) {
-        // 只有节点缺失或频段数量改变才重建拓扑。
-        // 频率值按管理器索引顺序提取，索引随后也作为参数同步的稳定频段标识。
-        std::vector<double> freqs;
-        size_t              count = audioManager.getMainTrackEQBandCount();
-        for ( size_t i = 0; i < count; ++i ) {
-            // 频率列表按 AudioManager 频段顺序构造。
-            freqs.push_back(audioManager.getMainTrackEQBandFrequency(i));
-        }
-        // GraphicEqualizer 共享 BufferSourceNode 作为同步离线输入。
-        // 共享所有权让效果链在当前视图存活期间持有源节点，但源节点不持有 PCM。
-        m_previewEQ = std::make_shared<ice::GraphicEqualizer>(freqs);
-        // prepare 使用引擎内部格式和固定最大工作块。
-        m_previewEQ->prepare(ice::ICEConfig::internal_format,
-                             WAVEFORM_EQ_BLOCK_FRAMES);
-        m_previewEQ->set_inputnode(g_bufferSource);
-    }
-
-    // 增益和 Q 可在不重建频段拓扑的情况下逐项更新。
-    // 频段数量已经在上方对齐，循环内可安全查询相同索引的管理器参数。
-    for ( size_t i = 0; i < m_previewEQ->get_band_count(); ++i ) {
-        m_previewEQ->set_band_gain_db(i,
-                                      audioManager.getMainTrackEQBandGain(i));
-        m_previewEQ->set_band_q_factor(i, audioManager.getMainTrackEQBandQ(i));
-    }
-}
-
 /// @brief 在显式重算时准备完整 PCM，避免把流式缺页静音写入波形缓存。
 ///
 /// 函数把整个音轨按 `m_cachePointsPerSecond` 切成时间桶，每桶读取有界 PCM
-/// 块，应用 当前预览 EQ
-/// 后记录左右声道最小/最大值。输出缓存供每帧可见窗口重采样。
+/// 块，用开始时捕获的参数构造独立均衡器，之后记录左右声道最小/最大值。
+/// 峰值滤波器依赖前两个输入与输出样本，块间必须连续传递历史。
+/// 缓存是一轮重算的结果，不随播放图上的 EQ 编辑在每帧被隐式替换。
+/// 输出缓存供每帧可见窗口重采样。
 ///
 /// 每个桶保存极值而非单点采样，可以在缩小视野时保留短促峰值。缓存密度与 UI
 /// 展示点数相互独立，放大时可能重复读取同一桶，但不会重新访问音轨。
@@ -714,7 +627,8 @@ void AudioWaveformView::fullRecalculate()
         if ( !track ) return;
     }
 
-    // 进入计算状态后 update 会显示模态，阻止用户重复发起重算。
+    // 以当前音频时间轴长度分配包络，播放头仍按同一时间单位读取缓存。
+    // 界面偏移和缩放均由显示层处理，因此同一缓存可以用于任意视野。
     m_isCalculating   = true;
     double totalTime  = audioManager.getTotalTime();
     double sampleRate = ice::ICEConfig::internal_format.samplerate;
@@ -723,6 +637,7 @@ void AudioWaveformView::fullRecalculate()
     size_t totalPoints =
         static_cast<size_t>(totalTime * m_cachePointsPerSecond) + 1;
 
+    // 桶位置由秒数决定，初始化不能依赖每个声道实际写入的数据量。
     // 四个缓存长度完全一致，并用静音初始化未覆盖桶。
     // assign 会替换上一轮效果结果，确保 EQ 配置变化后没有残留旧极值。
     m_cachedMinL.assign(totalPoints, 0.0f);
@@ -730,17 +645,27 @@ void AudioWaveformView::fullRecalculate()
     m_cachedMinR.assign(totalPoints, 0.0f);
     m_cachedMaxR.assign(totalPoints, 0.0f);
 
-    // 读取 PCM 前同步 EQ 拓扑与参数，保证整轮缓存使用同一配置。
-    syncEQ();
+    // 整轮重算复用同一套系数与声道历史，下次显式重算再捕获新配置。
+    // EQ 的中心频率、增益和 Q 作为一个快照，支持预设切换以及单段调节。
+    // 即使新旧预设的频段数相同，也会按捕获的中心频率重新计算系数。
+    // 每一轮从零滤波历史开始，上一轮结尾不会影响本轮音轨开头。
+    // 播放图仍保留自己的滤波器和播放位置，离线任务不会改变它。
+    Audio::OfflineAnalysisEQ eq(Audio::captureOfflineAnalysisEQ(audioManager),
+                                sampleRate,
+                                ice::ICEConfig::internal_format.channels);
 
     // 两个工作缓冲预分配为最大块，循环内只调整有效帧数。
     // 固定容量把临时内存与音轨总时长解耦，长音频只增长极值缓存。
+    // PCM 工作块与显示采样密度分开配置，拖动缩放无需调整这些缓冲。
     const size_t chunkSize = WAVEFORM_EQ_BLOCK_FRAMES;
     m_rawBuffer->resize(ice::ICEConfig::internal_format, chunkSize);
     m_processBuffer->resize(ice::ICEConfig::internal_format, chunkSize);
 
     for ( size_t p = 0; p < totalPoints; ++p ) {
         // 每个缓存索引映射到固定时长桶的起止秒数和帧区间。
+        // 用相邻时间点独立计算边界而非递增固定帧数，支持非整数帧长密度。
+        // 相邻桶共享同一取整边界，避免长期扫描中逐次舍入造成时间漂移。
+        // 保持每个区间右端开，交界处采样不会两次进入滤波器。
         double startTime  = p / m_cachePointsPerSecond;
         double endTime    = (p + 1) / m_cachePointsPerSecond;
         size_t startFrame = static_cast<size_t>(startTime * sampleRate);
@@ -757,21 +682,16 @@ void AudioWaveformView::fullRecalculate()
         // read 的有效帧数与后续 resize、复制及极值循环必须保持一致。
         track->read(*m_rawBuffer, startFrame, frames);
 
-        if ( m_previewEQ ) {
-            // 共享源指向当前原始块，EQ 输出写入 processBuffer。
-            // 输入指针仅在紧随其后的同步 process 调用中有效，不会逃逸到下一桶。
-            g_bufferSource->setBuffer(m_rawBuffer.get());
-            m_processBuffer->resize(ice::ICEConfig::internal_format, frames);
-            m_previewEQ->process(*m_processBuffer);
-        } else {
-            // EQ 关闭时逐通道复制原始数据，后续包络路径保持一致。
-            // 保留独立输出缓冲使极值统计无需分叉，也不会改写解码器提供的数据。
-            m_processBuffer->resize(ice::ICEConfig::internal_format, frames);
-            for ( uint16_t ch = 0; ch < m_rawBuffer->num_channels(); ++ch )
-                std::memcpy(m_processBuffer->raw_ptrs()[ch],
-                            m_rawBuffer->raw_ptrs()[ch],
-                            frames * sizeof(float));
+        // 将当前桶复制到独立缓冲以匹配有效块长，再原位滤波。
+        // 频段关闭时直接保留这份 PCM，使同一包络统计逻辑适用于两种模式。
+        // 单次滤波调用应仅消费连续采样，块外未用于绘制的空间不参与历史。
+        m_processBuffer->resize(ice::ICEConfig::internal_format, frames);
+        for ( std::uint16_t ch = 0; ch < m_rawBuffer->num_channels(); ++ch ) {
+            std::memcpy(m_processBuffer->raw_ptrs()[ch],
+                        m_rawBuffer->raw_ptrs()[ch],
+                        frames * sizeof(float));
         }
+        eq.process(*m_processBuffer);
 
         // 单声道输入把左声道样本同时用于右声道包络。
         // 双声道以上只展示前两个声道；波形窗口的 UI 契约固定为左右两行。
@@ -789,6 +709,7 @@ void AudioWaveformView::fullRecalculate()
             if ( sR > maxR ) maxR = sR;
         }
         // 桶统计写入相同索引的四个缓存数组。
+        // 这里保留有符号的区间边界，绘制时上下包络不需要再从绝对值推算。
         m_cachedMinL[p] = minL;
         m_cachedMaxL[p] = maxL;
         m_cachedMinR[p] = minR;
@@ -825,12 +746,15 @@ void AudioWaveformView::updateEnvelopes(double visualTime, double totalTime,
 
     for ( int i = 0; i < m_samplePoints; ++i ) {
         // 固定采样点均匀覆盖整个可见时间窗。
+        // 按固定点数重新映射视野，开销独立于音轨时长和 EQ 频段数。
+        // 放大可多次引用同一个桶，缩小时按时间选择桶，均不触及原始 PCM。
         // 分母使用点数而非点数减一，保持历史右端开区间采样语义。
-        double t   = viewStart + (static_cast<double>(i) / m_samplePoints) *
-                                     (viewEnd - viewStart);
+        double t = viewStart + (static_cast<double>(i) / m_samplePoints) *
+                                   (viewEnd - viewStart);
         m_times[i] = t;
 
         // 缓存索引属于音频时间，需要扣除波形视觉偏移。
+        // X 坐标仍用原始视野时间，图表交互不因修改偏移而改变 Seek 位置。
         double audioT = t - waveformVisualOffset;
 
         if ( audioT < 0 || audioT >= totalTime ) {
@@ -841,7 +765,7 @@ void AudioWaveformView::updateEnvelopes(double visualTime, double totalTime,
             continue;
         }
 
-        // 秒数按缓存密度映射到最近的离散桶索引。
+        // 秒数按缓存密度映射到覆盖该时间的半开桶。
         // static_cast 对非负时间向下取整，对应 fullRecalculate 的桶起点定义。
         size_t p = static_cast<size_t>(audioT * m_cachePointsPerSecond);
         if ( p < m_cachedMinL.size() ) {
