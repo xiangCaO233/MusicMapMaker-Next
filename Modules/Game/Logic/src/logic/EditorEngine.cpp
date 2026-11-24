@@ -1743,10 +1743,10 @@ void EditorEngine::restoreProjectWorkspace(
                                       ? map->m_baseMapMetadata.name
                                       : state.m_displayName;
         int32_t     index       = createSession(map,
-                                                displayName,
-                                                false,
-                                                state.m_cameraId,
-                                                !state.m_cameraId.empty());
+                                      displayName,
+                                      false,
+                                      state.m_cameraId,
+                                      !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
         // fallback 始终指向最后成功创建项，活动路径丢失时仍给用户可用画布。
 
@@ -2973,8 +2973,8 @@ void EditorEngine::pushCommand(LogicCommand&&               cmd,
          metadata && metadata->trackCountEdit ) {
         const auto snapshot = impl().m_sessionRegistry.publishedSnapshot();
         const auto active   = std::ranges::find(snapshot->sessions,
-                                                snapshot->activeIndex,
-                                                &SessionSnapshotEntry::index);
+                                              snapshot->activeIndex,
+                                              &SessionSnapshotEntry::index);
         // 活动索引和条目来自同代，索引左移时不能回退到任意当前会话。
         // Session 自己执行协作权限检查；Logo 只显示工具占位状态。
         if ( active != snapshot->sessions.end() && !active->isLogoPlaceholder )
@@ -3059,28 +3059,35 @@ void EditorEngine::restoreBrushAudioResourceUnsafe(
     }));
 }
 
-/// @brief 查询是否有会话撤销栈处于未保存状态。
-/// @return 任一有效会话 actionStack 为脏时返回 true。
-/// @details
-/// 查询遍历所有打开会话而非仅活动标签，关闭项目提示必须覆盖后台谱面修改。
-/// Logo 和空会话没有脏撤销栈，自然被空指针与栈状态检查排除。
-/// @note 不比较磁盘文件，也不检查尚未进入撤销栈的项目配置变更。
-/// @warning 关闭提示或 UI 状态查询可重复调用；只遍历已打开会话，
-/// 禁止在查询中序列化谱面或扫描完整 ECS。
-bool EditorEngine::hasUnsavedChanges() const
+/// @brief 捕获窗口关闭时统一使用的保存确认信息。
+/// @return 任一有效会话有未保存的撤销栈修改时，返回活动谱面名称。
+/// @details 关闭是全项目操作，所以脏标记不能只检查活动标签；弹窗仍使用
+/// 当前用户可见的谱面名称。脏标记和名称在同一临界区读取，返回值不借用模型。
+/// @note 不检查磁盘文件，也不查询尚未进入撤销栈的项目配置变更。
+/// @warning 只在窗口收到关闭请求时调用，不允许从弹窗绘制循环反复调用。
+std::optional<std::string> EditorEngine::captureUnsavedExitMapName() const
 {
-    std::lock_guard<std::recursive_mutex> lock(
-        impl().m_sessionRegistry.mutex());
-    // 检查所有 Session 是否有未保存的修改
-    /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
-    const auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
-    for ( const auto& entry : sessions ) {
-        if ( entry.session &&
-             entry.session->getContext().actionStack.isDirty() ) {
-            return true;
+    const auto&                           registry = impl().m_sessionRegistry;
+    std::lock_guard<std::recursive_mutex> lock(registry.mutex());
+    const auto&                           sessions = registry.entriesUnsafe();
+    // 后台标签也可能有改动，先汇总需要确认的状态，再读取活动谱面用于提示。
+    const bool anyUnsaved =
+        std::ranges::any_of(sessions, [](const auto& entry) {
+            return entry.session &&
+                   entry.session->getContext().actionStack.isDirty();
+        });
+    if ( !anyUnsaved ) return std::nullopt;
+    const auto index = registry.activeIndex();
+    if ( index >= 0 && static_cast<std::size_t>(index) < sessions.size() ) {
+        const auto& entry = sessions[static_cast<std::size_t>(index)];
+        if ( entry.session ) {
+            // 原始元数据名与 tab 前缀、格式标记无关，弹窗保持原文案语义。
+            const auto& beatmap = entry.session->getContext().currentBeatmap;
+            if ( beatmap ) return beatmap->m_baseMapMetadata.name;
         }
     }
-    return false;
+    // 保留有后台未保存内容但没有活动谱面时的退出确认。
+    return std::string("Unknown");
 }
 
 /// @brief 回收已停止生成快照的对比相机注册项。
@@ -3793,10 +3800,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 顺序投递初始化命令，保证载图处理看到完整编辑环境。
                 sessions[i].isLogoPlaceholder        = false;
                 sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
-                sessions[i].displayName = displayName.empty()
-                                              ? beatmap->m_baseMapMetadata.name
-                                              : displayName;
-                sessions[i].beatmapPathKey = requestedBeatmapKey;
+                sessions[i].displayName              = displayName.empty()
+                                                           ? beatmap->m_baseMapMetadata.name
+                                                           : displayName;
+                sessions[i].beatmapPathKey           = requestedBeatmapKey;
                 // 占位条目的旧音频身份必须覆盖为空，等待载图命令生成新描述符。
                 sessions[i].audioTimelineFingerprint =
                     requestedAudioTimelineFingerprint;
