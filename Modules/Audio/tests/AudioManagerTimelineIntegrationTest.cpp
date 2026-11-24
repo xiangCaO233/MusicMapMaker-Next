@@ -209,7 +209,8 @@ bool testSingleClipResourceProcessing(MMM::Audio::AudioManager& manager,
         return false;
     }
 
-    const auto   rawTrack = manager.getBGMTrack();
+    const auto   source   = manager.getBgmAnalysisSource();
+    const auto&  rawTrack = source.track;
     const double sampleRate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
     // getBGMTrack 保留兼容语义，返回首个解码源而非处理后的资源副本。
@@ -218,7 +219,10 @@ bool testSingleClipResourceProcessing(MMM::Audio::AudioManager& manager,
     const double expectedEnd =
         0.01 + static_cast<double>(rawTrack->num_frames()) /
                    (sampleRate * static_cast<double>(config.playbackSpeed));
-    if ( std::abs(manager.getTotalTime() - expectedEnd) > 0.02 ) {
+    // 分析来源必须保留复合时间线时长并与原始轨道一次发布。
+    if ( source.generation == 0 ||
+         std::abs(source.duration - expectedEnd) > 0.02 ||
+         source.duration != manager.getTotalTime() ) {
         XERROR("Per-resource playbackSpeed did not change clip duration");
         return false;
     }
@@ -729,6 +733,8 @@ bool testTimelineUnloadReleasesDecodedTrack(MMM::Audio::AudioManager& manager,
                                   } },
                                   0.0,
                                   "release-decoded-track");
+    // 只保存代次，用弱引用观察卸载，避免测试自己把缓存变成强引用。
+    const auto generation = manager.getBgmAnalysisSource().generation;
     std::weak_ptr<ice::AudioTrack> decodedTrack = manager.getBGMTrack();
     if ( !result.success || decodedTrack.expired() ) {
         XERROR("Decoded track was unavailable before timeline unload");
@@ -737,7 +743,10 @@ bool testTimelineUnloadReleasesDecodedTrack(MMM::Audio::AudioManager& manager,
 
     // 卸载负责断开音频图并清理池缓存，不要求等待另一个音频 block。
     manager.unloadAudioTimeline();
-    if ( !decodedTrack.expired() ) {
+    const auto unloaded = manager.getBgmAnalysisSource();
+    // 新一代的无轨状态不能沿用先前时间线时长，也不能保活已移除轨道。
+    if ( !decodedTrack.expired() || unloaded.track ||
+         unloaded.duration != 0.0 || unloaded.generation == generation ) {
         XERROR("Timeline unload left decoded track retained by AudioPool");
         return false;
     }

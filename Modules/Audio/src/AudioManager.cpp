@@ -480,7 +480,7 @@ void AudioManager::shutdown()
     clearSoundEffects();
     unloadAuditionTrack();
 
-    m_bgmTrack.reset();
+    publishBgmAnalysisSource({}, 0.0);
     // 兼容 BGM 观察状态与新复合时间线状态一起清空。
     m_bgmPath.clear();
     m_bgmSyncKey.clear();

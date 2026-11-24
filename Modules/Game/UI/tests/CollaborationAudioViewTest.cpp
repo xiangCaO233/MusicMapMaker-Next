@@ -13,10 +13,61 @@
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "ui/imgui/audio/AudioWaveformView.h"
 #include "ui/workspace/IWorkspacePresentation.h"
+#include <future>
 
 #include <memory>
 #include <string>
 #include <string_view>
+
+namespace MMM::UI
+{
+/// @brief 直接驱动生产状态机，确定性覆盖结果晚于时间线切换的交付。
+struct AudioSpectrumViewTestAccess {
+    /// @brief 同长度换轨、往返换轨和退出工程时都不能显示旧像素。
+    static bool checkSourceChanges()
+    {
+        AudioSpectrumView view("SpectrumSourceTest");
+        view.retarget(11, true);
+        view.m_spectrumReady      = true;
+        view.m_texturesNeedReload = true;
+        view.m_spectrumDrawCmds.emplace_back();
+        std::promise<bool> oldResult;
+        view.m_calcFuture = oldResult.get_future();
+
+        // 模拟 A→B→A：最后一次仍是 A 的文件，但音频调度世代已经改变。
+        view.retarget(12, true);
+        view.retarget(13, true);
+        const bool hidden =
+            !view.m_spectrumReady && !view.m_texturesNeedReload &&
+            view.m_spectrumDrawCmds.empty() && view.m_recalculateRequested;
+
+        // 旧工作者已经生成一批看似有效的像素，但该批次已撤销交付资格。
+        view.m_cachedIntensityL        = { 19 };
+        view.m_cachedIntensityR        = { 21 };
+        view.m_cachedNumTotalSegments  = 1;
+        view.m_pendingNumFrequencyBins = 1;
+        oldResult.set_value(true);
+        view.pollCalculation();
+        if ( !hidden || view.m_calcFuture.valid() || view.m_texturesNeedReload )
+            return false;
+
+        // 同样的数据只有从当前任务返回时才可进入上传阶段。
+        std::promise<bool> currentResult;
+        view.m_calcStopSource = std::stop_source{};
+        view.m_calcFuture     = currentResult.get_future();
+        currentResult.set_value(true);
+        view.pollCalculation();
+        if ( !view.m_texturesNeedReload || view.m_pendingChunksL.size() != 1 ||
+             view.m_spectrumReady )
+            return false;
+
+        // 退出工程也要撤销已经就绪但尚未上传的分块。
+        view.retarget(0, false);
+        return !view.m_texturesNeedReload && view.m_pendingChunksL.empty() &&
+               !view.m_spectrumReady;
+    }
+};
+}  // namespace MMM::UI
 
 namespace
 {
@@ -281,7 +332,8 @@ int main()
         MMM::UI::UIManager manager;
         passed = checkGuestAudio(manager) &&
                  checkHiddenCanvasPlayback(manager) &&
-                 checkControllerWindowRouting(manager);
+                 checkControllerWindowRouting(manager) &&
+                 MMM::UI::AudioSpectrumViewTestAccess::checkSourceChanges();
     }
     // 所有拥有 UI 窗口的对象已销毁，随后释放全局上下文。
     ImGui::DestroyContext();

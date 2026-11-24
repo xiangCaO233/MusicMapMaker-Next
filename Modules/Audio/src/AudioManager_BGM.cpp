@@ -488,8 +488,10 @@ AudioTimelineLoadResult AudioManager::installAudioTimeline(
     m_audioTimelineFingerprint      = fingerprint;
     m_audioTimelineClipCount        = m_audioTimelineNode->clipCount();
     m_missingAudioTimelineClipCount = result.missingClipCount;
-    m_bgmTrack                      = std::move(prepared.m_firstTrack);
-    m_bgmPath                       = std::move(prepared.m_singlePath);
+    // 调度已经就位，长度与这次准备的首轨公开为一个值。
+    // 读者无需接触 Mixer 或先读音轨再读取可能已经更新的时长。
+    publishBgmAnalysisSource(std::move(prepared.m_firstTrack), getTotalTime());
+    m_bgmPath = std::move(prepared.m_singlePath);
     // 只有严格单事件时间线可暴露旧“单 BGM 路径”语义。
     m_bgmSyncKey = fingerprint;
 
@@ -550,7 +552,7 @@ void AudioManager::unloadAudioTimeline(bool waitForRetirement)
     m_audioTimelineFingerprint.clear();
     m_audioTimelineClipCount        = 0U;
     m_missingAudioTimelineClipCount = 0U;
-    m_bgmTrack.reset();
+    publishBgmAnalysisSource({}, 0.0);
     m_bgmPath.clear();
     m_bgmSyncKey.clear();
     // 交互模式同样先清理可查询状态，随后才决定如何让设备接管新代次。
@@ -861,11 +863,33 @@ void AudioManager::unloadBGM()
     unloadAudioTimeline();
 }
 
+/// @brief 将一份轨道与时间线时长同时提交给 UI。
+/// @param track 由调度准备阶段提供，空值代表清除可分析来源。
+/// @param duration 调度提交时的复合长度，单位为秒。
+void AudioManager::publishBgmAnalysisSource(
+    std::shared_ptr<ice::AudioTrack> track, double duration)
+{
+    // 参数接收旧音轨，离开锁域后才允许释放解码器和 PCM。
+    {
+        std::lock_guard lock(m_bgmAnalysisMutex);
+        m_bgmAnalysisSource.track.swap(track);
+        m_bgmAnalysisSource.duration = duration;
+        ++m_bgmAnalysisSource.generation;
+    }
+}
+
+/// @brief 获取单次发布中的轨道、时长与代次。
+AudioManager::BgmAnalysisSource AudioManager::getBgmAnalysisSource() const
+{
+    std::lock_guard lock(m_bgmAnalysisMutex);
+    return m_bgmAnalysisSource;
+}
+
 /// @brief 获取当前时间线首个成功加载的音轨，供旧可视化入口兼容。
 /// @return 没有有效采样时返回空指针。
 std::shared_ptr<ice::AudioTrack> AudioManager::getBGMTrack() const
 {
-    return m_bgmTrack;
+    return getBgmAnalysisSource().track;
 }
 
 /// @brief 获取单片段兼容时间线的文件路径。
