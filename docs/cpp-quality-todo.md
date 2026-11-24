@@ -138,11 +138,13 @@
 
   已验证。逐级检查皮肤父目录，拒绝目录链接和 Windows 目录重解析点。Linux 回归验证外部哨兵保留且修复目录后可重试；Win32 实现通过交叉编译检查。
 
-- [ ] **R48 · P1 · 插件倍速导出失败可截断已有目标音频**
+- [x] **R48 · P1 · 插件倍速导出失败可截断已有目标音频**
 
   单文件插件接口直接传最终路径，编码器以写模式打开后仍可能失败。只防输入输出同文件不足以保护上一次成功导出的目标。 在目标卷创建唯一且保留原扩展名的暂存文件，编码、排空、关闭全部成功后再替换。已有目标、中途写失败、关闭失败均保留原字节，同时验证正常覆盖和暂存清理。
 
   [ToolPluginView.cpp L1197](../Modules/Game/UI/src/ui/plugin/ToolPluginView.cpp#L1197)、[AudioSpeedExportService.cpp L400](../Modules/Audio/src/AudioSpeedExportService.cpp#L400)、[FFmpegFileReceiver.cpp L830](../3rdpty/sources/IonCachyEngine/src/ice/out/io/FFmpegFileReceiver.cpp#L830)
+
+  已验证。倍速导出先在目标卷编码，结束并关闭后才替换目标；Linux 写入故障回归和独立关闭故障探针均确认原文件字节保留，正常覆盖和暂存清理通过。
 
 - [ ] **R49 · P2 · 文件管理器注销订阅后，在途回调仍可写已销毁对象**
 
