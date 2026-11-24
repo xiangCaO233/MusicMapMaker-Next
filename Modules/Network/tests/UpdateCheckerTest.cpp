@@ -478,6 +478,8 @@ static int testUpdateSuccessMarker()
     namespace fs = std::filesystem;
     using MMM::Update::consumeMacUpdateMarker;
     using MMM::Update::macUpdateMarkerPath;
+    // 两个 bundle 刻意使用相同的 basename，用不同父目录区分安装身份。
+    // markers 根由夹具注入，验证旧协议时也不会查找当前用户的系统临时目录。
     const auto      root = fs::current_path() / "test_output" / "update-marker";
     const auto      appA = root / "stable" / "MusicMapMaker-Next.app";
     const auto      appB = root / "preview" / "MusicMapMaker-Next.app";
@@ -485,17 +487,25 @@ static int testUpdateSuccessMarker()
     const auto      exeB = appB / "Contents/MacOS/MusicMapMaker-Next";
     const auto      temp = root / "markers";
     std::error_code error;
+    // consumeMacUpdateMarker 会解析可执行文件的实际路径；先建立 bundle 层级。
+    // 创建资源失败就直接返回，避免把 fixture 缺失误诊成标记归属错误。
     for ( const auto& directory :
           { exeA.parent_path(), exeB.parent_path(), temp } ) {
         fs::create_directories(directory, error);
         if ( error ) return 1;
     }
+    // 占位文件只供 canonical 定位安装，消费过程无需加载可执行文件内容。
     std::ofstream(exeA).put('a');
     std::ofstream(exeB).put('b');
+    /// @brief 写入一个成功标记，正文由调用方指定，便于构造归属错误的场景。
+    /// @param marker 夹具里的标记存储位置。
+    /// @param app 正文指向的安装包路径，可与标记名对应的安装不同。
+    /// @return 正文成功写入时为 true。
     const auto write = [](const fs::path& marker, const fs::path& app) {
-        // 标记与生产写入一样保存包的原生路径，目标目录已由夹具建立。
+        // 正文使用 UTF-8 与原生分隔符，匹配更新标记的磁盘协议。
+        // 用字节长度写入，避免额外追加 NUL 或换行干扰归属检查。
         std::ofstream stream(marker, std::ios::binary);
-        const auto    bytes = app.string();
+        const auto    bytes = app.u8string();
         return static_cast<bool>(
             stream.write(reinterpret_cast<const char*>(bytes.data()),
                          static_cast<std::streamsize>(bytes.size())));
@@ -503,22 +513,27 @@ static int testUpdateSuccessMarker()
     const auto markerA = macUpdateMarkerPath(appA, temp);
     const auto markerB = macUpdateMarkerPath(appB, temp);
     const auto legacy  = temp / "MusicMapMaker-Next.mm_update_success";
+    // 重跑可清理此前中断留下的旧标记，使后续新标记检查独立于兼容回退。
     fs::remove(legacy, error);
     if ( markerA.empty() || markerB.empty() || markerA == markerB ) return 1;
+    // 第二次消费 A 应失败，验证成功读取后确实删除对应的标记。
     // 两个更新可以同时存在。先打开 B 必须只取走 B 的消息。
     if ( !write(markerA, appA) || !write(markerB, appB) ||
          !consumeMacUpdateMarker(exeB, temp) || !fs::exists(markerA) ||
          !consumeMacUpdateMarker(exeA, temp) ||
          consumeMacUpdateMarker(exeA, temp) )
         return 1;
+    // 先从错误安装尝试消费旧标记，检查它仍然留给正确目标。
     // 相同文件名并不足以证明安装身份。旧协议也必须遵守这一约束。
     if ( !write(legacy, appA) || consumeMacUpdateMarker(exeB, temp) ||
          !fs::exists(legacy) || !consumeMacUpdateMarker(exeA, temp) )
         return 1;
+    // 刻意把 B 写入 A 的标记，单独检查带哈希的文件名也不能替代正文校验。
     // 独立文件仍验证正文，确保名称碰撞或错误内容不会消费别的安装标记。
     const bool wrongContentRejected = write(markerA, appB) &&
                                       !consumeMacUpdateMarker(exeA, temp) &&
                                       fs::exists(markerA);
+    // 归属失败应留下原文件作为证据；此处只清除本夹具的错误标记。
     fs::remove(markerA, error);
     return wrongContentRejected ? 0 : 1;
 }

@@ -327,7 +327,9 @@ int main(int argc, char* argv[])
     }
 
     XINFO("========================================");
-    XINFO("  OSU Consistency Test: {}", input.filename().string());
+    // 名称只进入日志，读取和写出沿用原生路径对象。
+    XINFO("  OSU Consistency Test: {}",
+          MMM::Config::pathToUtf8(input.filename()));
     XINFO("========================================");
 
     // 第一轮先走真实加载和保存入口，生成待比较的 osu! 文本。

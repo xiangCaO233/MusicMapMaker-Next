@@ -1,5 +1,6 @@
 #include "FormatTestHelpers.hpp"
 #include "TestHelper.hpp"
+#include "config/Utf8Path.h"
 #include "mmm/beatmap/BeatMap.h"
 
 #include <algorithm>
@@ -70,7 +71,8 @@ int main(int argc, char* argv[])
     std::filesystem::path output = argv[2];
 
     XINFO("========================================");
-    XINFO("  Malody Consistency Test: {}", input.filename().string());
+    XINFO("  Malody Consistency Test: {}",
+          MMM::Config::pathToUtf8(input.filename()));
     XINFO("========================================");
 
     // 第一层执行加载、同步和保存，得到可与原始 JSON 分区比较的输出。

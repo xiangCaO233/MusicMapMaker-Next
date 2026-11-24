@@ -550,7 +550,8 @@ std::optional<DecodedManifest> decodeManifest(const ByteBuffer& payload)
         if ( cachePath.is_absolute() || cachePath.has_root_path() ||
              cachePath.parent_path() != "files" ||
              !file.cachePath.starts_with("files/") ||
-             !cachePath.filename().string().starts_with(file.sha256) ) {
+             !MMM::Config::pathToUtf8(cachePath.filename())
+                  .starts_with(file.sha256) ) {
             return std::nullopt;
         }
         if ( !cachePaths.insert(file.cachePath).second ) return std::nullopt;

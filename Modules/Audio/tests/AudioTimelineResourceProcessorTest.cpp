@@ -1,4 +1,5 @@
 #include "audio/AudioTimelineResourceProcessor.h"
+#include "config/Utf8Path.h"
 
 #include "audio/AudioTimelineMixerNode.h"
 #include "log/colorful-log.h"
@@ -252,7 +253,9 @@ int main(int argc, char** argv)
     const std::filesystem::path samplePath(argv[1]);
     ice::ThreadPool             threadPool(2);
     ice::AudioPool              audioPool;
-    auto track = audioPool.get_or_load(threadPool, samplePath.string()).lock();
+    auto                        track =
+        audioPool.get_or_load(threadPool, MMM::Config::pathToUtf8(samplePath))
+            .lock();
     // 至少 64 帧确保时长比例和样本差比较具有有效公共区间。
     if ( !track || track->num_frames() < 64U ) {
         XERROR("Failed to prepare resource DSP test sample");

@@ -1,4 +1,5 @@
 #include "common/VideoFrameDecoder.h"
+#include "config/Utf8Path.h"
 
 #include "log/colorful-log.h"
 
@@ -186,7 +187,7 @@ bool createTestVideo(const std::filesystem::path& filePath)
     // 函数以布尔值汇总所有 FFmpeg 步骤，任一失败都由 RAII 回滚已建资源。
     // 输出格式显式指定 AVI，扩展名只承担可读文件名作用。
     AVFormatContext*  rawFormatContext{ nullptr };
-    const std::string path = filePath.string();
+    const std::string path = MMM::Config::pathToUtf8(filePath);
     if ( avformat_alloc_output_context2(
              &rawFormatContext, nullptr, "avi", path.c_str()) < 0 ||
          !rawFormatContext ) {
@@ -290,7 +291,7 @@ bool createBt709ColorVideo(const std::filesystem::path& filePath)
     // 与普通 fixture 分开实现，避免色彩专用参数改变时序测试编码特征。
     // Matroska 能稳定保存 MPEG-4 视频及显式色彩元数据。
     AVFormatContext*  rawFormatContext{ nullptr };
-    const std::string path = filePath.string();
+    const std::string path = MMM::Config::pathToUtf8(filePath);
     if ( avformat_alloc_output_context2(
              &rawFormatContext, nullptr, "matroska", path.c_str()) < 0 ||
          !rawFormatContext ) {
@@ -571,7 +572,7 @@ bool testExternalProbeFile()
     if ( !info || info->width == 0 || info->height == 0 ) {
         // 真实文件必须至少提供正尺寸，未知时长仍允许继续解码零点。
         XERROR("VideoFrameDecoderTest: Failed to probe external video {}",
-               videoPath.string());
+               MMM::Config::pathToUtf8(videoPath));
         return false;
     }
 
@@ -582,7 +583,7 @@ bool testExternalProbeFile()
     if ( !decoder.open(videoPath) ) {
         // 探测成功但正式打开失败同样属于解码器状态不一致。
         XERROR("VideoFrameDecoderTest: Failed to open external video {}",
-               videoPath.string());
+               MMM::Config::pathToUtf8(videoPath));
         return false;
     }
     // 首次时间点请求验证 RGBA 数据与探测尺寸保持一致。
@@ -590,7 +591,7 @@ bool testExternalProbeFile()
     if ( !frame || frame->rgba.empty() || frame->width != info->width ||
          frame->height != info->height ) {
         XERROR("VideoFrameDecoderTest: Failed to decode external video {}",
-               videoPath.string());
+               MMM::Config::pathToUtf8(videoPath));
         return false;
     }
 
@@ -612,7 +613,7 @@ bool testExternalProbeFile()
                 XERROR(
                     "VideoFrameDecoderTest: Scrub decode failed for {} at "
                     "{:.4f}s",
-                    videoPath.string(),
+                    MMM::Config::pathToUtf8(videoPath),
                     scrubTime);
                 return false;
             }
@@ -623,7 +624,7 @@ bool testExternalProbeFile()
     XINFO(
         "VideoFrameDecoderTest: External probe passed for {} [{}x{}, "
         "frame {:.4f}s]",
-        videoPath.string(),
+        MMM::Config::pathToUtf8(videoPath),
         frame->width,
         frame->height,
         frame->timestamp);

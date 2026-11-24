@@ -529,7 +529,7 @@ std::optional<int> resolveFreeTypeFaceIndex(const std::filesystem::path& path,
     UniqueFreeTypeLibrary library(rawLibrary);
 
     // CoreText 已返回 POSIX 路径；macOS 文件系统路径可由 FreeType 直接打开。
-    const std::string filePath = path.string();
+    const std::string filePath = path.native();
     FT_Face           rawProbe = nullptr;
     // 负索引只打开集合元数据，不选择具体可渲染 face。
     if ( FT_New_Face(library.get(), filePath.c_str(), -1, &rawProbe) != 0 ) {

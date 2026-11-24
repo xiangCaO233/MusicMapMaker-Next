@@ -1,4 +1,5 @@
 #include "canvas/AnnotationExport.h"
+#include "config/Utf8Path.h"
 
 #include <filesystem>
 #include <fstream>
@@ -65,7 +66,7 @@ std::string readArchiveMember(const std::filesystem::path& path,
                               const char*                  name)
 {
     mz_zip_archive archive{};
-    const auto     file = path.string();
+    const auto     file = MMM::Config::pathToUtf8(path);
     if ( !mz_zip_reader_init_file(&archive, file.c_str(), 0) ) return {};
     std::size_t size = 0;
     void* data = mz_zip_reader_extract_file_to_heap(&archive, name, &size, 0);

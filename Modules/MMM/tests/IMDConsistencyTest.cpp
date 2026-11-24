@@ -1,6 +1,7 @@
 #include "FormatTestHelpers.hpp"
 #include "TestHelper.hpp"
 #include "beatmap/LoadRMMap.hpp"
+#include "config/Utf8Path.h"
 #include "mmm/beatmap/BeatMap.h"
 
 #include <algorithm>
@@ -165,11 +166,11 @@ int main(int argc, char* argv[])
     std::filesystem::path output = argv[2];
     // 加载器从文件名解析标题、轨道数与难度，因此往返输出沿用原始文件名；
     // argv[2] 仅决定输出目录，防止测试重命名本身改变逻辑模型。
-    std::string orig_name = input.filename().string();
-    output                = output.parent_path() / orig_name;
+    output = output.parent_path() / input.filename();
 
     XINFO("========================================");
-    XINFO("  IMD Consistency Test: {}", input.filename().string());
+    XINFO("  IMD Consistency Test: {}",
+          MMM::Config::pathToUtf8(input.filename()));
     XINFO("========================================");
 
     // 第一层验证文件布局：加载、同步并重新保存后，按格式区块比较二进制内容。
@@ -220,7 +221,7 @@ int main(int argc, char* argv[])
     // FLAC 发现属于明确的兼容性契约，也必须独立通过。
     int totalPassed = binaryPassed + (logicPassed ? 1 : 0) +
                       (flacAudioResolutionPassed ? 1 : 0);
-    int totalTests = TOTAL_IMD_CHUNKS + 2;
+    int totalTests  = TOTAL_IMD_CHUNKS + 2;
     XINFO("========================================");
     bool isConsideredPassed =
         // 完全一致是理想结果；历史样本至少要求三个核心区块及全部逻辑通过。

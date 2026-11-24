@@ -54,7 +54,7 @@ bool configureMacOSBundledVulkanDriver()
 
     // VK_DRIVER_FILES 明确覆盖 loader 的驱动选择，必须在 glfwInit 及任何 Vulkan
     // 枚举调用之前写入；字符串只需存活到 setenv 完成复制。
-    const std::string driverManifestPath = driverManifest.string();
+    const std::string driverManifestPath = driverManifest.native();
     if ( setenv("VK_DRIVER_FILES", driverManifestPath.c_str(), 1) != 0 ) {
         return false;
     }

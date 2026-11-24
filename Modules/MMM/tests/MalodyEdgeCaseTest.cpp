@@ -1,3 +1,4 @@
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <nlohmann/json.hpp>
@@ -588,7 +589,8 @@ static MMM::BeatMap saveAndReload(const MMM::BeatMap& bm,
         std::filesystem::temp_directory_path() / ("edge_" + tag + ".mc");
 
     if ( !bm.saveToFile(outPath) ) {
-        XERROR("Failed to save {}", outPath.string());
+        // 输出目录可能含 Unicode；日志应保留可定位的完整路径。
+        XERROR("Failed to save {}", MMM::Config::pathToUtf8(outPath));
         return {};
     }
 

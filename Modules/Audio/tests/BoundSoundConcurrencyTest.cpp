@@ -2,6 +2,7 @@
 #include "audio/AuditionSourceMixerNode.h"
 #include "audio/KeySoundControl.h"
 #include "audio/SoundEffectPool.h"
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 
 #include <algorithm>
@@ -367,7 +368,10 @@ bool testDozensOfIndependentSampleVoices(
     // 真实短音效只解码一次，全部池共享不可变 AudioTrack 数据。
     ice::ThreadPool threadPool(4);
     ice::AudioPool  audioPool;
-    auto track = audioPool.get_or_load(threadPool, samplePath.string()).lock();
+    // 音频池使用与生产一致的 UTF-8 路径，资源目录可以包含非 ASCII 文件名。
+    auto track =
+        audioPool.get_or_load(threadPool, MMM::Config::pathToUtf8(samplePath))
+            .lock();
     if ( !track || track->num_frames() == 0U ) {
         XERROR("Failed to decode bound sound concurrency test sample");
         return false;
@@ -488,7 +492,7 @@ bool testZeroFrameTrackDoesNotOccupyVoice(
     // 每次 create_instance 都返回独立空解码器，不依赖磁盘文件内容。
     ice::ThreadPool threadPool(2);
     auto            zeroFrameTrack =
-        ice::AudioTrack::create(samplePath.string(),
+        ice::AudioTrack::create(MMM::Config::pathToUtf8(samplePath),
                                 threadPool,
                                 std::make_shared<EmptyDecoderFactory>(),
                                 ice::CachingStrategy::CACHY);
@@ -778,7 +782,9 @@ int main(int argc, char** argv)
     const std::filesystem::path samplePath(argv[1]);
     ice::ThreadPool             threadPool(2);
     ice::AudioPool              audioPool;
-    auto track = audioPool.get_or_load(threadPool, samplePath.string()).lock();
+    auto                        track =
+        audioPool.get_or_load(threadPool, MMM::Config::pathToUtf8(samplePath))
+            .lock();
     // 主共享轨必须完整缓存且非空，后续 voice 生命周期断言才有意义。
     if ( !track || track->num_frames() == 0U ) {
         XERROR("Failed to decode SFX lifecycle test sample");

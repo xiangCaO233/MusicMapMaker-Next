@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio/AudioMarkerService.h"
+#include "config/Utf8Path.h"
 
 #include <algorithm>
 #include <cctype>
@@ -31,7 +32,7 @@ inline ProjectResourceType classifyProjectResource(
     const std::filesystem::path& path)
 {
     // 只读取路径字符串中的扩展名，不检查文件是否实际存在。
-    auto extension = path.extension().string();
+    auto extension = MMM::Config::pathToUtf8(path.extension());
     // tolower 接收 unsigned char，避免负 char 引起未定义行为。
     std::transform(
         extension.begin(),
