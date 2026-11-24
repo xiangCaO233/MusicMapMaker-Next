@@ -102,11 +102,13 @@
 
   已验证。CMake 选择各平台原生入口与安装实现，共用参数与安装生命周期。Linux RelWithDebInfo 全量构建与 2 项相关 CTest 通过。debsrv LLVM-MinGW 构建及 Win10 原生回归通过，覆盖父进程仍在、目标占用、旧安装恢复和 Unicode 重启。原生 AppleClang 最低部署目标 11.0 编译通过，已验证坏归档保全旧应用、签名包替换、重启与成功标记。
 
-- [ ] **R74 · P0 · ICE OpenAL 播放器内嵌平台驱动环境和线程优先级策略**
+- [x] **R74 · P0 · ICE OpenAL 播放器内嵌平台驱动环境和线程优先级策略**
 
   公共播放器同时处理 Win32 线程优先级与环境变量；对已存在但为空的变量两端处理不一致。 把打开设备前的环境策略与工作线程启动策略移至 CMake 选取的实现文件，统一空值约定。覆盖外部非空值、空值、Linux 空设备和 Windows 音频线程启动。
 
   [ALPlayer.cpp L123](../3rdpty/sources/IonCachyEngine/src/ice/out/play/openal/ALPlayer.cpp#L123)
+
+  已验证。CMake 选择 OpenAL 平台实现，空环境变量采用默认值，外部非空覆盖继续有效。Linux OpenAL 空设备覆盖实际供给线程，debsrv Win64 交叉编译并在 Win10 通过原生适配器探针，核对默认环境值和工作线程优先级。 ICE 独立构建与 7 项 CTest 通过，[ICE #16](https://github.com/xiangCaO233/IonCachyEngine/pull/16) 的 merge commit 为 `890cd54eaf6bd053a8b24e3cb7fc57809eb1aa10`。主仓 Linux RelWithDebInfo 全量构建及 9 项相关 CTest 通过。主仓默认预编译库仍与仓内的配套头文件一起使用，新的 ICE 实现已在子模块源码构建验收。
 
 ## 拆分之后的复查待办
 
