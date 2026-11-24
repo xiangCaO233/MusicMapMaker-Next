@@ -14,6 +14,11 @@
 #include <unordered_map>
 #include <vector>
 
+namespace ice
+{
+class AudioTrack;
+}
+
 namespace MMM::Audio
 {
 struct OfflineAnalysisEQBand;
@@ -71,8 +76,20 @@ private:
         uint32_t indexOffset{ 0 };
     };
 
-    /// @brief 启动异步全局预计算 (非阻塞)
-    void startAsyncRecalculate();
+    /// @brief 记录下一帧重算请求，连续控件事件合并为最新设置。
+    void requestRecalculate();
+
+    /// @brief 同步显示资格，来源切换时撤回旧任务和未发布纹理。
+    /// @warning 每帧调用，来源不变时只比较代次，不访问磁盘或等待。
+    void retarget(std::uint64_t generation, bool available);
+
+    /// @brief 尝试消费已返回的后台任务，只提交当前代次结果。
+    /// @warning UI 每帧只进行零超时观察，允许就绪帧整批迁移结果。
+    void pollCalculation();
+
+    /// @brief 向文件线程池提交冻结来源的频谱计算。
+    void startAsyncRecalculate(const std::shared_ptr<ice::AudioTrack>& track,
+                               double duration);
 
     /// @brief 后台重新计算完整频谱缓存。
     /// @param eq 计算时捕获的 EQ 设置。
@@ -81,10 +98,10 @@ private:
     /// @param detailLevel 计算时捕获的频谱精细度枚举。
     /// @param detailProfile 计算时捕获的频谱精细度参数。
     /// @warning 后台耗时路径：执行完整音频 FFT 计算，不在 UI/渲染热路径运行。
-    void backgroundRecalculate(
-        std::stop_token                                  stopToken,
-        const std::vector<Audio::OfflineAnalysisEQBand>& eq, float maxFreq,
-        float logBias, Config::SpectrumDetailLevel detailLevel,
+    bool backgroundRecalculate(
+        std::stop_token stopToken, std::shared_ptr<ice::AudioTrack> track,
+        double duration, const std::vector<Audio::OfflineAnalysisEQBand>& eq,
+        float maxFreq, float logBias, Config::SpectrumDetailLevel detailLevel,
         Config::SpectrumDetailProfile detailProfile);
 
     /// @brief 添加一个带自定义 UV 的频谱分块矩形。
@@ -158,21 +175,36 @@ private:
     /// @brief 后台计算在线程池中的任务句柄。
     /// @warning 生命周期路径：仅由用户触发重算或窗口销毁时写入；任务体不在 UI
     /// 热路径执行。
-    std::future<void> m_calcFuture;
+    std::future<bool> m_calcFuture;
 
     /// @brief 后台计算停止请求源。
     /// @warning 跨线程停止信号：UI 线程低频写入，后台 FFT
     /// 任务分段读取，只承载取消标志。
     std::stop_source m_calcStopSource;
 
-    /// @brief 是否正在后台计算
-    std::atomic<bool> m_isCalculating{ false };
+    /// @brief 当前 UI 看到的来源代次，由音频管理器固定分配。
+    std::uint64_t m_sourceGeneration{ 0 };
 
-    /// @brief 计算进度 [0.0, 1.0]
+    /// @brief 普通帧仅观察此布尔值，用于区分项目过渡和可分析来源。
+    bool m_sourceAvailable{ false };
+
+    /// @brief 还没有提交给工作池的最新重算需求。
+    bool m_recalculateRequested{ false };
+
+    /// @brief 只有当前批次提交所有纹理后才允许取样离屏图像。
+    bool m_spectrumReady{ false };
+
+    /// @brief UI 最近观察到的细节，失败后不因旧缓存而逐帧重试。
+    Config::SpectrumDetailLevel m_requestedDetail{
+        Config::SpectrumDetailLevel::Balanced
+    };
+
+    /// @brief 计算进度 [0.0, 1.0]。
+    /// @warning 后台写入、UI 热路径读取，仅用于显示，使用 relaxed 顺序。
     std::atomic<float> m_calcProgress{ 0.0f };
 
-    /// @brief 后台计算是否已完成 (主线程读取后重置)
-    std::atomic<bool> m_calcFinished{ false };
+    /// @brief 回归可模拟计算任务已提交后发生时间线切换。
+    friend struct AudioSpectrumViewTestAccess;
 
     // --- 像素缓冲与纹理 (全量静态存储) ---
 

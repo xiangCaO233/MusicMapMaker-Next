@@ -29,6 +29,7 @@
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -36,9 +37,11 @@
 #include <filesystem>
 #include <ice/config/config.hpp>
 #include <ice/manage/AudioBuffer.hpp>
+#include <ice/manage/AudioPool.hpp>
 #include <ice/manage/AudioTrack.hpp>
 #include <ice/thread/ThreadPool.hpp>
 #include <latch>
+#include <limits>
 #include <mutex>
 #include <system_error>
 #include <utility>
@@ -66,6 +69,7 @@ AudioSpectrumView::AudioSpectrumView(const std::string& name)
     m_cacheSegmentsPerSecond = profile.segmentsPerSecond;
     m_numFrequencyBins       = profile.frequencyBins;
     // pending 参数由下一次重算任务写入，完成前不影响当前纹理解释。
+    m_requestedDetail               = m_spectrumDetailLevel;
     m_pendingSpectrumDetailLevel    = m_spectrumDetailLevel;
     m_pendingCacheSegmentsPerSecond = m_cacheSegmentsPerSecond;
     m_pendingNumFrequencyBins       = m_numFrequencyBins;
@@ -86,7 +90,7 @@ AudioSpectrumView::~AudioSpectrumView()
         // future 等待保证任务不再访问本实例成员。
         m_calcFuture.wait();
         // 清空 future 状态，避免后续误判仍有任务。
-        m_calcFuture = std::future<void>{};
+        m_calcFuture = {};
     }
 
     // 新建后立即关闭的频谱窗口可能尚未初始化逻辑设备，不能等待空句柄。
@@ -104,7 +108,8 @@ AudioSpectrumView::~AudioSpectrumView()
 /// 普通帧读取已完成的频谱缓存和分块纹理，按当前视觉时间窗生成少量
 /// Quad；后台重算 在显式参数变化、配置细节变化或同步效果请求时启动。
 ///
-/// UI 线程通过原子进度和完成标志观察任务。只有完成后才切换 pending 分辨率参数，
+/// UI 线程通过原子进度和零等待 future 观察任务。只有完成后才切换 pending
+/// 分辨率参数，
 /// 准备整轨纹理分块并逐帧上传，避免渲染线程读到尺寸不匹配的半成品。
 ///
 /// 频谱表面由 Vulkan 离屏绘制，ImGui Image 展示描述符；声道标题、悬浮提示和拖拽
@@ -139,73 +144,67 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         return;
     }
 
-    if ( sourceManager && sourceManager->isProjectTransitionInProgress() ) {
-        m_touchNavigation.suspend();
-        // 工程切换时不读取可能失效的主音轨或 Session。
-        Utils::renderProjectTransitionPlaceholder();
-        return;
-    }
-
-    // AudioManager 是当前主音轨与播放时间的运行态真值。
+    const bool transitioning =
+        sourceManager && sourceManager->isProjectTransitionInProgress();
     auto& audioManager = Audio::AudioManager::instance();
-    auto  track        = audioManager.getBGMTrack();
-
-    if ( !track ) {
-        m_touchNavigation.suspend();
-        // 无主音轨时保留窗口并显示加载提示。
-        ImGui::Text("%s", TR("ui.audio_manager.initial_hint").data());
-        return;
-    }
-
-    // 配置细节改变且当前无任务时，启动新分辨率重算。
-    const auto configuredDetail =
+    // 同一次发布同时给出轨道和时间线末端，不允许在切换窗口分别询问。
+    // 过渡期使用空来源，并撤回已经排队的计算与 GPU 上传。
+    const auto source = transitioning ? Audio::AudioManager::BgmAnalysisSource{}
+                                      : audioManager.getBgmAnalysisSource();
+    retarget(source.generation, static_cast<bool>(source.track));
+    // 保存已观察的细节，即使打开失败也不因旧纹理参数每帧重复打开文件。
+    const auto detail =
         Config::AppConfig::instance().getVisualConfig().spectrumDetailLevel;
-    if ( configuredDetail != m_spectrumDetailLevel &&
-         !m_isCalculating.load(std::memory_order_relaxed) ) {
-        startAsyncRecalculate();
+    if ( detail != m_requestedDetail ) {
+        m_requestedDetail = detail;
+        requestRecalculate();
     }
 
-    // 计算状态每帧请求同一固定 ID 模态保持打开。
-    if ( m_isCalculating.load() ) {
+    // 先撤回旧来源再轮询。即使旧任务恰好此帧完成，也不能安排上传。
+    pollCalculation();
+    if ( m_sourceAvailable && m_recalculateRequested && !m_calcFuture.valid() )
+        startAsyncRecalculate(source.track, source.duration);
+
+    // 完成、过渡与无来源都要处理已打开的模态，不能在关闭它之前早退。
+    // 持续保留进度弹窗直到已经退出或正在过渡；不在弹窗内部迁移结果。
+    // 结果消费不再依赖 ImGui 是否认为弹窗可见。
+    // 若旧任务正在收尾，不能把上一首的百分比作为当前来源的进度。
+    const bool calculating = m_sourceAvailable && m_calcFuture.valid() &&
+                             !m_calcStopSource.stop_requested();
+    if ( calculating ) {
         m_touchNavigation.suspend();
         ::MMM::UI::FeedbackOpenPopup("###SpectrumCalcModal");
     }
-
     {
-        // 进度模态使用独立样式作用域和当前 DPI。
-        float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+        const float dpiScale =
+            Config::AppConfig::instance().getWindowContentScale();
         Utils::CenteredModalPopupScope modalScope(dpiScale);
         if ( modalScope.begin((TR("ui.spectrum.calc_modal.title").toString() +
                                "###SpectrumCalcModal")
                                   .c_str()) ) {
-            // 进度是后台任务发布的零到一原子快照。
-            float progress = m_calcProgress.load();
-            ImGui::Text("%s", TR("ui.spectrum.calc_modal.text").data());
-            ImGui::Spacing();
-            ImGui::ProgressBar(progress, ImVec2(400, 0));
-            ImGui::Text("%.0f%%", progress * 100.0f);
-
-            if ( m_calcFinished.load() ) {
-                // 完成标志消费后先退出计算态，再切换全部分辨率参数。
-                m_calcFinished.store(false);
-                m_isCalculating.store(false);
-                m_spectrumDetailLevel = m_pendingSpectrumDetailLevel;
-                // 三个 active 参数必须在同一帧整体切换。
-                m_cacheSegmentsPerSecond = m_pendingCacheSegmentsPerSecond;
-                m_numFrequencyBins       = m_pendingNumFrequencyBins;
-                // 新缓存需要重新创建纹理并从第零块开始增量上传。
-                m_textureReloadStarted = false;
-                m_nextChunkUploadIndex = 0;
-                prepareFullGlobalTextures();
-                // 数据切换完成后关闭进度模态。
+            // 只有仍有显示资格的来源才能在前台继续展示进度。
+            if ( calculating ) {
+                const float progress =
+                    m_calcProgress.load(std::memory_order_relaxed);
+                ImGui::Text("%s", TR("ui.spectrum.calc_modal.text").data());
+                ImGui::Spacing();
+                ImGui::ProgressBar(progress, ImVec2(400, 0));
+                ImGui::Text("%.0f%%", progress * 100.0f);
+            } else {
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
-
-            // 仍在计算时提前返回，不渲染可能即将被替换的频谱资源。
-            if ( m_isCalculating.load() ) return;
         }
     }
+    if ( !m_sourceAvailable ) {
+        m_touchNavigation.suspend();
+        if ( transitioning )
+            Utils::renderProjectTransitionPlaceholder();
+        else
+            ImGui::Text("%s", TR("ui.audio_manager.initial_hint").data());
+        return;
+    }
+    if ( calculating ) return;
 
     // 通用视觉偏移控制时间轴，频谱专用偏移只移动频谱内容。
     const auto& visualConfig = Config::AppConfig::instance().getVisualConfig();
@@ -215,7 +214,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     // AudioManager 时间作为逻辑快照缺失时的回退。
     double audioTime  = audioManager.getCurrentTime();
     double visualTime = audioTime + globalVisualOffset;
-    double totalTime  = audioManager.getTotalTime();
+    double totalTime  = source.duration;
 
     // 默认跟随逻辑层平滑视觉时间，播放时继续使用快照做亚帧补偿。
     std::string activeCameraId =
@@ -370,7 +369,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                      "##max_freq", &m_maxFreq, 2000.0f, 24000.0f, "%.4f Hz") ) {
                 if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                     // 拖动中只更新数值显示，结束编辑时才执行昂贵分析。
-                    startAsyncRecalculate();
+                    requestRecalculate();
                 }
             }
         });
@@ -389,7 +388,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                      "##log_bias", &m_logBias, 0.01f, 20.0f, "%.4f") ) {
                 if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                     // 合并连续滑块帧，只提交最终偏置配置。
-                    startAsyncRecalculate();
+                    requestRecalculate();
                 }
             }
         });
@@ -402,7 +401,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                   if ( ::MMM::UI::FeedbackButton(
                            TR("ui.spectrum.sync_effects").data()) ) {
                       // start helper 会处理已有任务的停止与替换。
-                      startAsyncRecalculate();
+                      requestRecalculate();
                   }
               });
 
@@ -451,26 +450,30 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     m_vertices.clear();
     m_indices.clear();
     m_spectrumDrawCmds.clear();
-    // 左声道从第一标题下方开始生成分块纹理几何。
-    buildChannelGeometry(m_texturesL,
-                         textH,
-                         avail.x,
-                         plotH,
-                         viewStart,
-                         viewEnd,
-                         spectrumVisualOffset);
-    // 右声道位于第二标题下方，使用相同时间窗和偏移。
-    buildChannelGeometry(m_texturesR,
-                         textH + plotH + textH,
-                         avail.x,
-                         plotH,
-                         viewStart,
-                         viewEnd,
-                         spectrumVisualOffset);
+    // 即使 Vulkan 描述符仍有效，换轨后的旧离屏像素也没有显示资格。
+    // 活动纹理和四边形的索引解释来自同一批次；上传不完整时保持空白。
+    if ( m_spectrumReady ) {
+        // 左声道从第一标题下方开始生成分块纹理几何。
+        buildChannelGeometry(m_texturesL,
+                             textH,
+                             avail.x,
+                             plotH,
+                             viewStart,
+                             viewEnd,
+                             spectrumVisualOffset);
+        // 右声道位于第二标题下方，使用相同时间窗和偏移。
+        buildChannelGeometry(m_texturesR,
+                             textH + plotH + textH,
+                             avail.x,
+                             plotH,
+                             viewStart,
+                             viewEnd,
+                             spectrumVisualOffset);
+    }
 
     // 离屏目标已创建时以 ImGui Image 显示，否则用 Dummy 保持布局尺寸。
     vk::DescriptorSet surfaceTexture = getDescriptorSet();
-    if ( surfaceTexture != VK_NULL_HANDLE ) {
+    if ( m_spectrumReady && surfaceTexture != VK_NULL_HANDLE ) {
         ImGui::Image(reinterpret_cast<ImTextureID>(
                          static_cast<VkDescriptorSet>(surfaceTexture)),
                      ImVec2(avail.x, surfaceH));
@@ -1001,78 +1004,133 @@ void AudioSpectrumView::reloadTextures(vk::PhysicalDevice& physicalDevice,
         m_nextChunkUploadIndex = 0;
         m_textureReloadStarted = false;
         m_texturesNeedReload   = false;
+        // 最后一个块结束后才允许 ImGui 采样。准备阶段可能早于视图更新，
+        // 所以 update 还会再次用当前来源判定是否显示。
+        m_spectrumReady = !m_texturesL.empty();
     }
 }
 
-/// @brief 捕获当前分析参数并在应用线程池启动一次完整频谱重算。
-///
-/// 同一时刻只允许一个任务。已完成但尚未清空的 future
-/// 会先等待并回收；当前正在计算
-/// 时请求被合并忽略，避免多个任务并发写入同一缓存。
-///
-/// EQ、最大频率、对数偏置和细节 profile 全部按值捕获，后台任务不会读取变化中的
-/// UI 控件。开始前清空上一轮待上传 CPU 块，但保留当前活动 GPU
-/// 纹理供进度期间显示状态。
-/// @warning 用户触发的低频入口；回收旧 future
-/// 可能短暂等待，不得从普通绘制分支调用。
-void AudioSpectrumView::startAsyncRecalculate()
+/// @brief 撤回旧任务的提交资格，只留下最后一次重算需求。
+/// @details 用户连续调整时无需排队多次 FFT。等待中的请求下一帧再读取最新参数。
+/// @warning UI 低频命令路径只发停止请求，不等待已进入完整缓存解码的操作。
+void AudioSpectrumView::requestRecalculate()
 {
-    // 正在运行的任务已覆盖当前重算需求，不启动竞争任务。
-    if ( m_isCalculating.load() ) return;
+    m_recalculateRequested = m_sourceAvailable;
+    if ( m_calcFuture.valid() ) m_calcStopSource.request_stop();
+}
 
-    if ( m_calcFuture.valid() ) {
-        // 这里只回收已经通过状态标志完成的旧任务 future。
-        m_calcFuture.wait();
-        m_calcFuture = std::future<void>{};
-    }
+/// @brief 来源变化后隐藏旧图像和几何，推迟活动纹理释放。
+/// @param generation 时间线提交时分配的代次，同一音轨重新安装也可能变化。
+/// @param available 是否存在可分析的音轨，项目过渡视为不可用。
+/// @details 旧任务仍独享其写入的缓存，当前帧只清理 UI 和上传状态。
+/// @warning UI 每帧调用，稳定来源仅比较两个值，禁止等待后台 future。
+void AudioSpectrumView::retarget(std::uint64_t generation, bool available)
+{
+    if ( m_sourceGeneration == generation && m_sourceAvailable == available )
+        return;
 
-    // 只在启动一次重算时捕获主轨 EQ，普通绘制只读已经完成的缓存。
-    auto eq = Audio::captureOfflineAnalysisEQ(Audio::AudioManager::instance());
-
-    // 先发布计算态和零进度，再重置本轮完成标志。
-    m_isCalculating.store(true);
-    m_calcProgress.store(0.0f);
-    m_calcFinished.store(false);
-    // 新结果尚未生成，取消上一轮未开始的纹理重载状态。
+    // 文件路径和长度都可能重合，不能用二者判定同一调度。
+    // 代次还能识别两次 UI 帧之间从 A 切回 A 的情况。
+    m_sourceGeneration = generation;
+    m_sourceAvailable  = available;
+    // 收尾仍带旧谱面实例标识，切换后的目标只能从新的触摸或鼠标手势产生。
+    // 清除本地拖动中心，避免新曲沿用上一首的视野定位状态。
+    m_touchNavigation.suspend();
+    m_seekDragOwnerChannel = -1;
+    requestRecalculate();
+    m_spectrumReady = false;
+    // 取消 CPU 上传队列时同时复位索引，避免下一批从旧块位置继续。
     m_texturesNeedReload   = false;
     m_textureReloadStarted = false;
     m_nextChunkUploadIndex = 0;
-    // CPU 待上传块属于上一轮活动参数，开始新任务前释放。
+    m_vertices.clear();
+    m_indices.clear();
+    m_spectrumDrawCmds.clear();
+    // loading
+    // 从未进入渲染命令，可以释放。活动纹理可能在飞行中，交给现有退休流程。
     m_pendingChunksL.clear();
     m_pendingChunksR.clear();
+    m_loadingTexturesL.clear();
+    m_loadingTexturesR.clear();
+}
 
-    // 细节等级和派生 profile 在任务启动点冻结。
-    const auto detailLevel =
-        Config::AppConfig::instance().getVisualConfig().spectrumDetailLevel;
-    const auto detailProfile = Config::spectrumDetailProfile(detailLevel);
+/// @brief 收取已就绪的结果，只用未撤销的完整数据安排纹理上传。
+/// @details 单任务模型把 CPU 缓存写权授予活动工作者，直到 future 就绪。
+/// 取消分支不能先清理共享的候选强度数组，因为旧工作者仍可能写入。
+/// @warning UI 每帧只轮询零超时，完成帧允许准备完整像素块。
+void AudioSpectrumView::pollCalculation()
+{
+    if ( !m_calcFuture.valid() ||
+         m_calcFuture.wait_for(std::chrono::seconds::zero()) !=
+             std::future_status::ready )
+        return;
 
-    // 应用线程池负责后台任务生命周期，不创建临时裸线程。
-    auto* appThreadPool = MMM::Runtime::AppThreadPool::instance().get();
-    if ( !appThreadPool ) {
-        // 无线程池时恢复非计算态并记录配置错误。
-        m_isCalculating.store(false);
+    // future 提供结果字段的内存同步。停止令牌也覆盖“完成后、消费前”的来源变化。
+    // 每次派发使用独立 stop_source，旧任务返回后才可能建立下一份令牌。
+    // 这使 ABA 切换即使回到相同音轨，也不会复活已撤销的结果。
+    const bool completed = m_calcFuture.get();
+    // 失败不自动重试，避免损坏媒体造成每帧重复探测或分析。
+    if ( !completed || m_calcStopSource.stop_requested() ) return;
+    // 同时交付分辨率与像素，禁止用旧箱数解释新热力图的内存布局。
+    m_spectrumDetailLevel    = m_pendingSpectrumDetailLevel;
+    m_cacheSegmentsPerSecond = m_pendingCacheSegmentsPerSecond;
+    m_numFrequencyBins       = m_pendingNumFrequencyBins;
+    prepareFullGlobalTextures();
+}
+
+/// @brief 将同一代次的音轨与时长移动到独立文件任务。
+/// @param track 已发布音轨，工作者保留其所有权直到所有子任务退出。
+/// @param duration 同一调度的复合时长，决定末端显示范围。
+/// @note 文件池在解码池之前关闭。FFT 子任务由仍可运行的通用池推进。
+/// @warning UI 低频提交，禁止探测文件或查询可能等待解码的帧数。
+void AudioSpectrumView::startAsyncRecalculate(
+    const std::shared_ptr<ice::AudioTrack>& track, double duration)
+{
+    m_recalculateRequested = false;
+    auto& workers          = Runtime::AppThreadPool::instance();
+    auto* filePool         = workers.getFileThreadPool();
+    if ( !filePool || !workers.get() ) {
         XERROR("AppThreadPool is not initialized before spectrum calculation.");
         return;
     }
 
-    // 每轮使用新的 stop_source，析构可请求当前任务协作停止。
-    m_calcStopSource                = std::stop_source{};
-    const std::stop_token stopToken = m_calcStopSource.get_token();
-    m_calcFuture                    = appThreadPool->enqueue([this,
-                                           stopToken,
-                                           eq      = std::move(eq),
-                                           maxFreq = m_maxFreq,
-                                           logBias = m_logBias,
-                                           detailLevel,
-                                           detailProfile]() {
-        // 后台入口只接收值快照和停止令牌。
-        backgroundRecalculate(
-            stopToken, eq, maxFreq, logBias, detailLevel, detailProfile);
+    // 此处撤销旧纹理解释，下一次完整上传再统一开放图像采样。
+    m_spectrumReady      = false;
+    m_texturesNeedReload = false;
+    m_vertices.clear();
+    m_indices.clear();
+    m_spectrumDrawCmds.clear();
+    m_calcProgress.store(0.0f, std::memory_order_relaxed);
+    // EQ、频率和偏置均以值传递，后台不观察 UI 调整或读取 AudioManager。
+    auto eq = Audio::captureOfflineAnalysisEQ(Audio::AudioManager::instance());
+    // 保存设置只需在提交时展开 profile，闲置时不创建后台对象。
+    const auto detail = m_requestedDetail;
+    // 重算由 UI 帧调度。任务先完成后才能再次提交，因此不需争用强度缓存。
+    m_calcStopSource = std::stop_source{};
+    m_calcFuture     = filePool->enqueue([this,
+                                      track,
+                                      duration,
+                                      stop    = m_calcStopSource.get_token(),
+                                      eq      = std::move(eq),
+                                      maxFreq = m_maxFreq,
+                                      logBias = m_logBias,
+                                      detail] {
+        // 文件任务可等待解码与 FFT，通用池工作者无需等待本池中的下属任务。
+        return backgroundRecalculate(stop,
+                                     track,
+                                     duration,
+                                     eq,
+                                     maxFreq,
+                                     logBias,
+                                     detail,
+                                     Config::spectrumDetailProfile(detail));
     });
 }
 
 /// @brief 后台频谱重算使用完整缓存，多个 FFT 工作者不能竞争流式预读页。
 /// @param stopToken 析构或任务替换请求的协作式停止令牌。
+/// @param track 启动时冻结的时间线音轨。
+/// @param totalTime 与音轨同一代次的时间线时长。
 /// @param eq 启动时捕获的主音轨 EQ 设置。
 /// @param maxFreq 频谱纵轴最高频率。
 /// @param logBias 频率分桶的指数偏置。
@@ -1087,42 +1145,48 @@ void AudioSpectrumView::startAsyncRecalculate()
 /// 同时争用解码器。单声道输入直接复制左热力图。
 ///
 /// 完成前只更新原子进度；所有热力图和 pending
-/// 参数在工作结束后由外层任务一次写入， 最后发布 calcFinished。UI 线程随后生成
+/// 参数在任务完成时通过 future 同步，UI 线程在代次校验通过后生成
 /// RGBA 块并安排 GPU 上传。
 /// @warning 仅由低频后台任务调用，允许加载和等待 PCM，不能移入绘制回调。
-void AudioSpectrumView::backgroundRecalculate(
-    std::stop_token stopToken, const Audio::OfflineAnalysisEQSettings& eq,
-    float maxFreq, float logBias, Config::SpectrumDetailLevel detailLevel,
+bool AudioSpectrumView::backgroundRecalculate(
+    std::stop_token stopToken, std::shared_ptr<ice::AudioTrack> track,
+    double totalTime, const Audio::OfflineAnalysisEQSettings& eq, float maxFreq,
+    float logBias, Config::SpectrumDetailLevel detailLevel,
     Config::SpectrumDetailProfile detailProfile)
 {
-    // 启动后立即收到停止请求时不读取音轨或分配 FFT 资源。
-    if ( stopToken.stop_requested() ) {
-        m_isCalculating.store(false);
-        return;
-    }
+    if ( stopToken.stop_requested() || !track ) return false;
+    auto* appThreadPool = Runtime::AppThreadPool::instance().get();
+    if ( !appThreadPool ) return false;
 
-    // 主音轨可能是实时流式实例，离线绝对帧扫描需要独立分析实例。
-    auto& audioManager = Audio::AudioManager::instance();
-    auto  track        = audioManager.getBGMTrack();
-    if ( track &&
-         track->cachingStrategy() == ice::CachingStrategy::STREAMING ) {
-        // 缺页返回正长度静音，离线 FFT 不能以 read 返回值判断完整音频已到达。
-        // 分析实例不会驱逐播放实例预读页或改变其游标。
-        track = audioManager.loadTrackForAnalysis(track->path());
+    // 后台只使用提交时的音轨，不再查询可能已经卸载或关闭的 AudioManager。
+    if ( track->cachingStrategy() == ice::CachingStrategy::STREAMING ) {
+        // 单独完整缓存避免把实时页缺失的填充静音画进频谱。
+        ice::AudioPool analysisPool;
+        track =
+            analysisPool
+                .get_or_load(
+                    *appThreadPool, track->path(), ice::CachingStrategy::CACHY)
+                .lock();
+        if ( !track ) return false;
     }
-    if ( !track ) {
-        // 音轨在任务排队期间被卸载时恢复计算态，保留旧纹理。
-        m_isCalculating.store(false);
-        return;
-    }
+    // 完整缓存帧数只等待一次，工作者不在每个 FFT 窗重新查询解码状态。
+    // 用解码后的真实帧上限截取 PCM；时间轴可以包含晚于这条轨的其他片段。
+    // 分开保留两种长度使尾部保持静音，避免读取第一轨范围之外的样本。
+    const auto totalFrames = track->num_frames();
+    // 完整解码可能需要等待，此处是无需启动 FFT 即可观察停止的第一个边界。
+    if ( totalFrames == 0 || stopToken.stop_requested() ) return false;
 
     // 时间、采样率和 profile 共同决定热力图尺寸。
-    double       totalTime         = audioManager.getTotalTime();
     double       sampleRate        = ice::ICEConfig::internal_format.samplerate;
     const double segmentsPerSecond = detailProfile.segmentsPerSecond;
     const int    frequencyBins     = detailProfile.frequencyBins;
-    // 末端额外段覆盖浮点向下取整后的音轨边界。
-    int numTotalSegments = static_cast<int>(totalTime * segmentsPerSecond) + 1;
+    // 数量乘两个声道后仍须能在进度计数器中表示，再生成端点额外段。
+    const double segments = totalTime * segmentsPerSecond;
+    if ( !std::isfinite(segments) || segments < 0.0 ||
+         segments >= std::numeric_limits<int>::max() / 2 - 1 )
+        return false;
+    // 用尾部额外一列覆盖非整数段边界。转换发生在有限值及计数上限检查之后。
+    const int numTotalSegments = static_cast<int>(segments) + 1;
     // 输出固定绘制左右声道，输入声道数用于决定是否复制左侧。
     uint16_t numChannels = ice::ICEConfig::internal_format.channels;
 
@@ -1132,7 +1196,6 @@ void AudioSpectrumView::backgroundRecalculate(
     const size_t hopSize = static_cast<size_t>(sampleRate / segmentsPerSecond);
 
     // 复用应用线程池，并只占用请求工作者的一半以给其他任务留出容量。
-    auto*     appThreadPool    = MMM::Runtime::AppThreadPool::instance().get();
     const int requestedWorkers = std::max<int>(
         1, MMM::Runtime::AppThreadPool::instance().requestedWorkerCount());
     const int numWorkers = std::max(1, requestedWorkers / 2);
@@ -1267,7 +1330,7 @@ void AudioSpectrumView::backgroundRecalculate(
             // 时间段索引乘 hop 得到 FFT 窗绝对起始帧。
             size_t startFrame = static_cast<size_t>(t) * hopSize;
             // 末端不足完整 FFT 窗时停止本区间，不用零填充制造额外频谱。
-            if ( startFrame + fftSize > track->num_frames() ) break;
+            if ( startFrame + fftSize > totalFrames ) break;
 
             // 分析音轨按绝对帧读取完整窗口。
             if ( track->read(localBuffer, startFrame, fftSize) !=
@@ -1356,8 +1419,8 @@ void AudioSpectrumView::backgroundRecalculate(
             return;
         }
 
-        if ( !appThreadPool || ranges.size() <= 1 ) {
-            // 无线程池或单区间时在当前后台任务直接处理，避免嵌套调度开销。
+        if ( ranges.size() == 1 ) {
+            // 单区间时在当前后台任务直接处理，避免嵌套调度开销。
             const auto [startSeg, endSeg] = ranges.front();
             processChannel(chIdx, heatmap, startSeg, endSeg);
             return;
@@ -1380,8 +1443,7 @@ void AudioSpectrumView::backgroundRecalculate(
     runChannel(0, heatmapL);
     if ( stopToken.stop_requested() ) {
         // 停止时不提交部分热力图或 pending 参数。
-        m_isCalculating.store(false);
-        return;
+        return false;
     }
 
     if ( numChannels > 1 ) {
@@ -1389,8 +1451,7 @@ void AudioSpectrumView::backgroundRecalculate(
         runChannel(1, heatmapR);
         if ( stopToken.stop_requested() ) {
             // 右声道中途停止同样丢弃整轮结果。
-            m_isCalculating.store(false);
-            return;
+            return false;
         }
     } else {
         // 单声道复制左热力图，使渲染仍可固定绘制左右两块。
@@ -1407,8 +1468,9 @@ void AudioSpectrumView::backgroundRecalculate(
     m_pendingNumFrequencyBins       = frequencyBins;
 
     // 先发布完整进度，再发布完成标志供 UI 线程消费。
-    m_calcProgress.store(1.0f);
-    m_calcFinished.store(true);
+    // 进度原子只用于绘制。强度数组可见性由 enqueue 返回的 future 保证。
+    m_calcProgress.store(1.0f, std::memory_order_relaxed);
+    return true;
 }
 
 /// @brief 把完整八位频谱缓存转换为可增量上传的 RGBA8 纹理块。

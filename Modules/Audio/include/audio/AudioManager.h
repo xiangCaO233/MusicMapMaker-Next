@@ -742,6 +742,20 @@ public:
     /// @warning 低频播放控制路径，只处理固定两个专用节拍池。
     void clearAuditionSoundEffects();
 
+    /// @brief 供可视化后台分析使用的同代次时间线来源。
+    struct BgmAnalysisSource {
+        /// @brief 当前复合时间线中第一条可解码的音轨。
+        std::shared_ptr<ice::AudioTrack> track;
+        /// @brief 与音轨同时发布的时间线时长。
+        double duration{ 0.0 };
+        /// @brief 调度安装或撤销后递增，即使同一音轨被缓存复用。
+        std::uint64_t generation{ 0 };
+    };
+
+    /// @brief 复制可视化来源，锁只保护固定大小快照。
+    /// @warning UI 热路径，临界区只复制值，不访问调度、解码器或设备。
+    BgmAnalysisSource getBgmAnalysisSource() const;
+
     /// @brief 获取当前时间线首个成功加载的轨道数据，供旧可视化入口兼容。
     std::shared_ptr<ice::AudioTrack> getBGMTrack() const;
 
@@ -907,8 +921,13 @@ private:
     /// @brief OpenAL 空间化输出配置缓存。
     Config::OpenALSpatialConfig m_openALSpatialConfig;
 
-    /// @brief 当前加载的主音轨数据。
-    std::shared_ptr<ice::AudioTrack> m_bgmTrack;
+    /// @brief 发布一份完整可视化来源，旧音轨所有权在锁外释放。
+    void publishBgmAnalysisSource(std::shared_ptr<ice::AudioTrack> track,
+                                  double                           duration);
+    /// @brief 保护分析来源交换，不用于加载、设备访问或实时回调。
+    mutable std::mutex m_bgmAnalysisMutex;
+    /// @brief 独立发布的可视化音轨、时长和代次。
+    BgmAnalysisSource m_bgmAnalysisSource;
 
     /// @brief 当前加载的主音轨文件路径。
     std::string m_bgmPath;
