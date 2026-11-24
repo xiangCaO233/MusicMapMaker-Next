@@ -955,8 +955,23 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
                         const float indent = ImGui::CalcTextSize("AA").x;
                         ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing,
                                             indent);
-                        // 从项目根开始使用缓存快照递归展开目录。
-                        drawDirectoryRecursive(m_currentRoot, sourceManager);
+                        // 排序或文件操作可能使快照失效。仅在提交行之前释放它们，
+                        // 避免右键菜单还在处理条目时使行索引中的引用悬空。
+                        if ( m_directoryCacheDirty ) {
+                            m_fileTableRows.clear();
+                            m_directoryCache.clear();
+                            m_directoryCacheDirty = false;
+                        }
+                        const float itemHeight = workspaceTableItemHeight(
+                            std::max(24.0f * dpiScale, ImGui::GetFrameHeight()),
+                            dpiScale);
+                        if ( touchLayout ) {
+                            // 触屏文件名可以换行，不能按桌面等高行推算滚动范围。
+                            drawTouchDirectory(
+                                m_currentRoot, itemHeight, sourceManager);
+                        } else {
+                            drawFileTable(itemHeight, indent, sourceManager);
+                        }
                         ImGui::PopStyleVar();
 
                         // 表头或列区域的右键菜单在表格结束前绘制。
@@ -978,101 +993,186 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
     rootVBox.render(layoutContext);
 }
 
-/// @brief 按当前排序递归绘制一个目录快照及其展开子目录。
-/// @param path 当前目录绝对路径。
-/// @param sourceManager 用于激活谱面、音频或打开相关视图。
-///
-/// 每个条目保留四列索引；触屏只启用名称，桌面继续按用户列设置绘制。
-/// 第一列是透明背景 TreeNode，自行以整行 hover 色覆盖表格。
-/// 只有目录节点处于展开状态时才递归获取子快照，折叠目录不会触发磁盘读取。
-/// @warning UI 热路径：按可见展开树线性遍历缓存条目，不得每帧全量扫描项目根。
-void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
-                                             UIManager* sourceManager)
+/// @brief 按当前滚动位置提交桌面文件行，并在展开状态变化后重建索引。
+/// @param itemHeight 当前字体和 DPI 对应的行高下限。
+/// @param indent 每一级目录相对父级的额外缩进。
+/// @param sourceManager 用于打开条目关联的编辑器视图。
+/// @details 表格每行高度一致，裁剪器除了定位可见行，还恢复跳过行后的滚动范围及
+/// 表格行序。文件排序采用快照顺序，屏幕上的首行不参与文件身份判定。
+/// @warning UI 热路径：索引有效时，遍历和文本处理均限于裁剪器返回的行。
+void FileManagerView::drawFileTable(float itemHeight, float indent,
+                                    UIManager* sourceManager)
 {
-    // getDirectorySnapshot 命中缓存时只返回稳定引用。
-    const auto& snapshot = getDirectorySnapshot(path);
-    const float dpiScale =
-        std::max(1.0f, Config::AppConfig::instance().getWindowContentScale());
-    // 桌面保留原有高度；触屏命中区使用统一下限，并容纳当前 ImGui Frame。
-    const float itemH = workspaceTableItemHeight(
-        std::max(24.0f * dpiScale, ImGui::GetFrameHeight()), dpiScale);
+    if ( m_fileTableRowsDirty ) {
+        // 将目录树展平后，滚动可以直接跳到任意子目录中的行。
+        m_fileTableRows.clear();
+        appendFileTableRows(m_currentRoot, 0);
+        m_fileTableRowsDirty = false;
+    }
 
-    for ( const auto& entry : snapshot.entries ) {
-        // 固定最小行高让所有列和整行 hover 区域一致。
-        ImGui::TableNextRow(ImGuiTableRowFlags_None, itemH);
-
-        // 首列承载树层级、图标、名称和激活动作。
-        ImGui::TableNextColumn();
-        // 图标与原始文件名单独传入，触屏换行不能把图标挤成独立一行。
-        // 显示分离不改变路径 ID、排序、激活或拖放使用的目录快照。
-        const float nameColumnWidth = ImGui::GetContentRegionAvail().x;
-        // TreeNode 默认 header 颜色设透明，整行 hover 由表格背景统一处理。
-        const ImVec4 transparent{ 0.0f, 0.0f, 0.0f, 0.0f };
-        ImGui::PushStyleColor(ImGuiCol_Header, transparent);
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, transparent);
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive, transparent);
-        // 文件作为叶节点，目录返回 open 状态决定是否递归。
-        const bool open = Utils::renderScrollingTreeNode(
-            entry.fullPath,
-            entry.filename,
-            nameColumnWidth,
-            itemH,
-            !entry.isDirectory,
-            [this, &entry, sourceManager]() {
-                // 激活回调在当前条目引用仍有效的同一绘制调用内执行。
-                if ( !Interaction::activeProfile().touchGestures() )
-                    activateFileEntry(entry, sourceManager);
-            },
-            "",
-            fileEntryIcon(entry));
-        ImGui::PopStyleColor(3);
-
-        // 以 ImGui 表格行边界和首列结算高度判定 Hover，避免手算偏差。
-        const ImGuiTable* table  = ImGui::GetCurrentTable();
-        const float       mouseY = ImGui::GetMousePos().y;
-        const float       rowMaxY =
-            table ? std::max(table->RowPosY2,
-                             ImGui::GetItemRectMax().y + table->RowCellPaddingY)
-                  : 0.0f;
-        // TableGetHoveredColumn 保证鼠标确实位于表格列区域。
-        const bool rowHovered = table && ImGui::TableGetHoveredColumn() >= 0 &&
-                                mouseY >= table->RowPosY1 && mouseY < rowMaxY;
-        if ( rowHovered ) {
-            // RowBg1 覆盖四列，形成完整文件管理器行反馈。
-            ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1,
-                                   ImGui::GetColorU32(ImGuiCol_HeaderHovered));
+    ImGuiListClipper clipper;
+    // 自动测量首行的实际表格步长，包含单元格留白和字体缩放。
+    // 此时冻结表头已提交，裁剪范围从第一条数据行计起。
+    clipper.Begin(static_cast<int>(m_fileTableRows.size()));
+    while ( clipper.Step() ) {
+        for ( int index = clipper.DisplayStart; index < clipper.DisplayEnd;
+              ++index ) {
+            const auto& row   = m_fileTableRows[index];
+            const auto& entry = *row.entry;
+            // 按完整路径索引展开状态，使第一屏之外的子树也能参与滚动定位。
+            const bool wasOpen = entry.isDirectory &&
+                                 m_expandedDirectories.contains(entry.fullPath);
+            const bool open    = drawFileTableRow(
+                entry, itemHeight, sourceManager, wasOpen, indent * row.depth);
+            if ( entry.isDirectory && open != wasOpen ) {
+                // 行数在本轮裁剪期间保持固定；下一帧才应用展开或折叠后的顺序。
+                // 收起父目录时保留子目录状态，因此重新展开会恢复此前的层级。
+                if ( open ) {
+                    m_expandedDirectories.insert(entry.fullPath);
+                } else {
+                    m_expandedDirectories.erase(entry.fullPath);
+                }
+                m_fileTableRowsDirty = true;
+            }
         }
-        // 条目右键菜单与第一列 item 绑定，并允许行 hover 显示完整路径。
-        renderFileEntryContextMenu(entry, sourceManager);
-        if ( rowHovered && workspaceAllowsHoverFeedback() ) {
-            // 手指停留不代表鼠标悬浮，移动端不弹出私有副本的完整路径。
-            Utils::renderTooltip(entry.fullPath.c_str());
-        }
+    }
+}
 
-        if ( ImGui::TableNextColumn() ) {
-            // 隐藏类型列时 TableNextColumn 返回 false，跳过格式化和绘制。
-            const std::string typeText = formatTypeColumn(entry);
-            ImGui::TextUnformatted(typeText.c_str());
+/// @brief 按表格顺序追加一层目录，并递归处理展开的子目录。
+/// @param path 读取快照的目录。
+/// @param depth 当前目录的直属条目应缩进的层数。
+/// @details 父条目排在子树之前，仅收录已展开子树。行索引借用快照中的字符串及
+/// 元数据，避免维护第二份条目数据，也不必为折叠目录加载子级快照。
+/// @warning 每次行索引重建才调用，快照缺失时执行文件系统读取。
+void FileManagerView::appendFileTableRows(const std::filesystem::path& path,
+                                          int                          depth)
+{
+    // 插入子快照时哈希表可能扩容，但节点及其条目向量不移动。
+    // 索引已在调用前清空，因此刷新时替换子快照不会留下旧条目的引用。
+    for ( const auto& entry : getDirectorySnapshot(path).entries ) {
+        m_fileTableRows.push_back({ &entry, depth });
+        if ( entry.isDirectory &&
+             m_expandedDirectories.contains(entry.fullPath) ) {
+            appendFileTableRows(entry.path, depth + 1);
         }
+    }
+}
 
-        // 大小列由表格 API 自行跳过隐藏状态，文本构造保持轻量。
-        if ( ImGui::TableNextColumn() ) {
-            const std::string sizeText = formatSizeColumn(entry);
-            ImGui::TextUnformatted(sizeText.c_str());
-        }
-
-        // 修改时间在快照构建时已读取，此处只做本地格式化。
-        if ( ImGui::TableNextColumn() ) {
-            const std::string modifiedText = formatModifiedColumn(entry);
-            ImGui::TextUnformatted(modifiedText.c_str());
-        }
-
+/// @brief 保留触屏树节点的多行文件名布局，并在同一树栈内绘制子目录。
+/// @param path 当前目录路径。
+/// @param itemHeight 触屏命中区的最小高度，节点可按名称换行增高。
+/// @param sourceManager 用于打开选中条目。
+/// @details 命中矩形随换行后的文本实际高度变化，触屏排序和展开仍用独立表格
+/// 的状态。长按命中的文件 ID 仍来自原始路径。
+/// @warning UI 热路径：复用目录快照，只在失效后执行目录读取。
+void FileManagerView::drawTouchDirectory(const std::filesystem::path& path,
+                                         float      itemHeight,
+                                         UIManager* sourceManager)
+{
+    for ( const auto& entry : getDirectorySnapshot(path).entries ) {
+        const bool open = drawFileTableRow(
+            entry, itemHeight, sourceManager, std::nullopt, 0.0f);
         if ( entry.isDirectory && open ) {
-            // 递归只发生在用户展开目录时，结束后必须对称 TreePop。
-            drawDirectoryRecursive(entry.path, sourceManager);
+            // 子行仍处于父节点的 ID 与缩进作用域中，保持触屏原有命中几何。
+            drawTouchDirectory(entry.path, itemHeight, sourceManager);
             ImGui::TreePop();
         }
     }
+}
+
+/// @brief 绘制条目各列和交互，桌面行独立恢复树缩进及展开状态。
+/// @param entry 快照中的文件或目录，必须存活到行操作结束。
+/// @param itemHeight 表格最小行高。
+/// @param sourceManager 用于激活谱面、音频等资源。
+/// @param desktopOpen 桌面目录的展开状态，触屏传空并交由 ImGui 树维护。
+/// @param indent 桌面名称列的附加缩进，触屏继承当前树栈。
+/// @return 节点绘制后的展开状态，调用方只对目录使用。
+/// @warning UI 热路径：只处理这一行的图标、文字及输入。
+bool FileManagerView::drawFileTableRow(const DirectoryEntryInfo& entry,
+                                       float                     itemHeight,
+                                       UIManager*                sourceManager,
+                                       std::optional<bool>       desktopOpen,
+                                       float                     indent)
+{
+    // 固定最小行高让所有列和整行 hover 区域一致。
+    ImGui::TableNextRow(ImGuiTableRowFlags_None, itemHeight);
+
+    // 首列承载树层级、图标、名称和激活动作。
+    ImGui::TableNextColumn();
+    if ( indent > 0.0f ) ImGui::Indent(indent);
+    if ( desktopOpen && entry.isDirectory ) {
+        // 旁路裁剪掉的祖先，因此目录展开状态以完整路径为准。
+        ImGui::SetNextItemOpen(*desktopOpen);
+    }
+    // 图标与原始文件名单独传入，触屏换行不能把图标挤成独立一行。
+    // 显示分离不改变路径 ID、排序、激活或拖放使用的目录快照。
+    const float nameColumnWidth = ImGui::GetContentRegionAvail().x;
+    // TreeNode 默认 header 颜色设透明，整行 hover 由表格背景统一处理。
+    const ImVec4 transparent{ 0.0f, 0.0f, 0.0f, 0.0f };
+    ImGui::PushStyleColor(ImGuiCol_Header, transparent);
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, transparent);
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, transparent);
+    // 文件作为叶节点，目录返回 open 状态决定是否递归。
+    const bool open = Utils::renderScrollingTreeNode(
+        entry.fullPath,
+        entry.filename,
+        nameColumnWidth,
+        itemHeight,
+        !entry.isDirectory,
+        [this, &entry, sourceManager]() {
+            // 激活回调在当前条目引用仍有效的同一绘制调用内执行。
+            if ( !Interaction::activeProfile().touchGestures() )
+                activateFileEntry(entry, sourceManager);
+        },
+        "",
+        fileEntryIcon(entry));
+    ImGui::PopStyleColor(3);
+
+    // 以 ImGui 表格行边界和首列结算高度判定 Hover，避免手算偏差。
+    const ImGuiTable* table  = ImGui::GetCurrentTable();
+    const float       mouseY = ImGui::GetMousePos().y;
+    const float       rowMaxY =
+        table ? std::max(table->RowPosY2,
+                         ImGui::GetItemRectMax().y + table->RowCellPaddingY)
+              : 0.0f;
+    // TableGetHoveredColumn 保证鼠标确实位于表格列区域。
+    const bool rowHovered = table && ImGui::TableGetHoveredColumn() >= 0 &&
+                            mouseY >= table->RowPosY1 && mouseY < rowMaxY;
+    if ( rowHovered ) {
+        // RowBg1 覆盖四列，形成完整文件管理器行反馈。
+        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1,
+                               ImGui::GetColorU32(ImGuiCol_HeaderHovered));
+    }
+    // 条目右键菜单与第一列 item 绑定，并允许行 hover 显示完整路径。
+    renderFileEntryContextMenu(entry, sourceManager);
+    if ( rowHovered && workspaceAllowsHoverFeedback() ) {
+        // 手指停留不代表鼠标悬浮，移动端不弹出私有副本的完整路径。
+        Utils::renderTooltip(entry.fullPath.c_str());
+    }
+    // 桌面可能直接跳到子行，展开节点的 ImGui 树作用域只覆盖本行首列。
+    // 恢复缩进后再提交详情列，避免子目录深度改变元数据列的布局。
+    if ( desktopOpen && entry.isDirectory && open ) ImGui::TreePop();
+    if ( indent > 0.0f ) ImGui::Unindent(indent);
+
+    if ( ImGui::TableNextColumn() ) {
+        // 隐藏类型列时 TableNextColumn 返回 false，跳过格式化和绘制。
+        const std::string typeText = formatTypeColumn(entry);
+        ImGui::TextUnformatted(typeText.c_str());
+    }
+
+    // 大小列由表格 API 自行跳过隐藏状态，文本构造保持轻量。
+    if ( ImGui::TableNextColumn() ) {
+        const std::string sizeText = formatSizeColumn(entry);
+        ImGui::TextUnformatted(sizeText.c_str());
+    }
+
+    // 修改时间在快照构建时已读取，此处只做本地格式化。
+    if ( ImGui::TableNextColumn() ) {
+        const std::string modifiedText = formatModifiedColumn(entry);
+        ImGui::TextUnformatted(modifiedText.c_str());
+    }
+
+    return open;
 }
 
 /// @brief 获取或重建指定目录在当前排序配置下的缓存快照。
@@ -1081,6 +1181,8 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
 ///
 /// 缓存键由词法规整 UTF-8 路径生成，并把排序字段、方向、目录优先作为命中条件。
 /// 重建时逐条收集文件类型、大小、直属目录计数和修改时间，查询失败以有效位表达。
+/// 若快照被标记刷新，调用方须先丢弃借用旧条目的桌面行索引。触屏递归读取
+/// 子目录时仅借用父快照，替换子快照与子行渲染保持有序。
 /// @warning 可能执行文件系统 IO；只应由可见目录缓存缺失或显式失效时调用。
 const FileManagerView::DirectorySnapshot& FileManagerView::getDirectorySnapshot(
     const std::filesystem::path& path)
@@ -1090,7 +1192,8 @@ const FileManagerView::DirectorySnapshot& FileManagerView::getDirectorySnapshot(
     if ( const auto it = m_directoryCache.find(cacheKey);
          it != m_directoryCache.end() && it->second.sortKey == m_fileSortKey &&
          it->second.sortDirection == m_fileSortDirection &&
-         it->second.directoriesFirst == m_directoriesFirst ) {
+         it->second.directoriesFirst == m_directoriesFirst &&
+         !it->second.needsRefresh ) {
         return it->second;
     }
 
@@ -1178,12 +1281,12 @@ const FileManagerView::DirectorySnapshot& FileManagerView::getDirectorySnapshot(
 
 /// @brief 使所有目录快照失效。
 ///
-/// 文件操作、排序变化和显式刷新共用该入口；clear 不同步扫描文件系统，下一帧只按
-/// 当前展开目录惰性重建。
+/// 文件操作、排序变化和显式刷新共用该入口。保留快照至下次提交表格行之前，
+/// 确保条目右键菜单可以在发起失效后继续读取当前条目。
 void FileManagerView::invalidateDirectoryCache()
 {
-    // 保留容器自身容量策略，避免主动 shrink 带来额外分配。
-    m_directoryCache.clear();
+    m_directoryCacheDirty = true;
+    m_fileTableRowsDirty  = true;
 }
 
 /// @brief 合并后台文件监视器提交的目录刷新请求。
@@ -1577,8 +1680,13 @@ void FileManagerView::renderFileEntryContextMenu(
     if ( entry.isDirectory &&
          ::MMM::UI::FeedbackMenuItem(
              TR("ui.file_manager.context.refresh").data()) ) {
-        // 目录刷新只移除该节点快照，其子快照可继续按键复用。
-        m_directoryCache.erase(directoryCacheKey(entry.path));
+        // 延迟替换该目录快照，裁剪器当前仍可能借用其中的条目。
+        if ( const auto it =
+                 m_directoryCache.find(directoryCacheKey(entry.path));
+             it != m_directoryCache.end() ) {
+            it->second.needsRefresh = true;
+            m_fileTableRowsDirty    = true;
+        }
     }
 
     if ( ::MMM::UI::FeedbackMenuItem(
