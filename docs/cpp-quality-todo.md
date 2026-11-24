@@ -637,7 +637,9 @@
 
 ### P2 · R20 · 流式长曲跳转顺序解码全部跨过的页
 
-- [ ] 跳到远处缺页时后台从当前位置逐块追赶，后退还要回到零；前台在缺页期间推进静音。衡量远距离拖动所解码帧数及恢复有声延迟，保留定位精度回归。
+- [x] 跳到远处缺页时后台从当前位置逐块追赶，后退还要回到零；前台在缺页期间推进静音。衡量远距离拖动所解码帧数及恢复有声延迟，保留定位精度回归。
+
+  已验证。Linux RelWithDebInfo ICE 全量构建和 2 项 CTest 通过。400 页合成轨跳到第 350 页再回到第 25 页，读取量上限为 10 页，首次缺页保持游标，返回的 PCM 与绝对帧参考一致。同采样率 PCM WAVE 实测两方向各 32 帧均准确，恢复约 146 和 44 微秒（单次本机观测）。压缩或重采样媒体继续顺序解码以保留逐样本精度。 主仓 Linux 全量构建和 6 项音频回归通过。ICE 来源 [IonCachyEngine #8](https://github.com/xiangCaO233/IonCachyEngine/pull/8)，指针指向合并提交 `a0152e4cebe90dc6e18de830afd48c3ef8d6e712`。默认构建采用仓库内的预编译 ICE，源码修复待指定环境刷新预编译包后才由默认构建使用。
 
 [3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp:161](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp#L161) [3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp:168](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp#L168) [3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp:325](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp#L325)
 
