@@ -4,17 +4,33 @@
 #include "logic/EditorEngine.h"
 #include "logic/ProjectController.h"
 #include "mmm/project/Project.h"
+#include "runtime/AppThreadPool.h"
 
 #include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <string>
 
 namespace MMM::UI
 {
 /// @brief 通过友元操作真实向导，不创建谱面或复制资源改名实现。
 struct NewBeatmapWizardResourceRenameTestAccess {
+    /// @brief 等待一次真实文件任务，随后调用 UI 与生产窗口相同的完成入口。
+    /// @return 已收到后台结果并完成轮询时为真。
+    /// @note 只在测试线程等待，不把等待引入向导更新。相同图片可依次走两个用途。
+    static bool completeImport(NewBeatmapWizard& wizard)
+    {
+        if ( !wizard.m_pendingImport.valid() ) return false;
+        if ( wizard.m_pendingImport.wait_for(std::chrono::seconds(5)) !=
+             std::future_status::ready )
+            return false;
+        wizard.pollResourceImport();
+        // 轮询会消费 future，若状态仍有效说明无法应用本轮结果。
+        return !wizard.m_pendingImport.valid();
+    }
+
     /// @brief 验证系统选择晚到时不污染新草稿或其他项目。
     /// @details 图片通过真实资源复制事务导入，测试不伪造下拉选择文字。
     /// 已有重命名夹具保留，音频解码另由实际设备验收。
@@ -31,12 +47,16 @@ struct NewBeatmapWizardResourceRenameTestAccess {
         // 当前正式项目不同于请求根时，即使向导仍打开也不得导入。
         wizard.completeResourceSelection(
             source, root / "old-project", Target::Cover);
-        if ( !wizard.m_selectedCoverImgPath.empty() ) return false;
+        if ( !wizard.m_selectedCoverImgPath.empty() ||
+             wizard.m_pendingImport.valid() )
+            return false;
         // 关闭后的完成结果不能使刚取消的向导恢复资源绑定。
         // close 必须与用户按取消时的生产行为一致。
         wizard.close();
         wizard.completeResourceSelection(source, root, Target::Cover);
-        if ( !wizard.m_selectedCoverImgPath.empty() ) return false;
+        if ( !wizard.m_selectedCoverImgPath.empty() ||
+             wizard.m_pendingImport.valid() )
+            return false;
         // 弱令牌代表这一轮请求，重置后旧完成回调必须先发现失效。
         wizard.m_resourcePickerLifetime = std::make_shared<const bool>(true);
         const auto old =
@@ -48,11 +68,14 @@ struct NewBeatmapWizardResourceRenameTestAccess {
         wizard.m_isOpen = true;
         // 正常完成仍使用原分类及导入方法，封面不能误绑为主音轨。
         wizard.completeResourceSelection(source, root, Target::Cover);
-        if ( wizard.m_selectedCoverImgPath != "background.png" ) return false;
+        if ( !completeImport(wizard) ||
+             wizard.m_selectedCoverImgPath != "background.png" )
+            return false;
         // 同一个文件作为背景时应更新背景字段，不能只更新封面字段。
         wizard.completeResourceSelection(source, root, Target::Background);
         // 两种视觉用途均不能制造主音轨 ID 或音频选择。
-        return wizard.m_selectedCoverPath == "background.png" &&
+        return completeImport(wizard) &&
+               wizard.m_selectedCoverPath == "background.png" &&
                wizard.m_selectedAudioPath.empty();
     }
 
@@ -188,6 +211,10 @@ int main(int argc, char** argv)
     project->m_audioResources.push_back(resource);
     MMM::UI::NewBeatmapWizard wizard;
     wizard.open();
+    // 真实选择器通过文件池完成。测试在生产会话未启动时配置该池，
+    // 在关闭夹具工程前等待它退出，避免遗留探测借用随后清理的测试目录。
+    auto& pools = MMM::Runtime::AppThreadPool::instance();
+    pools.init();
     // 草稿与物理文件必须同时验证，选择路径变化不能代替磁盘提交。
     const bool passed =
         MMM::UI::NewBeatmapWizardResourceRenameTestAccess::run(wizard,
@@ -199,6 +226,7 @@ int main(int argc, char** argv)
         MMM::UI::NewBeatmapWizardResourceRenameTestAccess::selection(wizard,
                                                                      *project);
     // 统一关闭项目，失败结果同样不能泄漏到后续测试。
+    pools.shutdown();
     controller.closeProject();
     // 保留构建树内的夹具供失败诊断，不把测试输出写入源码资源目录。
     return passed ? 0 : 1;

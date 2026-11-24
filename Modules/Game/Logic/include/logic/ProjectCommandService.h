@@ -62,6 +62,14 @@ public:
     ImportAudioResult importAudio(Project&              project,
                                   const CmdImportAudio& cmd) const;
 
+    /// @brief 登记已经复制或验证的工程内主音频；不探测媒体或访问文件系统。
+    /// @param project 调用方在持有会话锁时独占编辑的工程。
+    /// @param relative 文件池确认的真实工程相对路径。
+    /// @return 主音频 ID；同路径已登记为其它类型时为空。
+    /// @note 调用方在成功后发布和保存更新后的工程资源表。
+    static std::string registerPreparedMainAudio(
+        Project& project, const std::filesystem::path& relative);
+
     /// @brief 将单个谱面文件同步到项目谱面列表。
     /// @param project 当前打开的项目。
     /// @param mapPath 需要同步的谱面文件路径。

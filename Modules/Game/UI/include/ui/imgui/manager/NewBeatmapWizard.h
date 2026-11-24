@@ -28,6 +28,16 @@ struct ProjectUiState;
 struct SessionTemplateOption;
 }  // namespace MMM::Logic
 
+namespace MMM::Utils
+{
+struct AudioInfo;
+}
+
+namespace MMM::UI::Utils
+{
+struct ProjectMediaImportResult;
+}
+
 namespace MMM::UI
 {
 
@@ -108,6 +118,19 @@ private:
     /// @brief 复制所选资源并将其绑定到向导字段。
     /// @warning 仅文件选择完成时调用；执行文件复制、音频探测及项目保存。
     void importResource(const std::filesystem::path& path);
+    /// @brief 文件任务完成后按工程代次把值提交到当前草稿。
+    void pollResourceImport();
+    /// @brief 使用后台已探测的标签与时长填充向导草稿。
+    void applyAudioInfo(const ::MMM::Utils::AudioInfo& info);
+    /// @brief 在途导入与原选择器分离，不能由随后点击改写用途。
+    ResourceTarget m_pendingImportTarget{ ResourceTarget::Audio };
+    /// @brief 若复制期间通过其它控件改选，旧结果不能覆盖新草稿。
+    std::filesystem::path m_pendingImportPreviousPath;
+    /// @brief 无阻塞地轮询媒体探测和复制的结果。
+    std::future<std::shared_ptr<Utils::ProjectMediaImportResult>>
+        m_pendingImport;
+    /// @brief 关闭后失效，后台在开始磁盘复制前拒绝未开始的旧请求。
+    std::shared_ptr<const bool> m_pendingImportLifetime;
     /// @brief 只接收当前向导、当前项目的异步成功结果。
     /// @warning 用户选中文件后才访问项目和复制资源，不在逐帧路径轮询磁盘。
     void completeResourceSelection(const std::filesystem::path& path,
@@ -297,7 +320,6 @@ private:
 
     /// @brief 下一帧是否打开模板内容选项弹窗。
     bool m_shouldOpenTemplateOptions{ false };
-
 
     /// @brief 谱面内部名称输入缓冲区。
     char m_nameBuf[256] = { 0 };

@@ -573,7 +573,9 @@
 
 ### P2 · R12 · 资源导入和改名持会话锁做文件 I/O
 
-- [ ] 确认导入、共享资源复制改名及向导导入时，音频探测或文件复制发生在 UI 调用栈和会话锁内。大文件或慢盘可同时阻塞绘制与逻辑更新。拆成预检、锁外文件操作、复核身份并提交；慢盘测试期间逻辑应继续推进。
+- [x] 确认导入、共享资源复制改名及向导导入时，音频探测或文件复制发生在 UI 调用栈和会话锁内。大文件或慢盘可同时阻塞绘制与逻辑更新。拆成预检、锁外文件操作、复核身份并提交；慢盘测试期间逻辑应继续推进。
+
+  已验证。Linux Clang 22 RelWithDebInfo 全量构建和 6 项回归通过。文件池受阻期间会话继续处理命令，完成时复核工程、会话和载图身份。共享媒体预检和复制均在文件池执行，资源登记的低频清单保存和独占改名仍沿用同步事务。
 
 [Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp:196](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp#L196) [Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp:367](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp#L367) [Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp:590](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp#L590) [Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:1300](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L1300)
 

@@ -630,7 +630,8 @@ void SettingsView::drawBeatmapSettings()
                     // IMD 推荐 BPM 在此页不可安全写回，仅保留可见值。
                     ImGui::BeginDisabled();
                 }
-                // 使用 float 适配 ImGui API，提交时恢复元数据 double 类型。
+                // 使用 float 适配 ImGui API，提交时恢复元数据 double
+                // 类型。
                 float bpm = (float)meta.preference_bpm;
                 ImGui::SetNextItemWidth(r.width);
                 if ( ::MMM::UI::FeedbackDragFloat(
@@ -651,7 +652,8 @@ void SettingsView::drawBeatmapSettings()
             TR_CACHE("ui.settings.beatmap.tracks").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                // 主轨数仍是元数据字段，由统一 CmdUpdateBeatmapMetadata 提交。
+                // 主轨数仍是元数据字段，由统一 CmdUpdateBeatmapMetadata
+                // 提交。
                 ImGui::SetNextItemWidth(r.width);
                 if ( ImGui::InputInt("##Tracks", &meta.track_count) ) {
                     // 具体有效性和结构同步由逻辑命令处理，本页只记录输入变化。
@@ -836,6 +838,7 @@ void SettingsView::drawBeatmapSettings()
                         m_resourceRenamePath   = resourcePath;
                         // 旧路径只用于确认时的身份复核，不在本帧移动文件。
                         m_resourceRenameProjectRoot = snapshot.projectRoot;
+                        m_resourceRenameSource      = m_beatmapSettings;
                         m_resourceRenameBeatmapPath =
                             snapshot.metadata.map_path;
                         m_resourceRenameBuffer.fill('\0');

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "logic/ProjectResourceTypes.h"
+#include "mmm/metadata/BaseMapMeta.h"
+
 #include <filesystem>
 #include <span>
 #include <string>
@@ -28,10 +31,30 @@ struct SharedResourceRenamePlan {
     bool m_requiresCopy{ false };
 };
 
+/// @brief 从打开谱面提取的可跨线程值证据，不持有可变谱面。
+struct OpenResourceReferenceSnapshot {
+    /// @brief 路径与视觉绑定；不复制时间线和实体注册表。
+    BaseMapMeta m_metadata;
+    /// @brief 显式资源引用；只在检查音频时收集。
+    std::vector<BeatmapAudioReference> m_audioReferences;
+};
+
 /// @brief 只检查改名是否需要隔离副本，不写谱面或修改项目资源。
 class SharedResourceRenameService
 {
 public:
+    /// @brief 复制 worker 所需的打开谱面证据，调用方保证来源在捕获期间稳定。
+    static OpenResourceReferenceSnapshot capture(const BeatMap& map,
+                                                 bool           audio);
+
+    /// @brief 从独立的工程和打开谱面值快照检查磁盘及引用。
+    /// @warning 可阻塞读盘，仅在文件任务或显式离线检查调用。
+    static SharedResourceRenamePlan inspectCaptured(
+        const Project& project, const std::filesystem::path& currentMap,
+        const std::filesystem::path& source, const std::string& newName,
+        const AudioResource*                           audio,
+        std::span<const OpenResourceReferenceSnapshot> openMaps);
+
     /// @brief 在物理改名前检查其他谱面的磁盘与未保存内存引用。
     /// @param project 当前正式项目，登记列表决定磁盘检查范围。
     /// @param currentMap

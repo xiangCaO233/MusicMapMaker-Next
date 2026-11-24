@@ -14,6 +14,7 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectCommandService.h"
 #include "logic/ProjectController.h"
 #include "logic/SessionTypes.h"
 #include "logic/session/SessionUtils.h"
@@ -25,7 +26,7 @@
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 #include "ui/utils/MobileFileDialog.h"
 #include "ui/utils/NativeFileDialog.h"
-#include "ui/utils/ProjectResourceImport.h"
+#include "ui/utils/ProjectMediaTask.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
@@ -1174,14 +1175,9 @@ void NewBeatmapWizard::openResourcePicker(ResourceTarget target)
         // 平台能力检查优先于桌面样式偏好；Android 未授权目录访问时必须走 SAF。
         // 不能调用同步 NFD 后再降级，因为该入口没有可等待的 Android 结果槽。
         // 捕获正式项目身份，系统选择期间切换项目不能把资源导入另一个项目。
-        auto&                 engine = Logic::EditorEngine::instance();
-        std::filesystem::path projectRoot;
-        {
-            std::lock_guard lock(engine.getSessionMutex());
-            const auto*     project = engine.getCurrentProject();
-            if ( !project ) return;
-            projectRoot = project->m_projectRoot;
-        }
+        const auto project = Logic::ProjectController::instance().uiSnapshot();
+        if ( !project || project->m_generation != m_projectGeneration ) return;
+        const auto projectRoot = project->m_projectRoot;
         // 令牌只在用户点击时分配，UI 线程回调与销毁不会并发。
         m_resourcePickerLifetime = std::make_shared<const bool>(true);
         // 原生窗口打开前播放统一弹窗反馈。
@@ -1242,19 +1238,18 @@ void NewBeatmapWizard::openResourcePicker(ResourceTarget target)
 /// @param path 系统完成授权及工作副本准备后提供的普通路径。
 /// @param projectRoot 请求发起时的项目根目录。
 /// @param target 请求发起时的资源用途，不读取后来点击的控件状态。
-/// @warning 低频完成回调；递归会话锁覆盖复核与导入，避免中间切换项目。
+/// @warning 低频完成回调；入队前读取不可变工程快照，不等待会话。
 void NewBeatmapWizard::completeResourceSelection(
     const std::filesystem::path& path, const std::filesystem::path& projectRoot,
     ResourceTarget target)
 {
     // 关闭向导是明确的取消边界，即使返回路径有效也不能提交草稿。
     if ( !m_isOpen ) return;
-    // 项目复核与导入使用同一会话锁，不能在检查后留下切换窗口。
-    auto&           engine = Logic::EditorEngine::instance();
-    std::lock_guard lock(engine.getSessionMutex());
-    const auto*     project = engine.getCurrentProject();
-    // 同一个向导可能仍可见，但原项目已关闭或切换；此时丢弃陈旧结果。
-    if ( !project || project->m_projectRoot != projectRoot ) return;
+    // 系统选择器可在切换工程后返回。这里仅查询不可变工程身份。
+    const auto project = Logic::ProjectController::instance().uiSnapshot();
+    if ( !project || project->m_generation != m_projectGeneration ||
+         project->m_projectRoot != projectRoot )
+        return;
     // 用途取自请求快照，避免后台返回的封面被当成之后点击的音轨导入。
     // 导入继续复用扩展名校验、音频解码和项目相对路径生成，不另写复制流程。
     m_resourceTarget = target;
@@ -1294,14 +1289,12 @@ void NewBeatmapWizard::renderResourcePicker()
 /// @brief 校验、复制并绑定用户选择的项目资源。
 /// @param path 原生对话框、内置选择器或拖放提供的源路径。
 ///
-/// 先按目标类型检查扩展分类，音频再执行解码探针；随后在会话锁内复制资源到项目。
-/// 音频通过 EditorEngine 注册为主音轨并反查生成
-/// ID，图片和视频直接更新元数据路径。 所有失败均写入
-/// m_resourceImportError，不使用异常。
-/// 成功返回后 imported 是项目根相对路径，可直接持久化或与资源表比较。会话锁覆盖
-/// 当前项目查询、文件复制、音轨注册和资源反查，避免项目切换造成跨项目绑定。
-/// 背景图片在尚无独立封面时可兼作封面；视频永远不会写入图片封面字段。
-/// @warning 低频路径：可能探测和复制文件，只由明确的选择或拖放动作触发。
+/// 立即检查媒体类别，文件池独立完成探测和复制。输入可以来自系统选择器、
+/// 内置对话框或拖放，三条入口均采用相同的用途与工程校验。
+/// 没有工作线程时向导保留现有选择及可见诊断，避免 UI 同步回退到读盘。
+/// 向导关闭、重开或工程切换后，
+/// 文件结果不会绑定到新的草稿；已经复制完成的文件仍属于原工程。
+/// @warning 只由明确的选择或拖放动作入队，不通过轮询启动重复复制。
 void NewBeatmapWizard::importResource(const std::filesystem::path& path)
 {
     // 资源分类 helper 统一处理扩展名大小写和支持列表。
@@ -1319,56 +1312,95 @@ void NewBeatmapWizard::importResource(const std::filesystem::path& path)
             TR("ui.wizard.new_beatmap.drop_wrong_type").toString();
         return;
     }
-    // 项目资源表和导入命令需要与会话切换互斥。
-    auto&           engine = Logic::EditorEngine::instance();
-    std::lock_guard lock(engine.getSessionMutex());
-    // 所有权转移与本确认持同一锁。同目录重开也不能消费旧草稿的导入，
-    // 临时工程则仅用于预览，不允许从这个入口复制新资源。
-    const auto snapshot = Logic::ProjectController::instance().uiSnapshot();
-    if ( !snapshot || snapshot->m_generation != m_projectGeneration ||
-         snapshot->m_isTemporaryProject )
+    // 请求只由本轮草稿捕获当前可写工程，文件池不会读取保存中的可变工程。
+    // 单一在途任务也避免同一向导的重复拖入交错改写字段。
+    const auto project = Logic::ProjectController::instance().uiSnapshot();
+    if ( !project || project->m_generation != m_projectGeneration ||
+         project->m_isTemporaryProject || m_pendingImport.valid() )
         return;
-    auto* project = engine.getCurrentProject();
-    if ( !project ) return;
-    if ( m_resourceTarget == ResourceTarget::Audio &&
-         !MMM::Utils::AudioInfoUtils::probeAudioInfo(path) ) {
-        // 扩展名正确但无法探测的音频不复制进项目。
+    // 独占弱令牌在关闭时失效，尚未开始的文件操作可安全跳过。
+    m_pendingImportLifetime = std::make_shared<const bool>(true);
+    m_pendingImport         = Utils::queueProjectMediaImport(
+        project->m_projectRoot,
+        path,
+        m_resourceTarget == ResourceTarget::Audio,
+        project->m_generation,
+        m_pendingImportLifetime);
+    if ( !m_pendingImport.valid() )
         m_resourceImportError =
             TR("ui.wizard.new_beatmap.import_failed").toString();
+    else {
+        m_pendingImportTarget = m_resourceTarget;
+        m_pendingImportPreviousPath =
+            m_resourceTarget == ResourceTarget::Audio
+                ? m_selectedAudioPath
+                : (m_resourceTarget == ResourceTarget::Cover
+                       ? m_selectedCoverImgPath
+                       : m_selectedCoverPath);
+    }
+}
+
+/// @brief 在结果就绪时提交资源选择。项目切换或关闭不会绑定旧结果。
+/// @details 检查草稿的可见状态、绑定工程代次和原选中路径。三者任一变化，
+/// 后台结果只作为已完成的原工程文件留下，不回写当前页面。
+/// 音频使用探测快照与正式资源 ID，同一次完成不会重复解码；图片和视频直接
+/// 更新各自路径，缺少封面时仍允许背景图作为封面。
+/// @warning 每帧只做零超时检查；磁盘复制和音频探测已经在文件池完成。
+void NewBeatmapWizard::pollResourceImport()
+{
+    if ( !m_pendingImport.valid() ||
+         m_pendingImport.wait_for(std::chrono::seconds(0)) !=
+             std::future_status::ready )
+        return;
+    auto&            engine = Logic::EditorEngine::instance();
+    std::unique_lock lock(engine.getSessionMutex(), std::try_to_lock);
+    // 更新循环持锁时等下一帧，结果保持有效，不会在 UI 线程等待更新结束。
+    if ( !lock ) return;
+    const auto operation = m_pendingImport.get();
+    // 只标记当前任务已结束。关闭或重开向导会丢弃自己的结果槽，
+    // 即使工作者尚未完成，也不能把旧关联写入新一轮草稿。
+    m_pendingImportLifetime.reset();
+    const auto identity = Logic::ProjectController::instance().uiSnapshot();
+    auto*      project  = engine.getCurrentProject();
+    if ( !m_isOpen || !identity ||
+         identity->m_generation != m_projectGeneration ||
+         identity->m_isTemporaryProject || !project )
+        return;
+    const auto& selection =
+        m_pendingImportTarget == ResourceTarget::Audio
+            ? m_selectedAudioPath
+            : (m_pendingImportTarget == ResourceTarget::Cover
+                   ? m_selectedCoverImgPath
+                   : m_selectedCoverPath);
+    // 用户可能在复制另一首歌期间改选已存在的配乐，主动选择仍优先。
+    // 校验精确目标，封面和背景共用文件时也不能随意切换媒体用途。
+    // 只在身份确认后解释工作结果，旧请求不会留下新的错误提示。
+    // 这里消费已探测的标签，避免对同一音频发起重复的解码查询。
+    if ( selection != m_pendingImportPreviousPath ) return;
+    if ( operation->m_error ) {
+        m_resourceImportError = operation->m_error.message();
         return;
     }
-    // importProjectResource 负责目标命名、复制和项目内相对路径结果。
-    const auto imported =
-        Utils::importProjectResource(project->m_projectRoot, path);
-    if ( !imported ) {
-        // 保留底层 error_code 文本供用户定位权限或文件问题。
-        m_resourceImportError = imported.error().message();
-        return;
-    }
-    if ( m_resourceTarget == ResourceTarget::Audio ) {
+    const auto imported = &operation->m_path;
+    if ( m_pendingImportTarget == ResourceTarget::Audio ) {
         // 先让逻辑引擎登记复制后的绝对路径为主音轨。
-        engine.handleImportAudio(
-            { Config::pathToUtf8(project->m_projectRoot / *imported),
-              MMM::AudioTrackType::Main });
-        // 再按规范化相对路径反查新建资源，取得 BPM 工具需要的稳定 ID。
-        const auto resource = std::find_if(
-            project->m_audioResources.begin(),
-            project->m_audioResources.end(),
-            [&](const auto& audio) {
-                return audio.m_type == MMM::AudioTrackType::Main &&
-                       Config::utf8ToPath(audio.m_path).lexically_normal() ==
-                           imported->lexically_normal();
-            });
-        if ( resource == project->m_audioResources.end() ) {
-            // 引擎未生成主音轨时不能继续绑定谱面。
+        const auto audioId =
+            Logic::ProjectCommandService::registerPreparedMainAudio(*project,
+                                                                    *imported);
+        if ( audioId.empty() ) {
             m_resourceImportError =
                 TR("ui.wizard.new_beatmap.no_main_audio").toString();
             return;
         }
+        // 媒体及配套文件已准备完成；这里仅保存更新后的工程清单。
+        engine.saveProject();
         // 选择 ID 后探测元数据并填充标题、艺术家和时长。
-        m_selectedAudioTrackId = resource->m_id;
-        onAudioSelected(*imported);
-    } else if ( m_resourceTarget == ResourceTarget::Cover ) {
+        m_selectedAudioTrackId = audioId;
+        m_selectedAudioPath    = *imported;
+        m_measuredTimings.clear();
+        publishInteraction(Event::BeatmapCreateInteractionStage::AudioSelected);
+        applyAudioInfo(*operation->m_audio);
+    } else if ( m_pendingImportTarget == ResourceTarget::Cover ) {
         // 封面字段独立于背景资源。
         m_selectedCoverImgPath = *imported;
     } else {
@@ -1447,6 +1479,8 @@ void NewBeatmapWizard::handleResourceDrop(ResourceTarget target)
 /// 热路径：向导打开时每帧执行；项目资源递归扫描仅在对应下拉框展开时发生。
 void NewBeatmapWizard::update(UIManager* sourceManager)
 {
+    // 仅消费一次就绪结果；普通绘制从不启动新的文件任务。
+    pollResourceImport();
     if ( !m_isOpen || shouldWaitForManualBpmMeasurement(sourceManager) ) {
         // 隐藏期间不保留可能在其他窗口产生的拖放事件。
         m_pendingDrops.clear();
@@ -2075,6 +2109,9 @@ void NewBeatmapWizard::close()
 {
     // 系统授权可能晚于关闭返回，此时回调只能释放结果，不能访问草稿。
     m_resourcePickerLifetime.reset();
+    // 文件任务只能用弱令牌，释放 future 不需要等待正在执行的系统复制。
+    m_pendingImportLifetime.reset();
+    m_pendingImport = {};
     // 丢弃尚未匹配到资源控件的文件事件。
     m_pendingDrops.clear();
     // 命令提交已按值复制入口；取消关闭则必须防止旧入口泄漏到下次调用。
@@ -2099,6 +2136,8 @@ void NewBeatmapWizard::reset()
     m_visualResourceRevision->fetch_add(1, std::memory_order_relaxed);
     m_visualResources.reset();
     // 再次打开是新草稿，旧系统选择结果不得绑定到这一轮。
+    m_pendingImport = {};
+    m_pendingImportLifetime.reset();
     m_resourcePickerLifetime.reset();
     // 清理瞬时输入和上一轮可见错误。
     m_pendingDrops.clear();
@@ -2185,34 +2224,39 @@ void NewBeatmapWizard::onAudioSelected(const std::filesystem::path& path)
     auto absPath = project->m_projectRoot / m_selectedAudioPath;
     auto infoOpt = MMM::Utils::AudioInfoUtils::probeAudioInfo(absPath);
     if ( infoOpt ) {
-        // 探测结果只在成功分支内读取。
-        auto& info = *infoOpt;
+        applyAudioInfo(*infoOpt);
+    }
+}
 
-        // 向导内部以秒保存，提交时再转为毫秒。
-        m_audioDuration = info.duration;
+/// @brief 复用已有标签处理，不从磁盘重新探测素材。
+/// @param info 由音频选择或后台导入得到的独立探测结果。
+/// @details 同一份标签填充普通和 Unicode 字段，用户仍可独立修改它们。
+/// 专辑以音频为准，新选择不会沿用上一首歌的专辑。
+/// 内部名称去掉空白以保持已有命名习惯，展示字段保留原文本。
+void NewBeatmapWizard::applyAudioInfo(const ::MMM::Utils::AudioInfo& info)
+{
+    // 向导内部以秒保存，提交时再转为毫秒。
+    m_audioDuration = info.duration;
 
-        // 选择音频是新的用户操作，标签应替换旧项目值或前一音频的文本。
-        // 普通与 Unicode 栏先用同一标签，仍允许随后分别手动调整。
-        copyToBuffer(m_titleBuf, sizeof(m_titleBuf), info.title);
-        copyToBuffer(m_titleUnicodeBuf, sizeof(m_titleUnicodeBuf), info.title);
-        copyToBuffer(m_artistBuf, sizeof(m_artistBuf), info.artist);
-        copyToBuffer(
-            m_artistUnicodeBuf, sizeof(m_artistUnicodeBuf), info.artist);
-        // 项目没有专辑字段，因此音频标签始终作为专辑初始值。
-        // 重新选择音频时同步刷新专辑，避免显示前一个资源的标签。
-        copyToBuffer(m_albumBuf, sizeof(m_albumBuf), info.album);
+    // 选择音频是新的用户操作，标签应替换旧项目值或前一音频的文本。
+    // 普通与 Unicode 栏先用同一标签，仍允许随后分别手动调整。
+    copyToBuffer(m_titleBuf, sizeof(m_titleBuf), info.title);
+    copyToBuffer(m_titleUnicodeBuf, sizeof(m_titleUnicodeBuf), info.title);
+    copyToBuffer(m_artistBuf, sizeof(m_artistBuf), info.artist);
+    copyToBuffer(m_artistUnicodeBuf, sizeof(m_artistUnicodeBuf), info.artist);
+    // 项目没有专辑字段，因此音频标签始终作为专辑初始值。
+    // 重新选择音频时同步刷新专辑，避免显示前一个资源的标签。
+    copyToBuffer(m_albumBuf, sizeof(m_albumBuf), info.album);
 
-        // 项目一键导入只覆盖展示字段，内部名称仍沿用音频标题的原有推导。
-        // 去掉空白可避免生成包含空格的常见不便标识。
-        std::string safeName = info.title;
-        // remove_if 只修改本地副本，不改变展示标题。
-        safeName.erase(
-            std::remove_if(safeName.begin(), safeName.end(), ::isspace),
-            safeName.end());
-        if ( !safeName.empty() ) {
-            // 空标签不覆盖 reset 提供的默认内部名。
-            copyToBuffer(m_nameBuf, sizeof(m_nameBuf), safeName);
-        }
+    // 项目一键导入只覆盖展示字段，内部名称仍沿用音频标题的原有推导。
+    // 去掉空白可避免生成包含空格的常见不便标识。
+    std::string safeName = info.title;
+    // remove_if 只修改本地副本，不改变展示标题。
+    safeName.erase(std::remove_if(safeName.begin(), safeName.end(), ::isspace),
+                   safeName.end());
+    if ( !safeName.empty() ) {
+        // 空标签不覆盖 reset 提供的默认内部名。
+        copyToBuffer(m_nameBuf, sizeof(m_nameBuf), safeName);
     }
 }
 
