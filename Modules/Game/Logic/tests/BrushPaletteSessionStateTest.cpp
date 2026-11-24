@@ -7,6 +7,7 @@
 #include "config/EditorSettings.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "logic/BeatmapExportPresentation.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/TimingTableSnapshot.h"
@@ -1325,6 +1326,74 @@ bool testExitConfirmationMapName()
     return valid;
 }
 
+/// @brief 通过常规会话载入，验证导出对话框的命名和各格式兼容性快照。
+/// @return 四种目标只读到所需特征，且名称和标志可越过会话关闭时返回 true。
+///
+/// 夹具同时提供 Unicode 标题、扩展物件、每个格式要单独警告的 timing
+/// 和元数据。用内存谱面检查读模型本身，不需要打开文件对话框或写谱面。
+/// @note 在同一个加载版本中请求四种目标；某种格式的低频分析不能清除模型
+/// 中其余格式需要的元数据。最后再次查询空会话，与旧快照的可用性分别断言。
+/// @note 这里不检查界面翻译和警告文案，避免因文本调整掩盖格式判定的变化。
+bool testBeatmapExportPresentation()
+{
+    using namespace MMM;
+    using Logic::BeatmapExportFormat;
+    auto& engine = Logic::EditorEngine::instance();
+    auto  map    = std::make_shared<BeatMap>();
+    // 命名使用 Unicode 标题；原始名称仍保留给使用原文件主体的格式。
+    map->m_baseMapMetadata.name          = "Export name";
+    map->m_baseMapMetadata.title         = "Fallback title";
+    map->m_baseMapMetadata.title_unicode = "导出标题";
+    map->m_baseMapMetadata.version       = "EX";
+    map->m_baseMapMetadata.track_count   = 6;
+    // Malody 支持首尾空白，严格整数字段仍解析为 Key 模式。
+    map->m_metadata.map_properties[MapMetadataType::MALODY]["mode"] = " 0 ";
+    // 独立 Scroll 事件触发负倍率警告，同时确认没有把它解释成 Jump 或 HS。
+    map->m_timings.push_back(Timing{});
+    auto& scroll                   = map->m_timings.back();
+    scroll.m_timestamp             = 1000.0;
+    scroll.m_timingEffect          = TimingEffect::SCROLL;
+    scroll.m_timingEffectParameter = -1.0;
+    // BMS 将普通音符的独立增益视为退化；Flick 另有格式能力提示。
+    map->m_noteData.notes.emplace_back().setSampleBinding(AudioSampleBinding{
+        .m_audioResourceId = "test-sample", .m_volume = 0.5F });
+    // 同一物件还应启用 Malody 扩展选项，两个格式对该物件的动作不同。
+    map->m_noteData.flicks.emplace_back();
+    // 建立完整对象引用视图后再载入，避免元数据检查读取尚未同步的派生索引。
+    map->sync();
+    const auto index   = engine.createSession(map, "Export capture", false);
+    auto       session = engine.getActiveSession();
+    // 逻辑线程在此未启动，手动消费载入命令，使查询走真实活动谱面入口。
+    if ( session ) session->update(0, engine.getEditorConfig(), true);
+    // 命名读取与目标兼容性读取分开，短路径不需要遍历整个谱面。
+    const auto naming = Logic::captureBeatmapExportNaming();
+    // 每种格式用各自的请求范围，防止单一全量结构掩盖缺失的映射。
+    const auto bms =
+        Logic::captureBeatmapExportCompatibility(BeatmapExportFormat::Bms);
+    const auto osu =
+        Logic::captureBeatmapExportCompatibility(BeatmapExportFormat::Osu);
+    const auto imd =
+        Logic::captureBeatmapExportCompatibility(BeatmapExportFormat::Imd);
+    const auto mc =
+        Logic::captureBeatmapExportCompatibility(BeatmapExportFormat::Malody);
+    // 关闭真实注册的活动会话，不能仅仅释放夹具构造时的 shared_ptr。
+    engine.closeSession(index, false);
+    // 关闭后再比较，若读取结果依赖 SessionContext 存活，此处无法安全使用。
+    // BMS 的音量、osu! 的负 Scroll、IMD 的丢字段与 Malody 的 mode 单独核对。
+    const bool valid =
+        naming && naming->name == "Export name" &&
+        naming->preferredTitle == "导出标题" && naming->version == "EX" &&
+        naming->trackCount == 6 && bms && bms->hasBmsTimingDifferences &&
+        bms->hasNonDefaultSampleVolume && bms->hasFlick && osu &&
+        osu->hasNegativeScroll && !osu->hasJumpOrHs && imd &&
+        imd->hasImdTimingDifferences && imd->hasImdMapMetadataDifferences &&
+        mc && mc->malodyMode == 0 && mc->hasFlick &&
+        !Logic::captureBeatmapExportNaming();
+    // 退出路径仍清理测试会话，让其它快照用例可以独立检查活动身份。
+    if ( !valid ) XERROR("Active beatmap export presentation mismatch");
+    return valid;
+}
+
 }  // namespace
 
 /// @brief 运行画笔调色盘跨会话恢复测试。
@@ -1346,6 +1415,7 @@ int main()
                    testActivePlaybackStatePublication() &&
                    testTimingTablePublication() &&
                    testExitConfirmationMapName() &&
+                   testBeatmapExportPresentation() &&
                    testCameraConfigSnapshot() &&
                    testConcurrentEditorConfigSnapshots()
                ? 0

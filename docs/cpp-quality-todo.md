@@ -186,6 +186,10 @@
   - 已完成普通关闭确认批次。窗口收到关闭请求时，逻辑侧在同一临界区读取全部会话的脏状态和活动谱面名。弹窗持有名称副本，绘制与按钮分发均不持有会话锁。Linux Clang 22 RelWithDebInfo 全量构建及 11 项相关 CTest 通过，覆盖后台脏谱面、活动切换、关闭后的值保留和保存基线清理。Ninja 活动编译对象中，`SessionContext.h` 扇出由 72 降至 71，移除 `MainDockSpaceUI.cpp`。
   - 注释／代码行数分别为 `EditorEngine.h` 375/252、`EditorEngine.cpp` 1712/3979、`MainDockSpaceUI.h` 75/112、`MainDockSpaceUI.cpp` 429/943、`BrushPaletteSessionStateTest.cpp` 387/902，均达到 30%。
 
+  - 已完成导出对话框批次。四处会话读取改为 Logic 的按值命名及兼容性读模型。BMS、osu!、IMD 和 Malody 只检查对应目标所需的字段；文件名清理和警告格式化在会话锁外运行。Ninja 中 `MenuUtil.cpp` 已解除 `SessionContext.h` 依赖，新增 Logic 读模型使用该头，总活动对象扇出维持 71。
+  - Linux Clang 22 RelWithDebInfo 全量构建、11 项导出相关回归及全部 221 项 CTest 通过。新增回归覆盖 Unicode 命名、BMS 采样音量、osu! 负 Scroll、IMD 元数据、Malody mode 与会话关闭后结果保活。
+  - 注释／代码行数分别为 `BeatmapExportPresentation.h` 27/35、`BeatmapExportPresentation.cpp` 77/172、`MenuUtil.cpp` 216/473、`BrushPaletteSessionStateTest.cpp` 408/950、`Modules/Game/Logic/CMakeLists.txt` 148/341，均达到 30%。
+
 - [x] **PERF-06 P3 离屏几何容量扩张在命令录制阶段等待全 GPU 空闲**
 
   - 离屏顶点和索引缓冲按帧槽保存容量。渲染器成功等待该槽的提交 fence 后，录制才可复用或扩张该槽；保留其他在途缓冲及固定大小 uniform。扩容记录槽、需要／原有／新增容量和分配耗时。

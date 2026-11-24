@@ -61,6 +61,8 @@ add_library(
   src/logic/ProjectController.cpp
   # EditorEngine 聚合会话调度，其实现留在 Logic，启动程序仅负责装配。
   src/logic/EditorEngine.cpp
+  # 导出对话框读取纯值快照，命名与文案不会占用会话临界区。
+  src/logic/BeatmapExportPresentation.cpp
   # 视觉资源改名包含独立的谱面磁盘事务与会话同步，避免扩张调度主文件。
   src/logic/EditorEngine_VisualResource.cpp
   src/logic/VisualResourceRenameService.cpp
