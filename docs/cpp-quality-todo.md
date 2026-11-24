@@ -174,13 +174,14 @@
 
 ## 平台适配
 
-- [ ] **PLAT-01（P2）启动区域设置使用 Windows 名称且忽略失败**
+- [x] **PLAT-01（P2）启动区域设置使用 Windows 名称且忽略失败**
 
   - 位置：`Modules/Game/include/game/GlobDefs.h:79-80`。
   - 行为：全局 `RTTILogger` 构造无条件调用 `std::setlocale(LC_ALL, ".UTF-8")`，返回值被丢弃，注释却声称 C/C++ 路径与格式化已统一 UTF-8。
   - 证据：当前 Linux 隔离 Python/ctypes 进程调用相同 C API，返回 `None`，调用前后 locale 完全相同。因此 Linux 实际继承原 locale，注释保证不成立。这里尚不能推导所有中文路径都失败，因为已有 UTF-8/path 包装可能自行保证语义。
   - 整改：把 locale 初始化收入启动平台实现，定义失败回退和日志，明确只初始化真正需要的 category；不要依赖一个平台名称覆盖所有系统。
   - 验收：Windows、Linux（含 `LC_ALL=C`）、macOS 上检查成功/失败返回与最终 category，中文路径和数值解析不依赖宿主 locale；失败有明确诊断。
+  - 已按平台选择 UTF-8 字符设置，只修改 LC_CTYPE；不可用时保留原值并在日志就绪后告警。Linux RelWithDebInfo 全量构建和 8 项回归通过，另验证 `LC_ALL=C`、中文环境及隔离缺少 locale 数据。macOS ARM64（最低部署 11.0）原生和 debsrv MSVC 交叉构建后在 Wine 运行的启动探针通过，注入 CRT 返回空值的回退均通过。各平台探针均核对中文文件往返、数值解析和非字符类别。
 
 - [x] **PLAT-02（P2）文本协议浮点语法随平台变化**
 

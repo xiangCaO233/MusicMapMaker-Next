@@ -1,8 +1,8 @@
 #include "game/GlobDefs.h"
 #include "config/ExecutablePath.h"
 #include "log/colorful-log.h"
+#include "platform/StartupLocale.h"
 
-#include <clocale>
 #include <filesystem>
 #include <system_error>
 
@@ -23,7 +23,7 @@
 namespace MMM
 {
 
-/// @brief 配置启动环境，并在日志初始化完成后记录工作目录设置失败。
+/// @brief 配置启动环境，并在日志初始化完成后记录字符设置或工作目录失败。
 RTTILogger::RTTILogger()
 {
 #ifdef _WIN32
@@ -50,10 +50,12 @@ RTTILogger::RTTILogger()
     // 崩溃处理器必须在后续业务初始化前注册，以覆盖早期故障。
     register_crash_handler();
 #endif
-    // 仅当运行库接受 .UTF-8 时才切换进程的 C locale；不支持时保留原设置。
-    // 这里忽略返回值，不能把这次调用视为路径编码或 C++ locale
-    // 已初始化的保证。
-    std::setlocale(LC_ALL, ".UTF-8");
+    // 只在启动线程切换字符类别，在日志系统可用之前记录设置结果。
+    // 使用平台候选值，避免宿主环境变量将字符转换改回非 UTF-8。
+    // 文件路径继续用平台原生表示，数字读写维持自己的解析规则。
+    // 字符设置失败与路径失败分别诊断，便于区分运行库和文件系统问题。
+    const bool characterLocaleReady =
+        Platform::initializeStartupCharacterLocale();
 
     // 资源定位和启动目录使用同一个查询，分别处理查询和目录切换的失败。
     const auto      executablePath      = Config::currentExecutablePath();
@@ -68,6 +70,12 @@ RTTILogger::RTTILogger()
     // 路径切换必须先于日志初始化，使相对日志路径仍以启动工作目录为基准。
     // 若切换失败，日志后端也继续使用调用者原有的工作目录。
     XLogger::init("MMM");
+    if ( !characterLocaleReady ) {
+        // 裁剪过 locale 数据的设备仍可启动，字符转换沿用原进程设置。
+        XWARN(
+            "UTF-8 LC_CTYPE is unavailable; keeping the existing character "
+            "locale");
+    }
     if ( !executableDirectory.is_absolute() ) {
         // 空路径代表平台查询失败，路径服务自身不依赖已经初始化的日志。
         XWARN(
