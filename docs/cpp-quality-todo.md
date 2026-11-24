@@ -86,11 +86,13 @@
 
   已验证。主题字体资源和实例启动诊断移入私有组件，保留 Vulkan 对象借用和渲染入口。Linux RelWithDebInfo 全量构建与 11 项相关 CTest 通过。Ninja 活动对象依赖数为 VKContext.h 25,VKContextStartupDiagnostics.h 6,VKContextAppearance.h 2。在隔离 Weston 与 Lavapipe 上通过 Vulkan 启动、绘制与关闭，验证实际皮肤互切和延迟字体重建。默认配置与启用 Khronos 验证层的探针均通过。
 
-- [ ] **R72 · P0 · ICE 文件接收器在公开头承载编码会话私有状态**
+- [x] **R72 · P0 · ICE 文件接收器在公开头承载编码会话私有状态**
 
   FFmpeg 句柄、转换缓冲、FIFO、PTS 与 trailer 状态属于单次编码会话。主要收益是约束关闭和失败清理的顺序。 由私有 EncoderSession 独占这些资源并负责排空/关闭；Receiver 保留块预算、进度与取消接口。单次导出分配，析构在完整类型可见处定义。覆盖打开部分失败、取消、短末块、关闭错误和多次导出；同步验证 ICE 公共头与库 ABI。
 
   [FFmpegFileReceiver.hpp L119](../3rdpty/sources/IonCachyEngine/include/ice/out/io/FFmpegFileReceiver.hpp#L119)、[FFmpegFileReceiver.cpp L515](../3rdpty/sources/IonCachyEngine/src/ice/out/io/FFmpegFileReceiver.cpp#L515)
+
+  已验证。EncoderSession 独占 FFmpeg 编码资源。部分初始化失败、取消后重开、529 帧短尾和重复使用均通过。ICE 独立全量构建与 5 项 CTest 通过，[ICE #15](https://github.com/xiangCaO233/IonCachyEngine/pull/15) 合并提交为 b23ad52e4ea16cd1bef10a00b8ee94e65025b01a。主仓 Linux RelWithDebInfo 全量构建与 8 项相关 CTest 通过。接收器布局变更使用配套源码头和库验证。默认预编译头与库待既定 Runner 成套刷新。
 
 - [ ] **R73 · P0 · 独立更新器的多平台实现仍集中在入口文件**
 
