@@ -1,3 +1,4 @@
+#include "../imgui/manager/ToolbarViewImpl.h"
 #include "common/LogicCommands.h"
 #include "common/NoteColor.h"
 #include "config/skin/translation/Translation.h"
@@ -22,9 +23,10 @@ namespace MMM::UI
 /// @warning 可见时每帧绘制；只借用本地数组，不访问谱面或会话长锁。
 void ToolbarView::renderMobileColorPalette(float scale)
 {
+    auto& palette = m_impl->m_palette;
     // 本页只响应工作台入口，不创建第二套长期颜色库。
     // 关闭时不测量内容，也不执行任何颜色同步命令。
-    if ( !m_showColorPopup ) return;
+    if ( !palette.m_open ) return;
     const auto display = ImGui::GetIO().DisplaySize;
     // 视口约束先于内容布局，窄屏和大字号通过正常纵向滚动容纳。
     // 不使用桌面上一次浮层测量值，避免窗口被推出手机边界。
@@ -57,7 +59,7 @@ void ToolbarView::renderMobileColorPalette(float scale)
             "ui.toolbar.note_palette.note_flick_arrow",
             "ui.toolbar.note_palette.note_node"
         };
-        const auto active = static_cast<std::size_t>(m_activeColorSlot);
+        const auto active = static_cast<std::size_t>(palette.m_activeColorSlot);
         // 槽位名称始终显示，不要求用户对六个小色块做悬浮辨认。
         // 下拉项保留完整触控高度，切换只改变编辑焦点。
         // 下拉入口与选项都保留最小手指高度，不改变主题横向留白或圆角。
@@ -79,7 +81,8 @@ void ToolbarView::renderMobileColorPalette(float scale)
                                         i == active,
                                         0,
                                         { 0, 48 * scale }) )
-                    m_activeColorSlot = static_cast<Logic::NoteColorSlot>(i);
+                    palette.m_activeColorSlot =
+                        static_cast<Logic::NoteColorSlot>(i);
                 ImGui::PopID();
             }
             FeedbackEndCombo();
@@ -100,11 +103,11 @@ void ToolbarView::renderMobileColorPalette(float scale)
         if ( FeedbackButton(TR("ui.toolbar.note_palette.apply_selected").data(),
                             { -1, 48 * scale }) )
             MenuUtil::dispatchCommand(Logic::CmdApplyNotePaletteToSelection{
-                m_paletteColors, false, true });
+                palette.m_paletteColors, false, true });
         if ( FeedbackButton(TR("ui.mobile.color.clear_selection").data(),
                             { -1, 48 * scale }) )
             MenuUtil::dispatchCommand(Logic::CmdApplyNotePaletteToSelection{
-                m_paletteColors, true, true });
+                palette.m_paletteColors, true, true });
         // 每次确认只产生一个批量动作；清除不是逐槽发送六个可撤销命令。
         // 默认桌面命令仍可沿用原行为，移动附加标志只约束本页提交。
         ImGui::EndDisabled();
@@ -122,8 +125,8 @@ void ToolbarView::renderMobileColorPalette(float scale)
         ImGui::SetNextItemWidth(pickerWidth);
         // 槽位在下拉选择后重新取引用，只在当前帧使用，不缓存数组地址。
         // 拖动更新的是共享画笔值，不在界面线程修改谱面元数据。
-        auto& color =
-            m_paletteColors[static_cast<std::size_t>(m_activeColorSlot)];
+        auto& color = palette.m_paletteColors[static_cast<std::size_t>(
+            palette.m_activeColorSlot)];
         // 无侧栏和数字输入，所有通道均通过图形拖动；Alpha 同样保留。
         // 仅同步画笔，释放也不隐式调用选区填色。
         // 禁止隐式颜色选项菜单，手机不要求鼠标右键才能选择取色模式。
@@ -135,7 +138,7 @@ void ToolbarView::renderMobileColorPalette(float scale)
                                      ImGuiColorEditFlags_NoLabel |
                                      ImGuiColorEditFlags_NoOptions |
                                      ImGuiColorEditFlags_AlphaBar) )
-            pushColorCommands(m_activeColorSlot, color, false);
+            pushColorCommands(palette.m_activeColorSlot, color, false);
         // 子域结束即归还输入归属，页面空白滑动仍由普通滚动器解释。
         // 不创建悬浮提示、定时任务或跨窗口的取色器指针。
         ImGui::EndChild();
@@ -145,11 +148,11 @@ void ToolbarView::renderMobileColorPalette(float scale)
         // 点外关闭后再次打开仍回到快捷页，不继承过期浮层大小。
         if ( FeedbackButton(TR("ui.mobile.color.details").data(),
                             { -1, 48 * scale }) )
-            m_mobilePaletteDetails = true;
+            palette.m_mobileDetails = true;
         // 关闭只改变本浮层显示标志，不关闭画布或清理用户当前选区。
         // 取色已即时同步画笔，因此不需要在关闭时补交任何选区操作。
         if ( FeedbackButton(TR("ui.common.close").data(), { -1, 48 * scale }) )
-            m_showColorPopup = false;
+            palette.m_open = false;
     }
     ImGui::End();
 }

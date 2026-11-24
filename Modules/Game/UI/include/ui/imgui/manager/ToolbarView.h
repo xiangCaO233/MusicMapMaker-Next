@@ -1,20 +1,26 @@
 #pragma once
 
 #include "common/EditTool.h"
-#include "common/NoteColor.h"
-#include "config/EditorConfig.h"
-#include "config/EditorSettings.h"
 #include "ui/IUIView.h"
-#include "ui/imgui/manager/BeatLineDisplayModeHistory.h"
 
-#include <glm/glm.hpp>
+#include <glm/vec2.hpp>
+#include <glm/vec4.hpp>
 
-#include <array>
 #include <cstddef>
-#include <cstdint>
-#include <limits>
+#include <memory>
 #include <optional>
 #include <string>
+
+namespace MMM::Config
+{
+struct ColorPaletteScheme;
+struct EditorConfig;
+}  // namespace MMM::Config
+
+namespace MMM::Logic
+{
+enum class NoteColorSlot;
+}  // namespace MMM::Logic
 
 namespace MMM::UI
 {
@@ -29,8 +35,10 @@ class ICanvasView;
 class ToolbarView : public IUIView
 {
 public:
+    /// @brief 建立工具栏及其跨帧的编辑状态。
     ToolbarView(const std::string& name);
-    ~ToolbarView() override = default;
+    /// @brief 回收工具栏独占的音效草稿和调色盘会话。
+    ~ToolbarView() override;
 
     /// @brief 绘制工具栏主界面。
     /// @param sourceManager 当前 UI 管理器。
@@ -102,28 +110,21 @@ public:
     void renderMobileTools(UIManager* manager, float scale, bool visible);
 
 private:
+    /// @brief 音效草稿、配色会话和分拍线切换历史的私有布局。
+    struct Impl;
+    /// @brief 仅在窗口构造时分配，绘制期间复用原有状态与缓冲。
+    std::unique_ptr<Impl> m_impl;
+
     /// @brief 仅移动入口设为真，工具内容以工作台而非桌面工具栏定位。
     bool m_mobileTools{};
-    /// @brief 高级方案管理与快捷调色分开，重新打开默认回到手指友好页。
-    bool m_mobilePaletteDetails{};
     /// @brief 移动调色页只修改画笔；选区需要显式确认，不复用桌面调色布局。
     /// @warning 每帧只读本地颜色和应用标量，不读取可变 SessionContext。
     void renderMobileColorPalette(float scale);
     /// @brief 编辑器状态读取与简单命令提交服务。
     IEditorApplicationService* m_editorApplicationService{ nullptr };
 
-    /// @brief 当前调色盘选择来源。
-    enum class PaletteSelectionKind {
-        InheritSoftwareDefault,  ///< 继承软件默认调色方案。
-        SkinDefault,             ///< 使用当前皮肤默认色盘。
-        Custom                   ///< 使用用户保存的自定义色盘。
-    };
-
-    /// @brief 调色盘弹窗当前显示的编辑页。
-    enum class PaletteTab {
-        Note,
-        BeatLine,
-    };
+    /// @brief 仅供调色盘实现使用的编辑页标识。
+    enum class PaletteTab;
 
     Logic::EditTool m_currentTool = Logic::EditTool::Marquee;
     /// @brief 进入布局模式前使用的工具，用于再次点击按钮时恢复。
@@ -168,8 +169,6 @@ private:
     float m_beatLinePopupHeight{ 220.0f };
     /// @brief 自动显示比例是否有尚未写入配置文件的修改。
     bool m_beatLinePopupConfigDirty{ false };
-    /// @brief 最近使用的两个分拍线显示模式，用于快捷键双向切换。
-    BeatLineDisplayModeHistory m_beatLineDisplayModeHistory;
     /// @brief 是否显示主音轨倍速详细调整弹窗。
     bool m_showSpeedPopup{ false };
     /// @brief 本帧倍速按钮的屏幕左上角坐标，用于定位弹窗。
@@ -178,85 +177,6 @@ private:
     float m_speedPopupWidth{ 160.0f };
     /// @brief 主音轨倍速弹窗上一帧高度，用于防止视口越界。
     float m_speedPopupHeight{ 120.0f };
-    /// @brief 是否显示音效分区与逐轨混音控制工具。
-    bool m_showSoundEffectTool{ false };
-    /// @brief 本帧音效工具按钮的屏幕左上角坐标，用于定位弹层。
-    glm::vec2 m_lastSoundEffectToolBtnPos{ 0.0f, 0.0f };
-    /// @brief 音效工具复用的配置值，只有配置修订变化时复制完整对象。
-    Config::EditorConfig m_soundEffectEditorConfigCache;
-    /// @brief 配置缓存的修订号；最大值保证首次显示时获取权威值。
-    std::uint64_t m_soundEffectEditorConfigRevision{
-        std::numeric_limits<std::uint64_t>::max()
-    };
-    /// @brief 绑定分类增益草稿是否已从配置初始化。
-    bool m_soundEffectGainDraftInitialized{ false };
-    /// @brief 未绑定音效文件的实时增益草稿。
-    float m_unboundHitSoundGainDraft{ 1.0f };
-    /// @brief 已绑定音效文件的实时增益草稿。
-    float m_boundHitSoundGainDraft{ 1.0f };
-    /// @brief 节拍器增益拖动草稿，避免异步配置回读打断手势。
-    float m_editorMetronomeGainDraft{ 1.0f };
-    /// @brief 是否显示调色盘弹窗。
-    bool m_showColorPopup{ false };
-    /// @brief 本帧调色盘按钮的屏幕左上角坐标，用于定位弹窗。
-    glm::vec2 m_lastColorBtnPos{ 0.0f, 0.0f };
-    /// @brief 调色盘弹窗上一帧宽度，用于防止视口越界。
-    float m_colorPopupWidth{ 360.0f };
-    /// @brief 调色盘弹窗上一帧高度，用于防止视口越界。
-    float m_colorPopupHeight{ 360.0f };
-    /// @brief 调色盘弹窗当前显示的标签页。
-    PaletteTab m_activePaletteTab{ PaletteTab::Note };
-    /// @brief 当前调色盘正在编辑的颜色槽位。
-    Logic::NoteColorSlot m_activeColorSlot{ Logic::NoteColorSlot::Tap };
-    /// @brief 当前调色盘缓存颜色。
-    std::array<glm::vec4, Logic::NOTE_COLOR_SLOT_COUNT> m_paletteColors{};
-    /// @brief 当前分拍线调色盘正在编辑的颜色槽位。
-    std::size_t m_activeBeatLineColorSlot{ 0 };
-    /// @brief 当前分拍线调色盘缓存颜色。
-    std::array<glm::vec4, Config::BEAT_LINE_COLOR_PALETTE_SLOT_COUNT>
-        m_beatLinePaletteColors{};
-    /// @brief 当前方案是否覆盖皮肤分拍线配色。
-    bool m_overrideBeatLinePalette{ false };
-    /// @brief 调色盘颜色是否已从皮肤初始化。
-    bool m_colorPaletteInitialized{ false };
-    /// @brief 颜色选择器是否使用 HSV 显示模式。
-    bool m_colorPickerUseHsv{ false };
-    /// @brief 当前活动颜色的 HEX 输入缓冲区。
-    std::array<char, 16> m_colorHexBuffer{};
-    /// @brief HEX 输入缓冲区当前对应的标签页。
-    PaletteTab m_colorHexBufferTab{ PaletteTab::Note };
-    /// @brief HEX 输入缓冲区当前对应的颜色槽位索引。
-    std::size_t m_colorHexBufferSlot{ 0 };
-    /// @brief HEX 输入框是否正处于编辑状态。
-    bool m_colorHexInputActive{ false };
-    /// @brief 当前选中的持久化调色盘方案索引；-1 表示未使用保存方案。
-    int m_activePaletteSchemeIndex{ -1 };
-    /// @brief 当前调色盘选择来源，用于区分内置项和可管理的自定义方案。
-    PaletteSelectionKind m_activePaletteSelection{
-        PaletteSelectionKind::SkinDefault
-    };
-    /// @brief 等待删除确认的自定义调色盘方案索引。
-    std::optional<std::size_t> m_pendingDeletePaletteSchemeIndex;
-    /// @brief 当前方案名称校验错误的翻译键；为空表示无错误。
-    std::string m_paletteSchemeErrorKey;
-    /// @brief 当前配色方案导出结果的翻译键；为空表示尚无结果。
-    std::string m_paletteExportStatusKey;
-    /// @brief 最近一次配色方案导出是否成功。
-    bool m_paletteExportSucceeded{ false };
-    /// @brief 等待用户确认名称的导入调色方案。
-    std::optional<Config::ColorPaletteScheme> m_pendingImportedPaletteScheme;
-    /// @brief 导入方案名称编辑缓冲区。
-    std::array<char, 96> m_importPaletteSchemeNameBuffer{};
-    /// @brief 当前导入流程错误的翻译键；为空表示无错误。
-    std::string m_paletteImportErrorKey;
-    /// @brief 当前导入结果的翻译键；为空表示尚无结果。
-    std::string m_paletteImportStatusKey;
-    /// @brief 最近一次配色方案导入是否成功。
-    bool m_paletteImportSucceeded{ false };
-    /// @brief 当前调色盘方案名称编辑缓冲区。
-    std::array<char, 96> m_paletteSchemeNameBuffer{};
-    /// @brief 上次已应用项目调色方案的项目与方案组合键。
-    std::string m_lastAppliedProjectPaletteKey;
 
     /**
      * @brief 绘制工具按钮

@@ -62,11 +62,13 @@
 
   已验证。时间点表格控制器负责筛选、选择和手势状态，快照装饰器保存顶点恢复和覆盖状态。增加 CPU 侧重复装饰与颜色恢复回归。Linux RelWithDebInfo 全量构建与 20 项相关 CTest 通过。Ninja 活动对象依赖数为 TimelineCanvas.h 15,TimelineAuxiliaryWindowState.h 5,TimelineCanvas_Private.h 4。
 
-- [ ] **R69 · P0 · ToolbarView 的音效编辑缓存与调色板不必公开**
+- [x] **R69 · P0 · ToolbarView 的音效编辑缓存与调色板不必公开**
 
   15 个对象依赖；主停靠窗口按值含工具栏，音效配置缓存、整套调色板、导入草稿随之传播。布局面板的公开接口确实有移动端消费者。 保留轻量公共布局契约，音效草稿和调色板会话分别放入内部实现；仅移走私有重状态，构造一次，复用原回调。验证移动端面板、音效滚动、调色导入/撤销与停靠恢复，比较公开配置头扇出。
 
   [ToolbarView.h L41](../Modules/Game/UI/include/ui/imgui/manager/ToolbarView.h#L41)、[MainDockSpaceUI.h L185](../Modules/Game/UI/include/ui/imgui/MainDockSpaceUI.h#L185)
+
+  已验证。音效草稿和调色板会话归入工具栏私有实现，移动端布局继续使用原入口。配置定义也从工具栏公开头移出。Linux RelWithDebInfo 全量构建与 11 项相关 CTest 通过。Ninja 活动对象依赖数为 EditorSettings.h 269,EditorConfig.h 178,ToolbarView.h 15,EditorConfigChangedEvent.h 1。
 
 - [ ] **R70 · P0 · Basic2DCanvas 的视频提交和教学动作识别缺少各自的所有者**
 
