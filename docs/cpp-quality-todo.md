@@ -477,6 +477,196 @@
 | `docs/plugin/examples/ivm.lua` | 12 | 111 | 9.76% |
 | `tests/data/ma/驟雨の狭間/r.lua` | 6 | 475 | 1.25% |
 
+## 2026-11-24 复查追加待办
+
+主仓 origin/main 为 `19c4550d5ce0971a76eb9d020423aaf5c6692ffe`，gitlink 为 `a2b6be99a881072ef851ef197862d447a980100b`。独立 ICE origin/main 为 `038f3ff`，两者 Git 源码树一致。以主仓清单的具体调用入口和验收项去重。P1 涉及文件完整性或对象寿命，P2 涉及功能、交互、性能或跨平台构建，P3 为维护性及低频故障。
+
+该报告以受版本控制的自维护代码为范围，按模块搜索候选并追调用链；排除外部第三方源码、预编译内容和生成文件。两项更新器故障及 ICE 公开头消费者做了独立复现。其他运行影响按触发条件列出；性能项尚无实测帧时间。
+
+### P1 · R01 · 保存写入失败可能清除脏状态
+
+- [ ] 写出器只查打开结果或只在关闭前查流状态。调用方收到成功就推进保存点，原路径可能只剩半份谱面。逐格式注入短写和关闭错误，验证返回失败、保留旧文件及未保存状态；备份也应拒绝残缺结果。
+
+[Modules/MMM/src/beatmap/SaveMMMMap.hpp:678](../Modules/MMM/src/beatmap/SaveMMMMap.hpp#L678) [Modules/MMM/src/beatmap/SaveRMMap.hpp:506](../Modules/MMM/src/beatmap/SaveRMMap.hpp#L506) [Modules/MMM/src/beatmap/SaveOSUMap.hpp:452](../Modules/MMM/src/beatmap/SaveOSUMap.hpp#L452) [Modules/MMM/src/beatmap/SaveMalodyMap.hpp:1410](../Modules/MMM/src/beatmap/SaveMalodyMap.hpp#L1410) [Modules/MMM/src/beatmap/SaveBmsMap.hpp:655](../Modules/MMM/src/beatmap/SaveBmsMap.hpp#L655) [Modules/Game/Logic/src/logic/session/BeatmapSession_Commands.cpp:4242](../Modules/Game/Logic/src/logic/session/BeatmapSession_Commands.cpp#L4242)
+
+### P1 · R02 · 资源导入可能覆盖另一处编辑
+
+- [ ] 弹窗按工程根和谱面路径校验，拿旧草稿补几个实时字段后提交整份元数据，绕过 PERF-05 的实例及差量保护。打开选择器后修改标题、同路径重载，再导入封面，验证只改变目标资源且拒绝旧实例。
+
+[Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp:204](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp#L204) [Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp:221](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp#L221) [Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp:273](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp#L273) [Modules/Game/Logic/src/logic/session/BeatmapSession_Commands.cpp:2731](../Modules/Game/Logic/src/logic/session/BeatmapSession_Commands.cpp#L2731)
+
+### P1 · R03 · UI 借用可由逻辑线程释放的工程对象
+
+- [ ] 向导在绘制期间遍历音源，工程设置页还直接修改配置。关闭工程时逻辑线程移走并销毁唯一所有者。两条调用链缺少跨线程寿命保证，可能访问失效内存或写错工程。用带工程代次的只读快照及写命令，交错切换、关闭和编辑，检查寿命及写入归属。
+
+[Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:1470](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L1470) [Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:1577](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L1577) [Modules/Game/UI/src/ui/imgui/manager/SettingsView_ProjectTab.cpp:67](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_ProjectTab.cpp#L67) [Modules/Game/UI/src/ui/imgui/manager/SettingsView_ProjectTab.cpp:563](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_ProjectTab.cpp#L563) [Modules/Game/Logic/src/logic/ProjectController.cpp:2206](../Modules/Game/Logic/src/logic/ProjectController.cpp#L2206) [Modules/Game/Logic/src/logic/EditorEngine.cpp:2196](../Modules/Game/Logic/src/logic/EditorEngine.cpp#L2196)
+
+### P1 · R04 · Linux 更新失败可破坏原有安装
+
+- [ ] 跨文件系统 rename 失败后直接覆盖正式可执行文件。Linux 临时目录实测，源 65536 B、旧目标 4096 B，限制单文件写入 1024 B 后更新器报错退出，旧目标只剩 1024 B。在目标目录写临时文件，验证权限及关闭结果后原子替换；同一短写条件下旧文件应逐字节保留。
+
+[Modules/Updater/main.cpp:644](../Modules/Updater/main.cpp#L644)
+
+### P2 · R05 · 独立配置文件的保存请求互相覆盖
+
+- [ ] 所有目标共用一个待写槽和全局代次；后排的 B 可以使尚未落盘的 A 失效，flush 仍结束。按目标路径合并，交错两路径的异步和同步保存并核对两个文件。
+
+[Modules/Config/src/ConfigSnapshotWriter.cpp:116](../Modules/Config/src/ConfigSnapshotWriter.cpp#L116) [Modules/Config/src/ConfigSnapshotWriter.cpp:134](../Modules/Config/src/ConfigSnapshotWriter.cpp#L134) [Modules/Config/src/ConfigSnapshotWriter.cpp:202](../Modules/Config/src/ConfigSnapshotWriter.cpp#L202) [Modules/Config/src/AppConfig.cpp:339](../Modules/Config/src/AppConfig.cpp#L339)
+
+### P2 · R06 · 排序比较器违反严格弱序
+
+- [ ] 相邻时间差在 ε 内时切换到次键。取时间 0、0.75ε、1.5ε、轨道依次 2、1、0，可同时得到第三个排第二个之前、第二个排第一个之前、第一个又排第三个之前。影响物件索引与多格式导出。建立可传递的排序键，测三元组及输入排列。
+
+[Modules/MMM/src/beatmap/BeatMap.cpp:393](../Modules/MMM/src/beatmap/BeatMap.cpp#L393) [Modules/MMM/src/beatmap/SaveOSUMap.hpp:428](../Modules/MMM/src/beatmap/SaveOSUMap.hpp#L428) [Modules/MMM/src/beatmap/SaveMMMMap.hpp:266](../Modules/MMM/src/beatmap/SaveMMMMap.hpp#L266) [Modules/MMM/src/beatmap/SaveMMMMap.hpp:654](../Modules/MMM/src/beatmap/SaveMMMMap.hpp#L654) [Modules/MMM/src/beatmap/SaveMalodyMap.hpp:1302](../Modules/MMM/src/beatmap/SaveMalodyMap.hpp#L1302) [Modules/MMM/src/beatmap/SaveMalodyMap.hpp:1366](../Modules/MMM/src/beatmap/SaveMalodyMap.hpp#L1366)
+
+### P2 · R07 · IMD 读取前未核实长度
+
+- [ ] seek/tell 失败可将负位置转成巨大的 size_t，正常大文件也按整文件一次分配。读取前检查定位、长度预算和实际读完状态；回归无法定位、短读和超过预算的输入。
+
+[Modules/MMM/src/beatmap/LoadRMMap.hpp:244](../Modules/MMM/src/beatmap/LoadRMMap.hpp#L244)
+
+### P2 · R08 · 更新器两次进程启动都可能误报成功
+
+- [ ] POSIX 父进程只知道 fork 成功就退出；Linux 更新器还忽略执行位设置失败。用不可执行格式在 Linux 临时目录实测，更新器退出 0，留下成功标记，stderr 为空。两次交接分别确认 exec 结果，测试失败后主程序的存活、错误及标记语义。
+
+[Modules/Network/src/UpdateChecker.cpp:689](../Modules/Network/src/UpdateChecker.cpp#L689) [Modules/Updater/main.cpp:458](../Modules/Updater/main.cpp#L458) [Modules/Updater/main.cpp:665](../Modules/Updater/main.cpp#L665)
+
+### P2 · R09 · Windows 更新器路径在进程边界丢失 Unicode
+
+- [ ] 主程序用宽字符启动更新器，后者从窄 argv 解析安装与下载路径，又调用 ShellExecuteA。安装路径超出 ANSI 代码页时可能无法替换或重启。用含非当前代码页字符的路径走完整更新回归。
+
+[Modules/Network/src/UpdateChecker.cpp:657](../Modules/Network/src/UpdateChecker.cpp#L657) [Modules/Updater/main.cpp:549](../Modules/Updater/main.cpp#L549) [Modules/Updater/main.cpp:118](../Modules/Updater/main.cpp#L118)
+
+### P2 · R10 · 更新模块仍有一套固定长度的可执行路径实现
+
+- [ ] Windows 使用 MAX_PATH，macOS 使用固定 PATH_MAX，缓冲不足直接返回空；启动模块已有动态读取路径。长路径影响更新定位及依赖此值的调用方。统一路径查询，验证长路径、符号链接及失败。
+
+[Modules/Network/src/UpdateChecker.cpp:524](../Modules/Network/src/UpdateChecker.cpp#L524) [Modules/Config/src/AppPaths.cpp:27](../Modules/Config/src/AppPaths.cpp#L27)
+
+### P2 · R11 · 新谱面向导每帧带锁复制模板，下拉中同步扫目录
+
+- [ ] 模板未展开也逐帧取会话锁并复制候选；封面或背景展开期间每帧在 UI 线程递归枚举项目。按会话代次复用模板，展开或失效时后台枚举；验证持锁时仍能绘制、下拉静置不再重复遍历。
+
+[Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:328](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L328) [Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:1565](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L1565) [Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:134](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L134) [Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:1807](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L1807) [Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:1845](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L1845)
+
+### P2 · R12 · 资源导入和改名持会话锁做文件 I/O
+
+- [ ] 确认导入、共享资源复制改名及向导导入时，音频探测或文件复制发生在 UI 调用栈和会话锁内。大文件或慢盘可同时阻塞绘制与逻辑更新。拆成预检、锁外文件操作、复核身份并提交；慢盘测试期间逻辑应继续推进。
+
+[Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp:196](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp#L196) [Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp:367](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp#L367) [Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp:590](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp#L590) [Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:1300](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L1300)
+
+### P2 · R13 · 目录监视去抖后仍在逻辑线程持锁全量扫描
+
+- [ ] 外部改文件即可触发完整目录扫描，有变化时锁内还保存工程。文件数与存储延迟都会延长更新停顿。后台扫描，按项目代次应用差异；阻塞枚举期间测试逻辑推进及切工程。
+
+[Modules/Game/Logic/src/logic/EditorEngine.cpp:5111](../Modules/Game/Logic/src/logic/EditorEngine.cpp#L5111) [Modules/Game/Logic/src/logic/EditorEngine.cpp:6099](../Modules/Game/Logic/src/logic/EditorEngine.cpp#L6099) [Modules/Game/Logic/src/logic/EditorEngine.cpp:6107](../Modules/Game/Logic/src/logic/EditorEngine.cpp#L6107) [Modules/Game/Logic/src/logic/EditorEngine.cpp:6123](../Modules/Game/Logic/src/logic/EditorEngine.cpp#L6123)
+
+### P2 · R14 · 新谱面向导静默截断多字节元数据
+
+- [ ] 从工程等来源复制到定长字符数组，再将截短文本写入新谱；UTF-8 字符可能被从中间切断。验证长标题、艺术家名和多字节边界；未编辑字段需原样保全。
+
+[Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:88](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L88) [Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:548](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L548) [Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:1476](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L1476) [Modules/Game/UI/include/ui/imgui/manager/NewBeatmapWizard.h:274](../Modules/Game/UI/include/ui/imgui/manager/NewBeatmapWizard.h#L274)
+
+### P2 · R15 · 设置页静置仍重建资源与路径快照
+
+- [ ] 可见页约每 150 ms 有机会再次请求；锁内遍历工程音频表，文件线程探测当前引用，对带历史目录前缀的主音频再做存在性检查。递归目录枚举已按需，剩余开销与资源数量有关。以资源修订和文件变更失效，大工程静置统计任务数及路径探测数。
+
+[Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapTab.cpp:212](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapTab.cpp#L212) [Modules/Game/Logic/src/logic/BeatmapSettingsSnapshot.cpp:183](../Modules/Game/Logic/src/logic/BeatmapSettingsSnapshot.cpp#L183) [Modules/Game/Logic/src/logic/BeatmapSettingsSnapshot.cpp:204](../Modules/Game/Logic/src/logic/BeatmapSettingsSnapshot.cpp#L204) [Modules/Game/Logic/src/logic/BeatmapSettingsSnapshot.cpp:225](../Modules/Game/Logic/src/logic/BeatmapSettingsSnapshot.cpp#L225)
+
+### P2 · R16 · 音频分析面板静置时逐帧重建 EQ
+
+- [ ] 启用 EQ 时，每个面板每帧对 B 个频段各设两次参数；每次设置都加锁并重建各声道完整滤波链。单面板每帧约 2B 次发布，系数构造随声道数和 B² 增长。按修订批量更新；静置时发布数应为零，调参后核对 PCM。
+
+[Modules/Game/UI/src/ui/imgui/audio/AudioSpectrumView.cpp:456](../Modules/Game/UI/src/ui/imgui/audio/AudioSpectrumView.cpp#L456) [Modules/Game/UI/src/ui/imgui/audio/AudioSpectrumView.cpp:1080](../Modules/Game/UI/src/ui/imgui/audio/AudioSpectrumView.cpp#L1080) [Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp:360](../Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp#L360) [Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp:683](../Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp#L683) [3rdpty/sources/IonCachyEngine/src/ice/core/effect/GraphicEqualizer.cpp:78](../3rdpty/sources/IonCachyEngine/src/ice/core/effect/GraphicEqualizer.cpp#L78) [3rdpty/sources/IonCachyEngine/src/ice/core/effect/GraphicEqualizer.cpp:232](../3rdpty/sources/IonCachyEngine/src/ice/core/effect/GraphicEqualizer.cpp#L232)
+
+### P2 · R17 · 波形重算在绘制回调同步处理整曲
+
+- [ ] 计算标志在同一次同步调用中设置并清除，长曲处理期间 UI 无法更新进度或响应输入。后台读取、按音轨和参数代次交付结果，回归长曲期间关闭窗口及切换曲目。
+
+[Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp:349](../Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp#L349) [Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp:718](../Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp#L718) [Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp:742](../Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp#L742) [Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp:799](../Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp#L799)
+
+### P2 · R18 · 波形统计忽略实际读取帧数
+
+- [ ] 末桶或短读时仍按请求长度复制、滤波和取极值，未覆盖区域可保留上桶样本。使用实际返回长度，比较短读、零帧、非整桶曲尾与参考包络。
+
+[Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp:758](../Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp#L758) [Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp:783](../Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp#L783) [3rdpty/sources/IonCachyEngine/src/ice/manage/AudioTrack.cpp:33](../3rdpty/sources/IonCachyEngine/src/ice/manage/AudioTrack.cpp#L33)
+
+### P2 · R19 · 流式解码将估计长度当作硬上限
+
+- [ ] 小估值会拒绝末尾页请求，零估值直接拒绝加载，即便后端实际仍可读。以 mock 提供三页 PCM，分别上报一页及零页，核对真实 EOF 和结尾音频。
+
+[3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp:114](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp#L114) [3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp:252](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp#L252) [3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp:315](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp#L315) [3rdpty/sources/IonCachyEngine/src/ice/manage/dec/ffmpeg/FFmpegDecoderInstance.cpp:793](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/ffmpeg/FFmpegDecoderInstance.cpp#L793)
+
+### P2 · R20 · 流式长曲跳转顺序解码全部跨过的页
+
+- [ ] 跳到远处缺页时后台从当前位置逐块追赶，后退还要回到零；前台在缺页期间推进静音。衡量远距离拖动所解码帧数及恢复有声延迟，保留定位精度回归。
+
+[3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp:161](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp#L161) [3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp:168](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp#L168) [3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp:325](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp#L325)
+
+### P2 · R21 · 音轨缓存池在共享写锁内探测、解码和析构
+
+- [ ] 慢资源创建及释放预读线程会挡住其他资源的缓存命中。锁外准备和析构，按资源协调并发创建；验证一条慢轨加载或回收时可立即取得另一条已缓存轨道。
+
+[3rdpty/sources/IonCachyEngine/include/ice/manage/AudioPool.hpp:82](../3rdpty/sources/IonCachyEngine/include/ice/manage/AudioPool.hpp#L82) [3rdpty/sources/IonCachyEngine/include/ice/manage/AudioPool.hpp:138](../3rdpty/sources/IonCachyEngine/include/ice/manage/AudioPool.hpp#L138) [3rdpty/sources/IonCachyEngine/src/ice/manage/AudioTrack.cpp:88](../3rdpty/sources/IonCachyEngine/src/ice/manage/AudioTrack.cpp#L88) [3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp:224](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp#L224)
+
+### P2 · R22 · ICE 的 AVX 要求泄漏到公开头和非 x86 构建
+
+- [ ] 非 Apple/Android 的非 MSVC 构建无条件加 -mavx2。Linux x86_64 用 GCC 16 默认目标编译只 include 公共头并调用 operator+= 的独立消费者，实际报 target specific option mismatch。按架构选择实现，覆盖默认参数消费者和 Linux ARM64 配置。
+
+[3rdpty/sources/IonCachyEngine/cmake/configure-project.cmake:9](../3rdpty/sources/IonCachyEngine/cmake/configure-project.cmake#L9) [3rdpty/sources/IonCachyEngine/include/ice/manage/AudioBuffer.hpp:462](../3rdpty/sources/IonCachyEngine/include/ice/manage/AudioBuffer.hpp#L462) [3rdpty/sources/IonCachyEngine/include/ice/manage/AudioBuffer.hpp:491](../3rdpty/sources/IonCachyEngine/include/ice/manage/AudioBuffer.hpp#L491)
+
+### P3 · R23 · 设置页每帧复制整份元数据基线
+
+- [ ] 含多个字符串和路径的 BaseMapMeta 在表单静置时也复制，仅提交时用到。按实际编辑保留原字段；用长元数据核对空闲帧分配和多字段合并。
+
+[Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapTab.cpp:290](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapTab.cpp#L290) [Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapTab.cpp:1162](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapTab.cpp#L1162)
+
+### P3 · R24 · 菜单声明传播完整逻辑命令头
+
+- [ ] 头中只借用 LogicCommand，完整变体又引入配置和谱面定义。本机 Ninja 活动对象里 MenuUtil.h 为 28 个、LogicCommands.h 为 129 个。改用既有前置声明头并直接包含 MalodyMode 所需声明；以变更前后实际对象交集验收，28 并非保证能减少的重编数。
+
+[Modules/Game/UI/include/ui/imgui/menu/utils/MenuUtil.h:3](../Modules/Game/UI/include/ui/imgui/menu/utils/MenuUtil.h#L3) [Modules/Game/UI/include/ui/imgui/menu/utils/MenuUtil.h:23](../Modules/Game/UI/include/ui/imgui/menu/utils/MenuUtil.h#L23) [Modules/Game/Common/include/common/LogicCommandFwd.h:9](../Modules/Game/Common/include/common/LogicCommandFwd.h#L9)
+
+### P3 · R25 · 三份路径规范化均直接把 char 传给 ::tolower
+
+- [ ] 遇非 ASCII 扩展名且 char 为有符号时，负值可能超出标准库允许的参数范围。提取一个按无符号字节处理 ASCII 的函数，覆盖高位字节。
+
+[Modules/Game/Logic/src/logic/EditorEngine.cpp:803](../Modules/Game/Logic/src/logic/EditorEngine.cpp#L803) [Modules/Game/Logic/src/logic/ProjectCommandService.cpp:1602](../Modules/Game/Logic/src/logic/ProjectCommandService.cpp#L1602) [Modules/Game/Logic/src/logic/ProjectResourceService.cpp:2090](../Modules/Game/Logic/src/logic/ProjectResourceService.cpp#L2090)
+
+### P3 · R26 · 崩溃转储未写成功也提示已保存
+
+- [ ] Windows 路径忽略创建或写转储失败，时间转换也未核实，用户可能被引导寻找不存在或不完整的转储。分别验证不可写目录、写出失败及成功文案。
+
+[Modules/Game/include/game/CrashHandler.h:28](../Modules/Game/include/game/CrashHandler.h#L28) [Modules/Game/include/game/CrashHandler.h:50](../Modules/Game/include/game/CrashHandler.h#L50) [Modules/Game/include/game/CrashHandler.h:63](../Modules/Game/include/game/CrashHandler.h#L63)
+
+### P3 · R27 · 逻辑循环线程归属的注释已过时
+
+- [ ] start 的 Doxygen 声称向全局线程池提交常驻循环，而实现创建独立 std::thread。更正线程归属及停止时由谁 join，避免后续维护重新引入 PERF-01。
+
+[Modules/Game/Logic/src/logic/EditorEngine.cpp:2204](../Modules/Game/Logic/src/logic/EditorEngine.cpp#L2204) [Modules/Game/Logic/src/logic/EditorEngine.cpp:2232](../Modules/Game/Logic/src/logic/EditorEngine.cpp#L2232)
+
+### P3 · R28 · 公开 Clipper 是不写输出的占位节点
+
+- [ ] 可构造并接入效果链，却不写目标缓冲；复用目标可保留旧样本。主仓未定位到实际使用者。明确可用性或实现削波，以非零旧目标缓冲测试预期输出。
+
+[3rdpty/sources/IonCachyEngine/include/ice/core/effect/Clipper.hpp:9](../3rdpty/sources/IonCachyEngine/include/ice/core/effect/Clipper.hpp#L9) [3rdpty/sources/IonCachyEngine/src/ice/core/effect/Clipper.cpp:10](../3rdpty/sources/IonCachyEngine/src/ice/core/effect/Clipper.cpp#L10) [3rdpty/sources/IonCachyEngine/src/ice/core/effect/IEffectNode.cpp:71](../3rdpty/sources/IonCachyEngine/src/ice/core/effect/IEffectNode.cpp#L71)
+
+### P3 · R29 · 全量解码失败与空音轨无法区分
+
+- [ ] 生产解码路径捕获 future 异常并永久缓存空结果，调用者失去故障原因。给资源准备结果保留失败状态，分别回归空文件、合法空轨、后台失败。
+
+[3rdpty/sources/IonCachyEngine/src/ice/manage/dec/CachyDecoder.cpp:153](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/CachyDecoder.cpp#L153)
+
+### P3 · R30 · 更新逐文件注释率清单
+
+cloc 2.08 逐文件计数 1520 项，68 项低于 30%，其中 3 项原表未列。其余既有欠项参见本页的注释率逐文件待办。统计包含自维护构建和打包脚本、头模板、资源脚本与文档中的 Lua 示例，排除外部测试谱面附带的 Lua、预编译内容、生成的 SPIR-V 和空文件。翻译 Lua 仍沿用原清单口径。
+
+- [ ] 按职责补充这些文件缺少的说明并逐文件复算。此次新增如下。
+
+- `Modules/Audio/src/AudioTimelineMixerNode.cpp`，432 行注释、1012 行代码，29.92%。
+- `Modules/Audio/tests/AudioOriginAlignmentServiceTest.cpp`，58 行注释、137 行代码，29.74%。
+- `Modules/Game/Graphic/src/imguivk/VKOffScreenRenderer.cpp`，160 行注释、377 行代码，29.80%。
+
 ## 验收边界
 
 原始清扫以静态分析为主。首批四项均已勾选。最终 Linux 主工程全量构建、9 项相关 CTest、独立 ICE 源码构建及 1 项 ICE CTest 全部通过。实际谱面的播放帧时间、GPU 等待及各目标平台运行结果需按对应待办验收。ICE 声道修复以独立源码构建验证，主项目默认配置使用仓库提供的预编译引擎，发布产物需由既定 Runner 另行生成。
