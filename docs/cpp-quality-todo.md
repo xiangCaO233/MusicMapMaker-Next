@@ -693,7 +693,9 @@
 
 ### P3 · R27 · 逻辑循环线程归属的注释已过时
 
-- [ ] start 的 Doxygen 声称向全局线程池提交常驻循环，而实现创建独立 std::thread。更正线程归属及停止时由谁 join，避免后续维护重新引入 PERF-01。
+- [x] start 的 Doxygen 声称向全局线程池提交常驻循环，而实现创建独立 std::thread。更正线程归属及停止时由谁 join，避免后续维护重新引入 PERF-01。
+
+  已验证。Linux RelWithDebInfo 全量构建和 3 项相关 CTest 通过。BrushPaletteSessionStateTest 实际启动并停止 EditorEngine。差异仅涉及注释，明确引擎持有专用线程、取得停止责任的调用者执行 join，随后收回后台准备任务。
 
 [Modules/Game/Logic/src/logic/EditorEngine.cpp:2204](../Modules/Game/Logic/src/logic/EditorEngine.cpp#L2204) [Modules/Game/Logic/src/logic/EditorEngine.cpp:2232](../Modules/Game/Logic/src/logic/EditorEngine.cpp#L2232)
 
