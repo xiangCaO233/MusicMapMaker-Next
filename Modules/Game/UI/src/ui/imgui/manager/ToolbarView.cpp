@@ -1,4 +1,6 @@
 #include "ui/imgui/manager/ToolbarView.h"
+#include "ToolbarViewImpl.h"
+#include "common/NoteColor.h"
 #include "config/EditorSettings.h"
 #include "config/VisualConfig.h"
 #include "ui/interaction/EditorInteraction.h"
@@ -40,6 +42,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fmt/format.h>
@@ -672,7 +675,13 @@ std::string normalizePaletteExportPath(const std::string& path)
 /// 构造阶段不访问 SkinManager、AppConfig 或 EditorEngine，确保视图可以在应用
 /// 服务和图形上下文完全就绪前创建。name 只交给 IUIView 管理窗口身份。
 /// 所有跨帧 UI 缓冲使用类内默认初始化，首次绘制再同步外部权威状态。
-ToolbarView::ToolbarView(const std::string& name) : IUIView(name) {}
+ToolbarView::ToolbarView(const std::string& name)
+    : IUIView(name), m_impl(std::make_unique<Impl>())
+{
+}
+
+/// @brief 回收工具栏的音效草稿、调色会话与分拍线切换历史。
+ToolbarView::~ToolbarView() = default;
 
 /// @brief 绑定工具栏使用的编辑器应用服务观察指针。
 /// @param service 当前 UIManager 提供的服务；可为空。
@@ -688,8 +697,7 @@ void ToolbarView::setEditorApplicationService(
     // 每帧从 UIManager 同步，避免保存已替换应用服务的旧指针。
     // 服务实例变化时下一次打开音效工具必须重新取得权威配置。
     if ( m_editorApplicationService != service ) {
-        m_soundEffectEditorConfigRevision =
-            std::numeric_limits<std::uint64_t>::max();
+        m_impl->m_soundEffects.invalidateConfig();
     }
     m_editorApplicationService = service;
 }
@@ -738,8 +746,8 @@ bool ToolbarView::mobileToolOpen(MobileTool tool) const
     switch ( tool ) {
     case MobileTool::Layout: return m_showLayoutPopup;
     case MobileTool::Magnet: return m_showMagnetPopup;
-    case MobileTool::SoundEffect: return m_showSoundEffectTool;
-    case MobileTool::Palette: return m_showColorPopup;
+    case MobileTool::SoundEffect: return m_impl->m_soundEffects.m_open;
+    case MobileTool::Palette: return m_impl->m_palette.m_open;
     }
     return false;
 }
@@ -757,8 +765,8 @@ void ToolbarView::toggleMobileTool(MobileTool tool, glm::vec2 anchor)
     // 同一时刻只展开一个重工具，避免手机上多个面板互相覆盖。
     // 打开其它内容不强制结束 Layout 模式，保持桌面已有的布局编辑生命周期。
     // 未完成连续编辑由下一次 renderLayoutPopup 的关闭分支统一收尾。
-    m_showLayoutPopup = m_showMagnetPopup = m_showSoundEffectTool =
-        m_showColorPopup                  = false;
+    m_showLayoutPopup = m_showMagnetPopup = m_impl->m_soundEffects.m_open =
+        m_impl->m_palette.m_open          = false;
     switch ( tool ) {
     case MobileTool::Layout:
         // 应用服务发布的工具才是权威状态，不能复用上一次桌面绘制缓存。
@@ -782,17 +790,16 @@ void ToolbarView::toggleMobileTool(MobileTool tool, glm::vec2 anchor)
         m_lastMagnetBtnPos = anchor;
         break;
     case MobileTool::SoundEffect:
-        m_showSoundEffectTool       = open;
-        m_lastSoundEffectToolBtnPos = anchor;
+        m_impl->m_soundEffects.m_open   = open;
+        m_impl->m_soundEffects.m_anchor = anchor;
         // 每次重开重新取得权威混音值，不能复用上次拖动中的草稿。
-        m_soundEffectGainDraftInitialized = false;
-        m_soundEffectEditorConfigRevision =
-            std::numeric_limits<std::uint64_t>::max();
+        m_impl->m_soundEffects.restartEditing();
+        // 可见性变化只更新会话状态，实际配置读取仍由可见面板触发。
         break;
     case MobileTool::Palette:
-        m_mobilePaletteDetails = false;
-        m_showColorPopup       = open;
-        m_lastColorBtnPos      = anchor;
+        m_impl->m_palette.m_mobileDetails = false;
+        m_impl->m_palette.m_open          = open;
+        m_impl->m_palette.m_anchor        = anchor;
         break;
     }
 }
@@ -819,13 +826,14 @@ void ToolbarView::renderMobileTools(UIManager* manager, float scale,
         m_currentTool = m_editorApplicationService->currentTool();
     // 独立于桌面的工具栏可见性偏好，入口由移动工作台决定。
     if ( !visible )
-        m_showLayoutPopup = m_showMagnetPopup = m_showSoundEffectTool =
-            m_showColorPopup                  = false;
+        m_showLayoutPopup = m_showMagnetPopup = m_impl->m_soundEffects.m_open =
+            m_impl->m_palette.m_open          = false;
     if ( visible ) {
         // 调色盘初始化最多一次；项目身份不变时，原偏好路径立即返回。
         // 不在移动外壳复制颜色方案库，避免两套状态在皮肤切换后分离。
         // 初始化和项目偏好仍复用原有增量路径，不维护第二套调色盘配置。
-        if ( !m_colorPaletteInitialized ) initializeColorPalette();
+        if ( !m_impl->m_palette.m_colorPaletteInitialized )
+            initializeColorPalette();
         applyProjectPalettePreference();
     }
     // 工具内容沿用原来的独立窗口；移动端补充点外收起，不让背景必须依赖鼠标。
@@ -838,8 +846,9 @@ void ToolbarView::renderMobileTools(UIManager* manager, float scale,
         const std::array windows{
             std::pair{ &m_showLayoutPopup, "##LayoutComponentsPopup" },
             std::pair{ &m_showMagnetPopup, "##MagnetToolPopup" },
-            std::pair{ &m_showSoundEffectTool, "##SoundEffectToolPopup" },
-            std::pair{ &m_showColorPopup, "##ColorPalettePopup" }
+            std::pair{ &m_impl->m_soundEffects.m_open,
+                       "##SoundEffectToolPopup" },
+            std::pair{ &m_impl->m_palette.m_open, "##ColorPalettePopup" }
         };
         for ( const auto& [opened, name] : windows ) {
             if ( !*opened ) continue;
@@ -855,7 +864,9 @@ void ToolbarView::renderMobileTools(UIManager* manager, float scale,
     renderMagnetPopup(scale);
     renderSoundEffectTool(scale);
     // 移动快捷页独立布局，高级方案仍复用原有导入导出与分拍线配置。
-    if ( m_mobilePaletteDetails )
+    // 移动高级页复用同一个会话的输入缓冲和待导入方案。
+    // 返回时不会用另一份配色副本覆盖桌面或皮肤切换留下的最新状态。
+    if ( m_impl->m_palette.m_mobileDetails )
         renderColorPalettePopup(scale);
     else
         renderMobileColorPalette(scale);
@@ -909,6 +920,8 @@ void ToolbarView::renderMobileTools(UIManager* manager, float scale,
 /// 保存前比较语义字段，常态节点位置和尺寸变化不会触发磁盘写入。
 void ToolbarView::update(UIManager* sourceManager)
 {
+    auto& soundEffects = m_impl->m_soundEffects;
+    auto& palette      = m_impl->m_palette;
     // 应用服务观察指针每帧同步，UIManager 为空时安全回退只读配置路径。
     setEditorApplicationService(
         sourceManager ? sourceManager->getEditorApplicationService() : nullptr);
@@ -967,13 +980,13 @@ void ToolbarView::update(UIManager* sourceManager)
 
     // 按钮被配置隐藏时同步关闭其浮层，防止出现无锚点窗口。
     if ( !stateToolVisibility.layout ) m_showLayoutPopup = false;
-    if ( !independentButtonVisibility.notePalette ) m_showColorPopup = false;
+    if ( !independentButtonVisibility.notePalette ) palette.m_open = false;
     if ( !independentButtonVisibility.magnet ) m_showMagnetPopup = false;
     if ( !independentButtonVisibility.beatLineDisplay ) {
         m_showBeatLinePopup = false;
     }
     if ( !independentButtonVisibility.soundEffectTool ) {
-        m_showSoundEffectTool = false;
+        soundEffects.m_open = false;
     }
     if ( !independentButtonVisibility.playbackSpeed ) {
         m_showSpeedPopup = false;
@@ -1118,7 +1131,7 @@ void ToolbarView::update(UIManager* sourceManager)
         const auto  editorCfg   = currentEditorConfig();
         const auto& shortcutConfig = editorCfg.settings.shortcutConfig;
         // 每帧观察当前模式，使快捷切换知道最近非隐藏模式。
-        m_beatLineDisplayModeHistory.observe(
+        m_impl->m_beatLineDisplayModeHistory.observe(
             editorCfg.visual.beatLineDisplayMode);
 
         /// @brief 给本地化提示追加格式化快捷键。
@@ -1198,12 +1211,12 @@ void ToolbarView::update(UIManager* sourceManager)
                                       !config.visual.enableLinearScrollMapping;
                               });
             // 分拍线快捷键在隐藏态和最近可见模式之间切换。
-            tryToggleShortcut("toggleBeatLines",
-                              [this](Config::EditorConfig& config) {
-                                  config.visual.beatLineDisplayMode =
-                                      m_beatLineDisplayModeHistory.toggleTarget(
-                                          config.visual.beatLineDisplayMode);
-                              });
+            tryToggleShortcut(
+                "toggleBeatLines", [this](Config::EditorConfig& config) {
+                    config.visual.beatLineDisplayMode =
+                        m_impl->m_beatLineDisplayModeHistory.toggleTarget(
+                            config.visual.beatLineDisplayMode);
+                });
             // 滚动停止播放是编辑交互偏好，不直接发播放命令。
             tryToggleShortcut("toggleStopPlaybackOnScroll",
                               [](Config::EditorConfig& config) {
@@ -1400,7 +1413,7 @@ void ToolbarView::update(UIManager* sourceManager)
         // 初始化建立皮肤颜色数组；项目偏好解析随后可能替换为软件继承或项目
         // 自定义方案。应用键命中后为常数时间返回，因此这里可处于每帧路径。
         // 顺序必须在色块按钮绘制前完成，保证按钮始终显示当前权威活动颜色。
-        if ( !m_colorPaletteInitialized ) initializeColorPalette();
+        if ( !palette.m_colorPaletteInitialized ) initializeColorPalette();
         applyProjectPalettePreference();
 
         // 调色盘入口的活动态只表示弹层可见，按钮色块本身始终反映当前槽颜色。
@@ -1408,19 +1421,19 @@ void ToolbarView::update(UIManager* sourceManager)
         // 颜色方案编辑不改变当前编辑工具，因此可与 Move、Draw 等模式共存。
         if ( independentButtonVisibility.notePalette ) {
             // 调色盘按钮活动样式对应浮层打开状态。
-            pushBtnStyle(m_showColorPopup);
+            pushBtnStyle(palette.m_open);
             if ( ::MMM::UI::FeedbackButton("##ToolbarNoteColor",
                                            ImVec2(btnSize, btnHeight)) ) {
-                m_showColorPopup = !m_showColorPopup;
-                if ( m_showColorPopup ) {
+                palette.m_open = !palette.m_open;
+                if ( palette.m_open ) {
                     // 打开任一独立浮层时关闭其余互斥弹窗。
-                    m_showDivisorPopup    = false;
-                    m_showKeyPopup        = false;
-                    m_showSpeedPopup      = false;
-                    m_showZoomPopup       = false;
-                    m_showBeatLinePopup   = false;
-                    m_showMagnetPopup     = false;
-                    m_showSoundEffectTool = false;
+                    m_showDivisorPopup  = false;
+                    m_showKeyPopup      = false;
+                    m_showSpeedPopup    = false;
+                    m_showZoomPopup     = false;
+                    m_showBeatLinePopup = false;
+                    m_showMagnetPopup   = false;
+                    soundEffects.m_open = false;
                 }
             }
             {
@@ -1444,8 +1457,9 @@ void ToolbarView::update(UIManager* sourceManager)
                 drawList->AddRectFilled(
                     swatchMin,
                     swatchMax,
-                    ImGui::ColorConvertFloat4ToU32(toImVec4(
-                        m_paletteColors[colorSlotIndex(m_activeColorSlot)])),
+                    ImGui::ColorConvertFloat4ToU32(
+                        toImVec4(palette.m_paletteColors[colorSlotIndex(
+                            palette.m_activeColorSlot)])),
                     rounding);
                 drawList->AddRect(swatchMin,
                                   swatchMax,
@@ -1479,7 +1493,7 @@ void ToolbarView::update(UIManager* sourceManager)
                 }
             }
             // 缓存按钮顶部作为调色盘浮层垂直锚点。
-            m_lastColorBtnPos = toolbarButtonPosition();
+            palette.m_anchor = toolbarButtonPosition();
             drawTooltip(TR("ui.toolbar.note_palette").data());
             ImGui::PopStyleColor(3);
             advanceItem();
@@ -1500,13 +1514,13 @@ void ToolbarView::update(UIManager* sourceManager)
                 m_showMagnetPopup = !m_showMagnetPopup;
                 if ( m_showMagnetPopup ) {
                     // 磁吸浮层打开时关闭其他独立浮层。
-                    m_showColorPopup      = false;
-                    m_showDivisorPopup    = false;
-                    m_showKeyPopup        = false;
-                    m_showSpeedPopup      = false;
-                    m_showZoomPopup       = false;
-                    m_showBeatLinePopup   = false;
-                    m_showSoundEffectTool = false;
+                    palette.m_open      = false;
+                    m_showDivisorPopup  = false;
+                    m_showKeyPopup      = false;
+                    m_showSpeedPopup    = false;
+                    m_showZoomPopup     = false;
+                    m_showBeatLinePopup = false;
+                    soundEffects.m_open = false;
                 }
             }
             // 记录本帧按钮 Y 供浮层锚定。
@@ -1550,13 +1564,13 @@ void ToolbarView::update(UIManager* sourceManager)
                 m_showBeatLinePopup = !m_showBeatLinePopup;
                 if ( m_showBeatLinePopup ) {
                     // 打开后维持独占锚定浮层。
-                    m_showColorPopup      = false;
-                    m_showDivisorPopup    = false;
-                    m_showKeyPopup        = false;
-                    m_showSpeedPopup      = false;
-                    m_showZoomPopup       = false;
-                    m_showMagnetPopup     = false;
-                    m_showSoundEffectTool = false;
+                    palette.m_open      = false;
+                    m_showDivisorPopup  = false;
+                    m_showKeyPopup      = false;
+                    m_showSpeedPopup    = false;
+                    m_showZoomPopup     = false;
+                    m_showMagnetPopup   = false;
+                    soundEffects.m_open = false;
                 }
             }
             // 记录按钮顶部作为分拍线设置浮层锚点。
@@ -1585,16 +1599,12 @@ void ToolbarView::update(UIManager* sourceManager)
                                 btnSize,
                                 btnHeight,
                                 showToolLabels) ) {
-                m_showSoundEffectTool = !m_showSoundEffectTool;
-                if ( m_showSoundEffectTool ) {
+                soundEffects.m_open = !soundEffects.m_open;
+                if ( soundEffects.m_open ) {
                     // 每次打开重置增益草稿初始化，使其从运行时状态重新同步。
-                    m_soundEffectGainDraftInitialized = false;
-                    // 强制首次显示复制一次权威配置，防止引擎重启后修订号
-                    // 恰好与上次相同而复用旧会话的音效设置。
-                    m_soundEffectEditorConfigRevision =
-                        std::numeric_limits<std::uint64_t>::max();
+                    soundEffects.restartEditing();
                     m_showLayoutPopup   = false;
-                    m_showColorPopup    = false;
+                    palette.m_open      = false;
                     m_showDivisorPopup  = false;
                     m_showKeyPopup      = false;
                     m_showSpeedPopup    = false;
@@ -1604,7 +1614,7 @@ void ToolbarView::update(UIManager* sourceManager)
                 }
             }
             // 音效窗口固定宽度，但仍以按钮顶部作为垂直锚点并执行视口夹取。
-            m_lastSoundEffectToolBtnPos = toolbarButtonPosition();
+            soundEffects.m_anchor = toolbarButtonPosition();
             ImGui::PopID();
             {
                 // 音效提示额外说明快捷键是“切换击打音”而非单纯打开工具窗口，
@@ -1750,11 +1760,11 @@ void ToolbarView::update(UIManager* sourceManager)
                     if ( m_showSpeedPopup ) {
                         m_showZoomPopup = false;
                         // 数值弹层共享工具栏内侧空间，任一时刻只保留一个。
-                        m_showKeyPopup        = false;
-                        m_showDivisorPopup    = false;
-                        m_showBeatLinePopup   = false;
-                        m_showMagnetPopup     = false;
-                        m_showSoundEffectTool = false;
+                        m_showKeyPopup      = false;
+                        m_showDivisorPopup  = false;
+                        m_showBeatLinePopup = false;
+                        m_showMagnetPopup   = false;
+                        soundEffects.m_open = false;
                     }
                 }
                 // 弹层下一阶段以本帧按钮顶部为锚点。
@@ -1842,12 +1852,12 @@ void ToolbarView::update(UIManager* sourceManager)
                     m_showKeyPopup = !m_showKeyPopup;
                     if ( m_showKeyPopup ) {
                         // 轨道数弹层与其他锚定弹层互斥。
-                        m_showDivisorPopup    = false;
-                        m_showSpeedPopup      = false;
-                        m_showZoomPopup       = false;
-                        m_showBeatLinePopup   = false;
-                        m_showMagnetPopup     = false;
-                        m_showSoundEffectTool = false;
+                        m_showDivisorPopup  = false;
+                        m_showSpeedPopup    = false;
+                        m_showZoomPopup     = false;
+                        m_showBeatLinePopup = false;
+                        m_showMagnetPopup   = false;
+                        soundEffects.m_open = false;
                     }
                 }
                 // 保存锚点时使用屏幕坐标，后续可跨窗口定位。
@@ -1904,12 +1914,12 @@ void ToolbarView::update(UIManager* sourceManager)
                 m_showDivisorPopup = !m_showDivisorPopup;
                 if ( m_showDivisorPopup ) {
                     // 打开分拍弹层时关闭其他数值和工具弹层。
-                    m_showKeyPopup        = false;
-                    m_showSpeedPopup      = false;
-                    m_showZoomPopup       = false;
-                    m_showBeatLinePopup   = false;
-                    m_showMagnetPopup     = false;
-                    m_showSoundEffectTool = false;
+                    m_showKeyPopup      = false;
+                    m_showSpeedPopup    = false;
+                    m_showZoomPopup     = false;
+                    m_showBeatLinePopup = false;
+                    m_showMagnetPopup   = false;
+                    soundEffects.m_open = false;
                 }
             }
             // 历史成员名 m_lastBtnPos 专用于分拍弹层锚点。
@@ -1962,9 +1972,9 @@ void ToolbarView::update(UIManager* sourceManager)
                     // 同一工具栏内只保留一个参数浮层，触屏无需悬浮才能发现控制项。
                     m_showDivisorPopup = m_showKeyPopup = m_showSpeedPopup =
                         false;
-                    m_showBeatLinePopup       = m_showMagnetPopup =
-                        m_showSoundEffectTool = false;
-                    m_showLayoutPopup = m_showColorPopup = false;
+                    m_showBeatLinePopup     = m_showMagnetPopup =
+                        soundEffects.m_open = false;
+                    m_showLayoutPopup = palette.m_open = false;
                 }
             }
             // 停靠方向改变后，浮层继续跟随当前按钮的屏幕坐标。
@@ -2640,7 +2650,7 @@ void ToolbarView::update(UIManager* sourceManager)
 void ToolbarView::renderSoundEffectTool(float dpiScale)
 {
     // 显示标志是最便宜的快速路径，关闭时不查询会话或音频状态。
-    if ( !m_showSoundEffectTool ) return;
+    if ( !m_impl->m_soundEffects.m_open ) return;
 
     // 弹层必须锚定到同帧工具栏；工具栏未建立时等待下一帧重试。
     ImGuiWindow* toolbarWindow = ImGui::FindWindowByName(
@@ -2713,7 +2723,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
 
     // 音效列表仍使用固定外框和内部滚动，高度还须受工具栏内侧空间限制。
     const auto geometry = positionToolbarPopup(*toolbarWindow,
-                                               m_lastSoundEffectToolBtnPos,
+                                               m_impl->m_soundEffects.m_anchor,
                                                ImVec2(popupWidth, popupHeight),
                                                dpiScale);
     ImGui::SetNextWindowSize(
@@ -2756,24 +2766,18 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
         // 修订号未变时只做一次 acquire 读取；配置变更由 EditorEngine
         // 统一发布，滑条提交后的新值会在下一帧自动进入缓存。
         static_cast<void>(engine.refreshEditorConfigSnapshot(
-            m_soundEffectEditorConfigCache, m_soundEffectEditorConfigRevision));
+            m_impl->m_soundEffects.m_cachedConfig,
+            m_impl->m_soundEffects.m_configRevision));
     } else {
         // 未注入服务的测试与初始化路径继续使用应用配置。
-        m_soundEffectEditorConfigCache =
+        m_impl->m_soundEffects.m_cachedConfig =
             Config::AppConfig::instance().getEditorConfig();
     }
-    const auto& editorConfig = m_soundEffectEditorConfigCache;
-    if ( !m_soundEffectGainDraftInitialized || !ImGui::IsAnyItemActive() ) {
-        // 没有活动控件时允许外部设置覆盖草稿；拖动期间保持本地连续值，
-        // 防止异步运行时回读把滑块拉回上一采样点。
-        m_unboundHitSoundGainDraft =
-            editorConfig.settings.sfxConfig.unboundHitSfxGain;
-        m_boundHitSoundGainDraft =
-            editorConfig.settings.sfxConfig.boundHitSfxGain;
-        m_editorMetronomeGainDraft =
-            editorConfig.settings.sfxConfig.editorMetronomeGain;
-        m_soundEffectGainDraftInitialized = true;
-    }
+    // 配置快照和滑条草稿同属本视图，草稿值可在滑动期间领先配置修订。
+    // mixer 提交继续沿用原入口，缓存下一帧才看到异步发布的完整配置。
+    // 会话只借用配置引用到本次绘制结束，重开面板不会沿用旧修订。
+    const auto& editorConfig = m_impl->m_soundEffects.m_cachedConfig;
+    m_impl->m_soundEffects.syncGains(ImGui::IsAnyItemActive());
     const float muteButtonSize  = std::floor(ImGui::GetFrameHeight());
     const float gainSliderWidth = std::floor(170.0F * dpiScale);
     const float controlSpacing  = ImGui::GetStyle().ItemSpacing.x;
@@ -3086,7 +3090,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                 TR("ui.key_sound_tool.unbound_hit_sound").data(),
                 "UnboundHitSound",
                 !editorConfig.settings.sfxConfig.enableUnboundHitSfx,
-                m_unboundHitSoundGainDraft,
+                m_impl->m_soundEffects.m_unboundGainDraft,
                 2.0F,
                 [this, &engine](bool muted) {
                     // 配置字段表达“启用”，因此与 muted 语义取反。
@@ -3096,7 +3100,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                 },
                 [this, &engine](float gain) {
                     // 草稿先更新，运行时命令可在逻辑线程异步消费。
-                    m_unboundHitSoundGainDraft = gain;
+                    m_impl->m_soundEffects.m_unboundGainDraft = gain;
                     engine.pushCommand(Logic::CmdSetKeySoundEffectGroupGain{
                         .group = Logic::KeySoundEffectGroup::Unbound,
                         .gain  = gain,
@@ -3116,7 +3120,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                 TR("ui.key_sound_tool.bound_hit_sound").data(),
                 "BoundHitSound",
                 !editorConfig.settings.sfxConfig.enableBoundHitSfx,
-                m_boundHitSoundGainDraft,
+                m_impl->m_soundEffects.m_boundGainDraft,
                 2.0F,
                 [this, &engine](bool muted) {
                     // enableBoundHitSfx 与静音目标取反后经应用服务保存。
@@ -3126,7 +3130,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                 },
                 [this, &engine](float gain) {
                     // 成员草稿先更新，保证下一帧滑条连续显示新值。
-                    m_boundHitSoundGainDraft = gain;
+                    m_impl->m_soundEffects.m_boundGainDraft = gain;
                     engine.pushCommand(Logic::CmdSetKeySoundEffectGroupGain{
                         .group = Logic::KeySoundEffectGroup::Bound,
                         .gain  = gain,
@@ -3163,7 +3167,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                 TR("ui.key_sound_tool.editor_metronome").data(),
                 "EditorMetronome",
                 !editorConfig.settings.sfxConfig.enableEditorMetronome,
-                m_editorMetronomeGainDraft,
+                m_impl->m_soundEffects.m_metronomeGainDraft,
                 2.0F,
                 // 开关切换会同步到编辑器配置，播放源在下一轮接纳新状态。
                 // 关闭时只停止编辑器专属节拍声，不取消打击音预约。
@@ -3184,7 +3188,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                     // 草稿先写入成员，下一帧回读配置时不会覆盖当前手势。
                     // 重拍和普通拍同步改变音量，节拍层次只由采样自身决定。
                     // 拖动期间即时更新已载入的两种节拍音，不写配置文件。
-                    m_editorMetronomeGainDraft = gain;
+                    m_impl->m_soundEffects.m_metronomeGainDraft = gain;
                     audio.setSFXPoolVolume("editor.metronome.beat_low", gain);
                     audio.setSFXPoolVolume("editor.metronome.downbeat_high",
                                            gain);
@@ -3439,7 +3443,7 @@ void ToolbarView::initializeColorPalette()
 {
     // 先完成所有颜色与下游状态推送，再设置初始化标记。
     loadSkinDefaultPalette();
-    m_colorPaletteInitialized = true;
+    m_impl->m_palette.m_colorPaletteInitialized = true;
 }
 
 /// @brief 皮肤变化后刷新依赖皮肤颜色的当前调色盘。
@@ -3454,13 +3458,15 @@ void ToolbarView::initializeColorPalette()
 void ToolbarView::refreshPaletteAfterSkinChange()
 {
     // 没有运行时调色盘时无需处理皮肤版本变化。
-    if ( !m_colorPaletteInitialized ) return;
+    if ( !m_impl->m_palette.m_colorPaletteInitialized ) return;
 
-    if ( m_activePaletteSelection == PaletteSelectionKind::SkinDefault ) {
+    if ( m_impl->m_palette.m_activePaletteSelection ==
+         Impl::PaletteEditingSession::PaletteSelectionKind::SkinDefault ) {
         // 皮肤默认直接重新读取新皮肤全部颜色。
         loadSkinDefaultPalette();
-    } else if ( m_activePaletteSelection ==
-                PaletteSelectionKind::InheritSoftwareDefault ) {
+    } else if ( m_impl->m_palette.m_activePaletteSelection ==
+                Impl::PaletteEditingSession::PaletteSelectionKind::
+                    InheritSoftwareDefault ) {
         // 软件默认可能本身指向皮肤默认，因此重新解析继承链。
         loadSoftwareDefaultPalette();
     }
@@ -3477,14 +3483,16 @@ void ToolbarView::refreshPaletteAfterSkinChange()
 /// 该操作不修改软件默认或项目偏好字段，只改变当前解析结果。
 void ToolbarView::loadSkinDefaultPalette()
 {
+    auto& palette = m_impl->m_palette;
     // 两套数组分别从皮肤键读取，并包含旧皮肤兼容回退。
-    fillPaletteWithSkinDefaults(m_paletteColors);
-    fillBeatLinePaletteWithSkinDefaults(m_beatLinePaletteColors);
+    fillPaletteWithSkinDefaults(palette.m_paletteColors);
+    fillBeatLinePaletteWithSkinDefaults(palette.m_beatLinePaletteColors);
     // 皮肤默认无需向视觉配置声明自定义分拍线覆盖。
-    m_overrideBeatLinePalette  = false;
-    m_activePaletteSchemeIndex = -1;
-    m_activePaletteSelection   = PaletteSelectionKind::SkinDefault;
-    m_paletteSchemeErrorKey.clear();
+    palette.m_overrideBeatLinePalette  = false;
+    palette.m_activePaletteSchemeIndex = -1;
+    palette.m_activePaletteSelection =
+        Impl::PaletteEditingSession::PaletteSelectionKind::SkinDefault;
+    palette.m_paletteSchemeErrorKey.clear();
     // 名称输入框展示本地化内置名称，但它不能作为自定义方案保存。
     setPaletteSchemeNameBuffer(defaultPaletteSchemeName());
     pushPaletteToBrush();
@@ -3503,6 +3511,7 @@ void ToolbarView::loadSkinDefaultPalette()
 /// 未找到名称被视为可恢复配置漂移，不记录错误或写回设置。
 void ToolbarView::loadSoftwareDefaultPalette()
 {
+    auto& palette = m_impl->m_palette;
     // 默认方案名从全局编辑器设置读取，不修改项目自身偏好字段。
     const auto& settings   = Config::AppConfig::instance().getEditorSettings();
     const auto& schemeName = settings.defaultColorPaletteSchemeName;
@@ -3521,22 +3530,23 @@ void ToolbarView::loadSoftwareDefaultPalette()
         if ( it != paletteConfig.schemes.end() ) {
             // 找到完整方案后覆盖笔记与分拍线全部槽位。
             applyStoredPaletteScheme(
-                m_paletteColors, m_beatLinePaletteColors, *it);
-            m_overrideBeatLinePalette = true;
-            loaded                    = true;
+                palette.m_paletteColors, palette.m_beatLinePaletteColors, *it);
+            palette.m_overrideBeatLinePalette = true;
+            loaded                            = true;
         }
     }
 
     if ( !loaded ) {
         // 无效软件偏好不阻断工具栏，回退当前皮肤颜色。
-        fillPaletteWithSkinDefaults(m_paletteColors);
-        fillBeatLinePaletteWithSkinDefaults(m_beatLinePaletteColors);
-        m_overrideBeatLinePalette = false;
+        fillPaletteWithSkinDefaults(palette.m_paletteColors);
+        fillBeatLinePaletteWithSkinDefaults(palette.m_beatLinePaletteColors);
+        palette.m_overrideBeatLinePalette = false;
     }
     // 继承态不允许直接覆盖或删除实际自定义方案。
-    m_activePaletteSchemeIndex = -1;
-    m_activePaletteSelection   = PaletteSelectionKind::InheritSoftwareDefault;
-    m_paletteSchemeErrorKey.clear();
+    palette.m_activePaletteSchemeIndex = -1;
+    palette.m_activePaletteSelection   = Impl::PaletteEditingSession::
+        PaletteSelectionKind::InheritSoftwareDefault;
+    palette.m_paletteSchemeErrorKey.clear();
     // 输入框展示继承语义，而非被继承方案的内部名称。
     setPaletteSchemeNameBuffer(inheritedPaletteSchemeName());
     pushPaletteToBrush();
@@ -3624,9 +3634,9 @@ void ToolbarView::applyProjectPalettePreference()
     applyKey.push_back('\n');
     applyKey += schemeName;
     // 完整解析输入未变化时不重复写画笔命令和编辑器配置。
-    if ( applyKey == m_lastAppliedProjectPaletteKey ) return;
+    if ( applyKey == m_impl->m_palette.m_lastAppliedProjectPaletteKey ) return;
 
-    m_lastAppliedProjectPaletteKey = applyKey;
+    m_impl->m_palette.m_lastAppliedProjectPaletteKey = applyKey;
     if ( preferenceSource == "inherit" ) {
         // 继承态需要保留专用选择种类，不能只按最终方案名加载。
         loadSoftwareDefaultPalette();
@@ -3647,8 +3657,8 @@ void ToolbarView::applyProjectPalettePreference()
 /// 生命周期由命令值语义保证，ToolbarView 销毁后队列仍可安全消费。
 void ToolbarView::pushPaletteToBrush(bool resetDrawColors)
 {
-    Logic::EditorEngine::instance().pushCommand(
-        Logic::CmdSetBrushNotePalette{ m_paletteColors, resetDrawColors });
+    Logic::EditorEngine::instance().pushCommand(Logic::CmdSetBrushNotePalette{
+        m_impl->m_palette.m_paletteColors, resetDrawColors });
 }
 
 /// @brief 将当前笔记调色盘应用到画布已有选择。
@@ -3664,7 +3674,7 @@ void ToolbarView::pushPaletteToSelection(bool explicitTouch)
     if ( m_mobileTools && !explicitTouch ) return;
     Logic::EditorEngine::instance().pushCommand(
         Logic::CmdApplyNotePaletteToSelection{
-            m_paletteColors, false, m_mobileTools });
+            m_impl->m_palette.m_paletteColors, false, m_mobileTools });
 }
 
 /// @brief 把当前分拍线与玩家音符默认配色写入编辑器运行时视觉配置。
@@ -3678,17 +3688,18 @@ void ToolbarView::pushPaletteToSelection(bool explicitTouch)
 /// 若应用服务未绑定，currentEditorConfig 仍提供安全副本，但提交会无操作。
 void ToolbarView::pushBeatLinePaletteToRenderer()
 {
+    auto& palette = m_impl->m_palette;
     // 同一次快照提交分拍线与音符默认配色，避免界面方案和已有物件分帧错位。
     auto config                          = currentEditorConfig();
-    config.visual.overrideBeatLineColors = m_overrideBeatLinePalette;
-    config.visual.overrideNoteColors     = m_overrideBeatLinePalette;
-    for ( std::size_t i = 0; i < m_paletteColors.size(); ++i ) {
-        config.visual.noteColors[i] = toStoredColor(m_paletteColors[i]);
+    config.visual.overrideBeatLineColors = palette.m_overrideBeatLinePalette;
+    config.visual.overrideNoteColors     = palette.m_overrideBeatLinePalette;
+    for ( std::size_t i = 0; i < palette.m_paletteColors.size(); ++i ) {
+        config.visual.noteColors[i] = toStoredColor(palette.m_paletteColors[i]);
     }
     // 运行时 glm 表示逐槽转换回可序列化数组。
-    for ( std::size_t i = 0; i < m_beatLinePaletteColors.size(); ++i ) {
+    for ( std::size_t i = 0; i < palette.m_beatLinePaletteColors.size(); ++i ) {
         config.visual.beatLineColors[i] =
-            toStoredColor(m_beatLinePaletteColors[i]);
+            toStoredColor(palette.m_beatLinePaletteColors[i]);
     }
     updateEditorConfig(config);
 }
@@ -3705,21 +3716,24 @@ void ToolbarView::pushBeatLinePaletteToRenderer()
 /// 分拍线覆盖对所有自定义方案强制开启，因为方案文件携带完整分拍线数组。
 void ToolbarView::loadPaletteScheme(std::size_t schemeIndex)
 {
+    auto& palette       = m_impl->m_palette;
     auto& app           = Config::AppConfig::instance();
     auto& paletteConfig = app.getEditorSettings().colorPalettes;
     // 防御菜单索引在方案删除或导入后失效。
     if ( schemeIndex >= paletteConfig.schemes.size() ) return;
 
     const auto& scheme = paletteConfig.schemes[schemeIndex];
-    applyStoredPaletteScheme(m_paletteColors, m_beatLinePaletteColors, scheme);
+    applyStoredPaletteScheme(
+        palette.m_paletteColors, palette.m_beatLinePaletteColors, scheme);
     // 自定义方案始终携带完整分拍线颜色，因此启用覆盖。
-    m_overrideBeatLinePalette = true;
+    palette.m_overrideBeatLinePalette = true;
 
-    m_activePaletteSchemeIndex = static_cast<int>(schemeIndex);
-    m_activePaletteSelection   = PaletteSelectionKind::Custom;
+    palette.m_activePaletteSchemeIndex = static_cast<int>(schemeIndex);
+    palette.m_activePaletteSelection =
+        Impl::PaletteEditingSession::PaletteSelectionKind::Custom;
     // 保存全局最近活动索引，项目偏好仍由独立名称字段管理。
     paletteConfig.activeSchemeIndex = schemeIndex;
-    m_paletteSchemeErrorKey.clear();
+    palette.m_paletteSchemeErrorKey.clear();
     setPaletteSchemeNameBuffer(scheme.name);
     pushPaletteToBrush();
     pushBeatLinePaletteToRenderer();
@@ -3736,9 +3750,11 @@ bool ToolbarView::canManageActivePaletteScheme() const
 {
     const auto& paletteConfig =
         Config::AppConfig::instance().getEditorSettings().colorPalettes;
-    return m_activePaletteSelection == PaletteSelectionKind::Custom &&
-           m_activePaletteSchemeIndex >= 0 &&
-           static_cast<std::size_t>(m_activePaletteSchemeIndex) <
+    return m_impl->m_palette.m_activePaletteSelection ==
+               Impl::PaletteEditingSession::PaletteSelectionKind::Custom &&
+           m_impl->m_palette.m_activePaletteSchemeIndex >= 0 &&
+           static_cast<std::size_t>(
+               m_impl->m_palette.m_activePaletteSchemeIndex) <
                paletteConfig.schemes.size();
 }
 
@@ -3778,17 +3794,19 @@ bool ToolbarView::validatePaletteSchemeNameForSave(
 {
     if ( isReservedPaletteSchemeName(name) ) {
         // 空名和内置显示名共用保留名错误。
-        m_paletteSchemeErrorKey = "ui.toolbar.note_palette.name_reserved_error";
+        m_impl->m_palette.m_paletteSchemeErrorKey =
+            "ui.toolbar.note_palette.name_reserved_error";
         return false;
     }
     if ( hasPaletteSchemeNameConflict(name, ignoredIndex) ) {
         // 重复错误与保留名分开，便于用户采取不同修正。
-        m_paletteSchemeErrorKey = "ui.toolbar.note_palette.name_conflict_error";
+        m_impl->m_palette.m_paletteSchemeErrorKey =
+            "ui.toolbar.note_palette.name_conflict_error";
         return false;
     }
 
     // 成功校验清除上一次失败残留。
-    m_paletteSchemeErrorKey.clear();
+    m_impl->m_palette.m_paletteSchemeErrorKey.clear();
     return true;
 }
 
@@ -3807,6 +3825,7 @@ bool ToolbarView::validatePaletteSchemeNameForSave(
 /// 单独决定，避免在软件级方案编辑中产生隐式项目文件修改。
 void ToolbarView::savePaletteScheme(bool createNew)
 {
+    auto& palette = m_impl->m_palette;
     // 直接操作 AppConfig 持有的方案容器，最终由 app.save 一次落盘。
     auto& app           = Config::AppConfig::instance();
     auto& paletteConfig = app.getEditorSettings().colorPalettes;
@@ -3820,7 +3839,8 @@ void ToolbarView::savePaletteScheme(bool createNew)
     std::optional<std::size_t> ignoredIndex;
     if ( !createNew && hasActiveScheme ) {
         // 覆盖校验忽略目标自身，其余方案仍必须保持唯一名称。
-        ignoredIndex = static_cast<std::size_t>(m_activePaletteSchemeIndex);
+        ignoredIndex =
+            static_cast<std::size_t>(palette.m_activePaletteSchemeIndex);
     }
     if ( !validatePaletteSchemeNameForSave(scheme.name, ignoredIndex) ) {
         // 错误键已由校验函数设置，弹窗保留用户输入供修正。
@@ -3830,20 +3850,20 @@ void ToolbarView::savePaletteScheme(bool createNew)
     if ( createNew || !hasActiveScheme ) {
         // 新方案追加到末尾并立即成为活动索引。
         paletteConfig.schemes.push_back(std::move(scheme));
-        m_activePaletteSchemeIndex =
+        palette.m_activePaletteSchemeIndex =
             static_cast<int>(paletteConfig.schemes.size() - 1);
     } else {
         // 覆盖保持容器位置和其他方案索引稳定。
-        paletteConfig
-            .schemes[static_cast<std::size_t>(m_activePaletteSchemeIndex)] =
-            std::move(scheme);
+        paletteConfig.schemes[static_cast<std::size_t>(
+            palette.m_activePaletteSchemeIndex)] = std::move(scheme);
     }
 
     // 配置级最近活动索引与工具栏当前索引保持一致。
     paletteConfig.activeSchemeIndex =
-        static_cast<std::size_t>(m_activePaletteSchemeIndex);
-    m_activePaletteSelection  = PaletteSelectionKind::Custom;
-    m_overrideBeatLinePalette = true;
+        static_cast<std::size_t>(palette.m_activePaletteSchemeIndex);
+    palette.m_activePaletteSelection =
+        Impl::PaletteEditingSession::PaletteSelectionKind::Custom;
+    palette.m_overrideBeatLinePalette = true;
     // 从已存入容器的最终名称回填输入缓冲，确保移动后仍读取有效对象。
     setPaletteSchemeNameBuffer(
         paletteConfig.schemes[paletteConfig.activeSchemeIndex].name);
@@ -3875,7 +3895,7 @@ void ToolbarView::openPaletteExportFilePicker()
     const std::string defaultFileName =
         sanitizePaletteExportFileName(currentPaletteSchemeName());
     // 新操作开始前清除上次成功或失败提示。
-    m_paletteExportStatusKey.clear();
+    m_impl->m_palette.m_paletteExportStatusKey.clear();
 
     if ( settings.filePickerStyle == Config::FilePickerStyle::Native ) {
         // 原生对话框打开前播放一次统一弹窗反馈。
@@ -3893,15 +3913,17 @@ void ToolbarView::openPaletteExportFilePicker()
             NFD_FreePathU8(outPath);
         } else if ( result == NFD_OKAY ) {
             // 成功状态却没有路径视为异常失败，不能尝试写空路径。
-            m_paletteExportSucceeded = false;
-            m_paletteExportStatusKey = "ui.toolbar.note_palette.export_failed";
+            m_impl->m_palette.m_paletteExportSucceeded = false;
+            m_impl->m_palette.m_paletteExportStatusKey =
+                "ui.toolbar.note_palette.export_failed";
         } else if ( result == NFD_ERROR ) {
             // 记录库错误详情，界面只展示稳定本地化失败提示。
             const char* error = NFD_GetError();
             XERROR("Failed to open color palette export dialog: {}",
                    error ? error : "Unknown NFD error");
-            m_paletteExportSucceeded = false;
-            m_paletteExportStatusKey = "ui.toolbar.note_palette.export_failed";
+            m_impl->m_palette.m_paletteExportSucceeded = false;
+            m_impl->m_palette.m_paletteExportStatusKey =
+                "ui.toolbar.note_palette.export_failed";
         }
         // 原生对话框已完成整个选择流程，不再打开内置弹窗。
         return;
@@ -3948,8 +3970,8 @@ void ToolbarView::openPaletteImportFilePicker()
                                         ? std::string(".")
                                         : settings.lastFilePickerPath;
     // 新一轮选择先清空名称校验错误和导入结果提示。
-    m_paletteImportErrorKey.clear();
-    m_paletteImportStatusKey.clear();
+    m_impl->m_palette.m_paletteImportErrorKey.clear();
+    m_impl->m_palette.m_paletteImportStatusKey.clear();
 
     if ( settings.filePickerStyle == Config::FilePickerStyle::Native ) {
         // 原生弹窗使用专用扩展过滤器并同步返回结果。
@@ -3966,15 +3988,17 @@ void ToolbarView::openPaletteImportFilePicker()
             NFD_FreePathU8(outPath);
         } else if ( result == NFD_OKAY ) {
             // 异常空路径不进入文件解析。
-            m_paletteImportSucceeded = false;
-            m_paletteImportStatusKey = "ui.toolbar.note_palette.import_failed";
+            m_impl->m_palette.m_paletteImportSucceeded = false;
+            m_impl->m_palette.m_paletteImportStatusKey =
+                "ui.toolbar.note_palette.import_failed";
         } else if ( result == NFD_ERROR ) {
             // 详细错误写日志，用户界面保持简洁稳定提示。
             const char* error = NFD_GetError();
             XERROR("Failed to open color palette import dialog: {}",
                    error ? error : "Unknown NFD error");
-            m_paletteImportSucceeded = false;
-            m_paletteImportStatusKey = "ui.toolbar.note_palette.import_failed";
+            m_impl->m_palette.m_paletteImportSucceeded = false;
+            m_impl->m_palette.m_paletteImportStatusKey =
+                "ui.toolbar.note_palette.import_failed";
         }
         return;
     }
@@ -4082,10 +4106,10 @@ void ToolbarView::exportCurrentPaletteToPath(const std::string& path)
         Config::exportColorPaletteFile(Config::utf8ToPath(normalizedPath),
                                        buildCurrentPaletteScheme());
     // 布尔值供提示颜色选择，翻译键供本地化文本选择。
-    m_paletteExportSucceeded = succeeded;
-    m_paletteExportStatusKey = succeeded
-                                   ? "ui.toolbar.note_palette.export_success"
-                                   : "ui.toolbar.note_palette.export_failed";
+    m_impl->m_palette.m_paletteExportSucceeded = succeeded;
+    m_impl->m_palette.m_paletteExportStatusKey =
+        succeeded ? "ui.toolbar.note_palette.export_success"
+                  : "ui.toolbar.note_palette.export_failed";
     if ( !succeeded ) {
         // 写入失败时保留用户原最近目录，便于重新选择。
         return;
@@ -4118,14 +4142,15 @@ void ToolbarView::exportCurrentPaletteToPath(const std::string& path)
 /// @warning 低频文件操作路径：仅由用户确认文件选择后调用。
 void ToolbarView::preparePaletteImportFromPath(const std::string& path)
 {
+    auto&                      palette = m_impl->m_palette;
     Config::ColorPaletteScheme importedScheme;
     // 空路径短路；非空路径由配置层读入完整值类型方案。
     const bool succeeded =
         !path.empty() && Config::importColorPaletteFile(
                              Config::utf8ToPath(path), importedScheme);
     // 文件解析阶段只产生总体导入状态，名称错误在确认阶段单独设置。
-    m_paletteImportSucceeded = succeeded;
-    m_paletteImportStatusKey =
+    palette.m_paletteImportSucceeded = succeeded;
+    palette.m_paletteImportStatusKey =
         succeeded ? std::string{} : "ui.toolbar.note_palette.import_failed";
     if ( !succeeded ) {
         // 失败时不覆盖已有 pending，弹窗通过状态键展示错误。
@@ -4133,18 +4158,20 @@ void ToolbarView::preparePaletteImportFromPath(const std::string& path)
     }
 
     // 解析成功后持有待确认方案值，不依赖文件或局部对象生命周期。
-    m_pendingImportedPaletteScheme = std::move(importedScheme);
-    m_importPaletteSchemeNameBuffer.fill('\0');
-    const std::string& importedName = m_pendingImportedPaletteScheme->name;
+    palette.m_pendingImportedPaletteScheme = std::move(importedScheme);
+    palette.m_importPaletteSchemeNameBuffer.fill('\0');
+    const std::string& importedName =
+        palette.m_pendingImportedPaletteScheme->name;
     // 为结尾空字符保留一个字节，过长名称安全截断。
-    const std::size_t copyCount = std::min(
-        importedName.size(), m_importPaletteSchemeNameBuffer.size() - 1);
+    const std::size_t copyCount =
+        std::min(importedName.size(),
+                 palette.m_importPaletteSchemeNameBuffer.size() - 1);
     // 目标缓冲已清零，复制后天然具备终止空字符。
     std::copy_n(importedName.begin(),
                 copyCount,
-                m_importPaletteSchemeNameBuffer.begin());
+                palette.m_importPaletteSchemeNameBuffer.begin());
     // 新文件成功读取后清除上一次名称校验错误。
-    m_paletteImportErrorKey.clear();
+    palette.m_paletteImportErrorKey.clear();
 
     auto& app      = Config::AppConfig::instance();
     auto& settings = app.getEditorSettings();
@@ -4167,33 +4194,37 @@ void ToolbarView::preparePaletteImportFromPath(const std::string& path)
 /// 全部运行时状态同步后保存软件配置。
 void ToolbarView::confirmPaletteImport()
 {
+    auto& palette = m_impl->m_palette;
     // 没有成功解析的待导入方案时确认无副作用。
-    if ( !m_pendingImportedPaletteScheme ) return;
+    if ( !palette.m_pendingImportedPaletteScheme ) return;
 
     // 固定输入缓冲保证以空字符结束，可安全构造最终名称。
-    const std::string name(m_importPaletteSchemeNameBuffer.data());
+    const std::string name(palette.m_importPaletteSchemeNameBuffer.data());
     if ( isReservedPaletteSchemeName(name) ) {
         // 导入错误使用独立状态，不覆盖普通方案编辑错误。
-        m_paletteImportErrorKey = "ui.toolbar.note_palette.name_reserved_error";
+        palette.m_paletteImportErrorKey =
+            "ui.toolbar.note_palette.name_reserved_error";
         return;
     }
     if ( hasPaletteSchemeNameConflict(name, std::nullopt) ) {
         // 导入总是创建新方案，因此不忽略任何已有索引。
-        m_paletteImportErrorKey = "ui.toolbar.note_palette.name_conflict_error";
+        palette.m_paletteImportErrorKey =
+            "ui.toolbar.note_palette.name_conflict_error";
         return;
     }
 
     auto& app           = Config::AppConfig::instance();
     auto& paletteConfig = app.getEditorSettings().colorPalettes;
     // 用户确认名称覆盖文件内原名，再把值移动进配置容器。
-    m_pendingImportedPaletteScheme->name = name;
-    paletteConfig.schemes.push_back(std::move(*m_pendingImportedPaletteScheme));
+    palette.m_pendingImportedPaletteScheme->name = name;
+    paletteConfig.schemes.push_back(
+        std::move(*palette.m_pendingImportedPaletteScheme));
     // 新追加元素位于末尾，可直接计算其活动索引。
     const std::size_t importedIndex = paletteConfig.schemes.size() - 1;
-    m_pendingImportedPaletteScheme.reset();
-    m_paletteImportErrorKey.clear();
-    m_paletteImportSucceeded = true;
-    m_paletteImportStatusKey = "ui.toolbar.note_palette.import_success";
+    palette.m_pendingImportedPaletteScheme.reset();
+    palette.m_paletteImportErrorKey.clear();
+    palette.m_paletteImportSucceeded = true;
+    palette.m_paletteImportStatusKey = "ui.toolbar.note_palette.import_success";
     // 加载新方案会同步画笔和分拍线渲染配置。
     loadPaletteScheme(importedIndex);
     app.save();
@@ -4214,12 +4245,17 @@ Config::ColorPaletteScheme ToolbarView::buildCurrentPaletteScheme() const
     Config::ColorPaletteScheme scheme;
     scheme.name = currentPaletteSchemeName();
     // 定长数组保证方案不会遗漏任何笔记槽位。
-    for ( std::size_t i = 0; i < m_paletteColors.size(); ++i ) {
-        scheme.noteColors[i] = toStoredColor(m_paletteColors[i]);
+    for ( std::size_t i = 0; i < m_impl->m_palette.m_paletteColors.size();
+          ++i ) {
+        scheme.noteColors[i] =
+            toStoredColor(m_impl->m_palette.m_paletteColors[i]);
     }
     // 分拍线数组独立转换并保持分母槽位顺序。
-    for ( std::size_t i = 0; i < m_beatLinePaletteColors.size(); ++i ) {
-        scheme.beatLineColors[i] = toStoredColor(m_beatLinePaletteColors[i]);
+    for ( std::size_t i = 0;
+          i < m_impl->m_palette.m_beatLinePaletteColors.size();
+          ++i ) {
+        scheme.beatLineColors[i] =
+            toStoredColor(m_impl->m_palette.m_beatLinePaletteColors[i]);
     }
     return scheme;
 }
@@ -4239,7 +4275,8 @@ void ToolbarView::renamePaletteScheme()
     // 先验证选择种类和索引总体有效性。
     if ( !canManageActivePaletteScheme() ) return;
 
-    std::size_t index = static_cast<std::size_t>(m_activePaletteSchemeIndex);
+    std::size_t index =
+        static_cast<std::size_t>(m_impl->m_palette.m_activePaletteSchemeIndex);
     // 再次检查局部索引，防御配置容器在前一步后发生变化。
     if ( index >= paletteConfig.schemes.size() ) return;
 
@@ -4316,9 +4353,9 @@ void ToolbarView::deletePaletteScheme(std::size_t schemeIndex)
     }
 
     // 确认请求、应用缓存和名称错误都与旧方案集合绑定，统一清除。
-    m_pendingDeletePaletteSchemeIndex.reset();
-    m_lastAppliedProjectPaletteKey.clear();
-    m_paletteSchemeErrorKey.clear();
+    m_impl->m_palette.m_pendingDeletePaletteSchemeIndex.reset();
+    m_impl->m_palette.m_lastAppliedProjectPaletteKey.clear();
+    m_impl->m_palette.m_paletteSchemeErrorKey.clear();
     // 临时回到安全皮肤默认，下一帧按修复后的项目偏好重新应用。
     loadSkinDefaultPalette();
     app.save();
@@ -4334,11 +4371,15 @@ void ToolbarView::deletePaletteScheme(std::size_t schemeIndex)
 /// 函数不改变当前方案或错误状态，调用方负责决定回填时机。
 void ToolbarView::setPaletteSchemeNameBuffer(const std::string& name)
 {
-    m_paletteSchemeNameBuffer.fill('\0');
+    // 清零整个数组后再复制文本，短名称可以覆盖较长旧值。
+    // 复用固定缓冲地址，防止输入法在跨帧编辑时引用临时字符串。
+    m_impl->m_palette.m_paletteSchemeNameBuffer.fill('\0');
     // 为结尾空字符保留一个字节。
-    std::size_t count =
-        std::min(name.size(), m_paletteSchemeNameBuffer.size() - 1);
-    std::copy_n(name.begin(), count, m_paletteSchemeNameBuffer.begin());
+    std::size_t count = std::min(
+        name.size(), m_impl->m_palette.m_paletteSchemeNameBuffer.size() - 1);
+    std::copy_n(name.begin(),
+                count,
+                m_impl->m_palette.m_paletteSchemeNameBuffer.begin());
 }
 
 /// @brief 用指定槽位颜色刷新十六进制编辑缓冲和缓存身份。
@@ -4354,14 +4395,16 @@ void ToolbarView::setPaletteSchemeNameBuffer(const std::string& name)
 void ToolbarView::setColorHexBuffer(PaletteTab tab, std::size_t slotIndex,
                                     glm::vec4 color)
 {
-    m_colorHexBuffer.fill('\0');
+    auto& palette = m_impl->m_palette;
+    palette.m_colorHexBuffer.fill('\0');
     // 格式始终为带 Alpha 的固定大写十六进制文本。
-    std::string text  = colorToHexString(color);
-    std::size_t count = std::min(text.size(), m_colorHexBuffer.size() - 1);
-    std::copy_n(text.begin(), count, m_colorHexBuffer.begin());
+    std::string text = colorToHexString(color);
+    std::size_t count =
+        std::min(text.size(), palette.m_colorHexBuffer.size() - 1);
+    std::copy_n(text.begin(), count, palette.m_colorHexBuffer.begin());
     // 内容复制完成后再更新身份，避免异常中间状态被视为命中。
-    m_colorHexBufferTab  = tab;
-    m_colorHexBufferSlot = slotIndex;
+    palette.m_colorHexBufferTab  = tab;
+    palette.m_colorHexBufferSlot = slotIndex;
 }
 
 /// @brief 读取方案名输入缓冲并提供空值显示回退。
@@ -4373,7 +4416,7 @@ void ToolbarView::setColorHexBuffer(PaletteTab tab, std::size_t slotIndex,
 /// 本函数不裁剪首尾空白；名称精确性与冲突判断保持一致。
 std::string ToolbarView::currentPaletteSchemeName() const
 {
-    std::string name(m_paletteSchemeNameBuffer.data());
+    std::string name(m_impl->m_palette.m_paletteSchemeNameBuffer.data());
     // 空名称只用于界面展示友好文本。
     if ( name.empty() ) return defaultPaletteSchemeName();
     return name;
@@ -4428,8 +4471,9 @@ void ToolbarView::pushColorCommands(Logic::NoteColorSlot     slot,
 /// @warning UI 热路径：浮层打开时每帧执行；文件 I/O 只能由明确按钮动作触发。
 void ToolbarView::renderColorPalettePopup(float dpiScale)
 {
+    auto& palette = m_impl->m_palette;
     // 关闭状态立即返回，不查询工具栏窗口或构造任何弹窗控件。
-    if ( !m_showColorPopup ) return;
+    if ( !palette.m_open ) return;
 
     // 通过稳定内部窗口名定位工具栏，以其位置作为浮层锚点。
     ImGuiWindow* toolbarWindow = ImGui::FindWindowByName(
@@ -4438,12 +4482,14 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
     if ( !toolbarWindow ) return;
 
     // 每种弹层保留独立尺寸缓存，方向与边界统一由工具栏定位入口处理。
-    const float popupW = m_colorPopupWidth > 0 ? m_colorPopupWidth
-                                               : std::floor(360.0f * dpiScale);
-    const float popupH = m_colorPopupHeight > 0 ? m_colorPopupHeight
-                                                : std::floor(360.0f * dpiScale);
+    const float popupW = palette.m_colorPopupWidth > 0
+                             ? palette.m_colorPopupWidth
+                             : std::floor(360.0f * dpiScale);
+    const float popupH = palette.m_colorPopupHeight > 0
+                             ? palette.m_colorPopupHeight
+                             : std::floor(360.0f * dpiScale);
     positionToolbarPopup(
-        *toolbarWindow, m_lastColorBtnPos, ImVec2(popupW, popupH), dpiScale);
+        *toolbarWindow, palette.m_anchor, ImVec2(popupW, popupH), dpiScale);
 
     // 浮层尺寸由内容自动决定，用户不能单独移动、缩放或保存其位置。
     ImGuiWindowFlags popupFlags =
@@ -4485,19 +4531,22 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         // 包含用户尚未保存的草稿，而预览必须始终描述当前已经应用的方案。
         // 自定义索引在读取前重新检查范围，配置容器变化不会造成越界。
         std::string previewName;
-        if ( m_activePaletteSelection ==
-             PaletteSelectionKind::InheritSoftwareDefault ) {
+        if ( palette.m_activePaletteSelection ==
+             Impl::PaletteEditingSession::PaletteSelectionKind::
+                 InheritSoftwareDefault ) {
             // 继承态显示语义名称，而不是当前被继承方案名称。
             previewName = inheritedPaletteSchemeName();
-        } else if ( m_activePaletteSelection ==
-                    PaletteSelectionKind::SkinDefault ) {
+        } else if ( palette.m_activePaletteSelection ==
+                    Impl::PaletteEditingSession::PaletteSelectionKind::
+                        SkinDefault ) {
             // 皮肤默认同样使用本地化内置显示名。
             previewName = defaultPaletteSchemeName();
         } else {
             // 自定义态只有合法索引才能读取配置容器名称。
             std::size_t activeIndex =
-                m_activePaletteSchemeIndex >= 0
-                    ? static_cast<std::size_t>(m_activePaletteSchemeIndex)
+                palette.m_activePaletteSchemeIndex >= 0
+                    ? static_cast<std::size_t>(
+                          palette.m_activePaletteSchemeIndex)
                     : paletteConfig.schemes.size();
             // 索引过期时回退皮肤默认文本，避免越界访问。
             previewName = activeIndex < paletteConfig.schemes.size()
@@ -4514,8 +4563,9 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                                            previewName.c_str()) ) {
             // 继承与皮肤默认作为两个内置项，始终位于自定义列表之前。
             const bool inheritSelected =
-                m_activePaletteSelection ==
-                PaletteSelectionKind::InheritSoftwareDefault;
+                palette.m_activePaletteSelection ==
+                Impl::PaletteEditingSession::PaletteSelectionKind::
+                    InheritSoftwareDefault;
             if ( ::MMM::UI::FeedbackSelectable(
                      inheritedPaletteSchemeName().c_str(), inheritSelected) ) {
                 // 选择后立即解析软件默认并同步下游颜色。
@@ -4525,7 +4575,8 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
 
             // 皮肤默认项按选择种类显示勾选。
             const bool skinSelected =
-                m_activePaletteSelection == PaletteSelectionKind::SkinDefault;
+                palette.m_activePaletteSelection ==
+                Impl::PaletteEditingSession::PaletteSelectionKind::SkinDefault;
             if ( ::MMM::UI::FeedbackSelectable(
                      defaultPaletteSchemeName().c_str(), skinSelected) ) {
                 // 内置选择不需要保存自定义方案活动索引。
@@ -4540,8 +4591,10 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
             // 自定义方案按配置顺序展示，选择后保存最近活动索引。
             for ( std::size_t i = 0; i < paletteConfig.schemes.size(); ++i ) {
                 bool selected =
-                    m_activePaletteSelection == PaletteSelectionKind::Custom &&
-                    m_activePaletteSchemeIndex == static_cast<int>(i);
+                    palette.m_activePaletteSelection ==
+                        Impl::PaletteEditingSession::PaletteSelectionKind::
+                            Custom &&
+                    palette.m_activePaletteSchemeIndex == static_cast<int>(i);
                 if ( ::MMM::UI::FeedbackSelectable(
                          paletteConfig.schemes[i].name.c_str(), selected) ) {
                     // 加载先同步运行时颜色，再保存应用配置索引。
@@ -4560,10 +4613,10 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::SetNextItemWidth(std::floor(210.0f * dpiScale));
         // 名称编辑本身不重命名方案，需点击保存、新建或重命名提交。
         if ( ImGui::InputText("##ColorPaletteSchemeName",
-                              m_paletteSchemeNameBuffer.data(),
-                              m_paletteSchemeNameBuffer.size()) ) {
+                              palette.m_paletteSchemeNameBuffer.data(),
+                              palette.m_paletteSchemeNameBuffer.size()) ) {
             // 用户修改后清除旧校验错误，等待下一次提交重新验证。
-            m_paletteSchemeErrorKey.clear();
+            palette.m_paletteSchemeErrorKey.clear();
         }
 
         // 方案动作按钮使用统一尺寸，管理动作按当前选择有效性禁用。
@@ -4603,8 +4656,8 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         if ( ::MMM::UI::FeedbackButton(TR("ui.common.delete").data(),
                                        ImVec2(schemeButtonW, schemeButtonH)) ) {
             // 暂存稳定于当前配置快照的索引，确认后再次执行范围检查。
-            m_pendingDeletePaletteSchemeIndex =
-                static_cast<std::size_t>(m_activePaletteSchemeIndex);
+            palette.m_pendingDeletePaletteSchemeIndex =
+                static_cast<std::size_t>(palette.m_activePaletteSchemeIndex);
             ::MMM::UI::FeedbackOpenPopup("DeleteColorPaletteConfirm");
         }
         ImGui::EndDisabled();
@@ -4638,7 +4691,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                      TR("ui.common.confirm").data(),
                      ImVec2(confirmButtonW, schemeButtonH)) ) {
                 // 先复制 optional 再关闭弹窗，随后删除可能重建方案状态。
-                auto pendingIndex = m_pendingDeletePaletteSchemeIndex;
+                auto pendingIndex = palette.m_pendingDeletePaletteSchemeIndex;
                 ImGui::CloseCurrentPopup();
                 if ( pendingIndex ) {
                     deletePaletteScheme(*pendingIndex);
@@ -4649,14 +4702,14 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                      TR("ui.common.cancel").data(),
                      ImVec2(confirmButtonW, schemeButtonH)) ) {
                 // 取消只清除待删索引，不修改配置。
-                m_pendingDeletePaletteSchemeIndex.reset();
+                palette.m_pendingDeletePaletteSchemeIndex.reset();
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
         }
         // 成功读取文件后自动打开名称确认弹窗，已有弹窗不重复 OpenPopup。
         // pending 只在文件解析成功后存在，并驱动名称确认弹窗打开。
-        if ( m_pendingImportedPaletteScheme &&
+        if ( palette.m_pendingImportedPaletteScheme &&
              !ImGui::IsPopupOpen("ImportColorPaletteRename") ) {
             ::MMM::UI::FeedbackOpenPopup("ImportColorPaletteRename");
         }
@@ -4670,18 +4723,19 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
             ImGui::TextUnformatted(
                 TR("ui.toolbar.note_palette.import_rename_prompt").data());
             ImGui::SetNextItemWidth(std::floor(240.0f * dpiScale));
-            if ( ImGui::InputText("##ImportedColorPaletteName",
-                                  m_importPaletteSchemeNameBuffer.data(),
-                                  m_importPaletteSchemeNameBuffer.size()) ) {
+            if ( ImGui::InputText(
+                     "##ImportedColorPaletteName",
+                     palette.m_importPaletteSchemeNameBuffer.data(),
+                     palette.m_importPaletteSchemeNameBuffer.size()) ) {
                 // 名称变化清除旧错误，确认时重新完整校验。
-                m_paletteImportErrorKey.clear();
+                palette.m_paletteImportErrorKey.clear();
             }
-            if ( !m_paletteImportErrorKey.empty() ) {
+            if ( !palette.m_paletteImportErrorKey.empty() ) {
                 // 名称错误使用危险色，并按当前语言即时翻译稳定键。
                 ImGui::PushStyleColor(ImGuiCol_Text,
                                       Utils::UIThemeUtils::getDangerColor());
-                ImGui::TextWrapped("%s",
-                                   TR(m_paletteImportErrorKey.c_str()).data());
+                ImGui::TextWrapped(
+                    "%s", TR(palette.m_paletteImportErrorKey.c_str()).data());
                 ImGui::PopStyleColor();
             }
 
@@ -4692,7 +4746,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                      ImVec2(importButtonW, schemeButtonH)) ) {
                 // 校验失败保留 pending 和弹窗，成功后 optional 被清空。
                 confirmPaletteImport();
-                if ( !m_pendingImportedPaletteScheme ) {
+                if ( !palette.m_pendingImportedPaletteScheme ) {
                     ImGui::CloseCurrentPopup();
                 }
             }
@@ -4701,45 +4755,45 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                      TR("ui.common.cancel").data(),
                      ImVec2(importButtonW, schemeButtonH)) ) {
                 // 取消放弃已读取方案和名称错误，不影响当前活动方案。
-                m_pendingImportedPaletteScheme.reset();
-                m_paletteImportErrorKey.clear();
+                palette.m_pendingImportedPaletteScheme.reset();
+                palette.m_paletteImportErrorKey.clear();
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
         }
         // 普通方案保存或重命名错误显示在主浮层中。
         // 三类状态分别占用独立成员，避免一次操作覆盖另一操作的反馈。
-        if ( !m_paletteSchemeErrorKey.empty() ) {
+        if ( !palette.m_paletteSchemeErrorKey.empty() ) {
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   Utils::UIThemeUtils::getDangerColor());
-            ImGui::TextWrapped("%s",
-                               TR(m_paletteSchemeErrorKey.c_str()).data());
+            ImGui::TextWrapped(
+                "%s", TR(palette.m_paletteSchemeErrorKey.c_str()).data());
             ImGui::PopStyleColor();
         }
         // 导出成功使用普通文本色，失败临时切换危险色。
         // 导出与导入提示都保存稳定翻译键和成功布尔值。语言切换时文本即时
         // 重新翻译，成功态使用普通主题色，失败态使用危险色。提示只反映最近
         // 一次对应操作，不改变方案选择或颜色编辑状态。
-        if ( !m_paletteExportStatusKey.empty() ) {
-            if ( !m_paletteExportSucceeded ) {
+        if ( !palette.m_paletteExportStatusKey.empty() ) {
+            if ( !palette.m_paletteExportSucceeded ) {
                 ImGui::PushStyleColor(ImGuiCol_Text,
                                       Utils::UIThemeUtils::getDangerColor());
             }
-            ImGui::TextWrapped("%s",
-                               TR(m_paletteExportStatusKey.c_str()).data());
-            if ( !m_paletteExportSucceeded ) {
+            ImGui::TextWrapped(
+                "%s", TR(palette.m_paletteExportStatusKey.c_str()).data());
+            if ( !palette.m_paletteExportSucceeded ) {
                 ImGui::PopStyleColor();
             }
         }
         // 导入文件阶段或最终确认结果使用独立状态提示。
-        if ( !m_paletteImportStatusKey.empty() ) {
-            if ( !m_paletteImportSucceeded ) {
+        if ( !palette.m_paletteImportStatusKey.empty() ) {
+            if ( !palette.m_paletteImportSucceeded ) {
                 ImGui::PushStyleColor(ImGuiCol_Text,
                                       Utils::UIThemeUtils::getDangerColor());
             }
-            ImGui::TextWrapped("%s",
-                               TR(m_paletteImportStatusKey.c_str()).data());
-            if ( !m_paletteImportSucceeded ) {
+            ImGui::TextWrapped(
+                "%s", TR(palette.m_paletteImportStatusKey.c_str()).data());
+            if ( !palette.m_paletteImportSucceeded ) {
                 ImGui::PopStyleColor();
             }
         }
@@ -4749,18 +4803,19 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         // 标签页只切换当前编辑槽位集合，不修改任何颜色。
         // 标签页只改变编辑焦点，不影响活动方案和方案名。
         // TabBar 的稳定 ID 与翻译标签分离。标签切换只更新 PaletteTab，具体
-        // 活动槽位分别保存在 m_activeColorSlot 和 m_activeBeatLineColorSlot，
+        // 活动槽位分别保存在 palette.m_activeColorSlot 和
+        // palette.m_activeBeatLineColorSlot，
         // 因此来回切换能恢复各页最后一次编辑位置。
         if ( ImGui::BeginTabBar("##ColorPaletteTabs") ) {
             if ( ImGui::BeginTabItem(
                      TR("ui.toolbar.note_palette.note_tab").data()) ) {
                 // 活动标签页成员供十六进制缓冲身份和后续编辑分支使用。
-                m_activePaletteTab = PaletteTab::Note;
+                palette.m_activePaletteTab = PaletteTab::Note;
                 ImGui::EndTabItem();
             }
             if ( ImGui::BeginTabItem(
                      TR("ui.toolbar.note_palette.beat_line_tab").data()) ) {
-                m_activePaletteTab = PaletteTab::BeatLine;
+                palette.m_activePaletteTab = PaletteTab::BeatLine;
                 ImGui::EndTabItem();
             }
             ImGui::EndTabBar();
@@ -4768,22 +4823,22 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
 
         // 所有色块使用统一 DPI 后方形尺寸。
         const float swatchSize = std::floor(24.0f * dpiScale);
-        if ( m_activePaletteTab == PaletteTab::Note ) {
+        if ( palette.m_activePaletteTab == PaletteTab::Note ) {
             // 笔记标签页按固定槽位枚举顺序展示色块和本地化名称。
             for ( std::size_t i = 0; i < Logic::NOTE_COLOR_SLOT_COUNT; ++i ) {
                 // 数组索引与 NoteColorSlot 连续枚举保持一一对应。
                 auto slot   = static_cast<Logic::NoteColorSlot>(i);
-                bool active = slot == m_activeColorSlot;
+                bool active = slot == palette.m_activeColorSlot;
                 ImGui::PushID(static_cast<int>(i));
                 if ( ::MMM::UI::FeedbackColorButton(
                          "##SlotColor",
-                         toImVec4(m_paletteColors[i]),
+                         toImVec4(palette.m_paletteColors[i]),
                          ImGuiColorEditFlags_NoTooltip |
                              ImGuiColorEditFlags_NoPicker |
                              ImGuiColorEditFlags_AlphaPreviewHalf,
                          ImVec2(swatchSize, swatchSize)) ) {
                     // 点击色块或同行文本都会切换当前编辑槽位。
-                    m_activeColorSlot = slot;
+                    palette.m_activeColorSlot = slot;
                 }
                 ImGui::SameLine();
                 if ( ::MMM::UI::FeedbackSelectable(
@@ -4791,24 +4846,25 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                          active,
                          0,
                          ImVec2(std::floor(150.0f * dpiScale), swatchSize)) ) {
-                    m_activeColorSlot = slot;
+                    palette.m_activeColorSlot = slot;
                 }
                 ImGui::PopID();
             }
         } else {
             // 分拍线标签页使用数组索引映射具体拍分母名称。
-            for ( std::size_t i = 0; i < m_beatLinePaletteColors.size(); ++i ) {
+            for ( std::size_t i = 0; i < palette.m_beatLinePaletteColors.size();
+                  ++i ) {
                 // 分拍线槽位使用索引，因为其标签由分母映射 helper 提供。
-                const bool active = i == m_activeBeatLineColorSlot;
+                const bool active = i == palette.m_activeBeatLineColorSlot;
                 ImGui::PushID(static_cast<int>(i));
                 if ( ::MMM::UI::FeedbackColorButton(
                          "##BeatLineSlotColor",
-                         toImVec4(m_beatLinePaletteColors[i]),
+                         toImVec4(palette.m_beatLinePaletteColors[i]),
                          ImGuiColorEditFlags_NoTooltip |
                              ImGuiColorEditFlags_NoPicker |
                              ImGuiColorEditFlags_AlphaPreviewHalf,
                          ImVec2(swatchSize, swatchSize)) ) {
-                    m_activeBeatLineColorSlot = i;
+                    palette.m_activeBeatLineColorSlot = i;
                 }
                 ImGui::SameLine();
                 if ( ::MMM::UI::FeedbackSelectable(
@@ -4816,7 +4872,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                          active,
                          0,
                          ImVec2(std::floor(150.0f * dpiScale), swatchSize)) ) {
-                    m_activeBeatLineColorSlot = i;
+                    palette.m_activeBeatLineColorSlot = i;
                 }
                 ImGui::PopID();
             }
@@ -4826,20 +4882,21 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
 
         // 当前标签页决定活动数组、槽位索引和颜色变化的下游目标。
         // 以下输入控件通过活动引用复用两类颜色的编辑流程。
-        const bool        editingNote = m_activePaletteTab == PaletteTab::Note;
+        const bool editingNote = palette.m_activePaletteTab == PaletteTab::Note;
         const std::size_t activeSlotIndex =
-            editingNote ? colorSlotIndex(m_activeColorSlot)
-                        : m_activeBeatLineColorSlot;
+            editingNote ? colorSlotIndex(palette.m_activeColorSlot)
+                        : palette.m_activeBeatLineColorSlot;
         // 两套数组都返回可写引用，后续编辑路径可共享控件逻辑。
         // 引用仅在本帧使用，数组和槽位均为 ToolbarView 稳定成员。
-        glm::vec4& activeColor = editingNote
-                                     ? m_paletteColors[activeSlotIndex]
-                                     : m_beatLinePaletteColors[activeSlotIndex];
+        glm::vec4& activeColor =
+            editingNote ? palette.m_paletteColors[activeSlotIndex]
+                        : palette.m_beatLinePaletteColors[activeSlotIndex];
         // 切换槽位或输入框未激活时从实际颜色刷新十六进制缓存。
-        if ( m_colorHexBufferTab != m_activePaletteTab ||
-             m_colorHexBufferSlot != activeSlotIndex ||
-             !m_colorHexInputActive ) {
-            setColorHexBuffer(m_activePaletteTab, activeSlotIndex, activeColor);
+        if ( palette.m_colorHexBufferTab != palette.m_activePaletteTab ||
+             palette.m_colorHexBufferSlot != activeSlotIndex ||
+             !palette.m_colorHexInputActive ) {
+            setColorHexBuffer(
+                palette.m_activePaletteTab, activeSlotIndex, activeColor);
         }
 
         // 选择器显示模式属于 UI 偏好，不写入方案文件。
@@ -4847,13 +4904,13 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::SameLine();
         // RGB 与 HSV 只改变选择器显示模式，不转换或修改当前颜色。
         if ( ::MMM::UI::FeedbackRadioButton("RGB##ColorPaletteMode",
-                                            !m_colorPickerUseHsv) ) {
-            m_colorPickerUseHsv = false;
+                                            !palette.m_colorPickerUseHsv) ) {
+            palette.m_colorPickerUseHsv = false;
         }
         ImGui::SameLine();
         if ( ::MMM::UI::FeedbackRadioButton("HSV##ColorPaletteMode",
-                                            m_colorPickerUseHsv) ) {
-            m_colorPickerUseHsv = true;
+                                            palette.m_colorPickerUseHsv) ) {
+            palette.m_colorPickerUseHsv = true;
         }
 
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.hex").data());
@@ -4862,24 +4919,25 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         // 文本框拒绝空白字符，解析器仍保留首尾空白兼容供其他调用使用。
         // InputText 的即时返回值允许在完整合法文本出现时立即预览。
         bool hexChanged = ImGui::InputText("##PaletteColorHex",
-                                           m_colorHexBuffer.data(),
-                                           m_colorHexBuffer.size(),
+                                           palette.m_colorHexBuffer.data(),
+                                           palette.m_colorHexBuffer.size(),
                                            ImGuiInputTextFlags_CharsNoBlank);
         // 活动标志阻止每帧颜色回写覆盖用户尚未完成的输入。
-        m_colorHexInputActive = ImGui::IsItemActive();
+        palette.m_colorHexInputActive = ImGui::IsItemActive();
         // 即时解析仅在完整合法格式出现时改变颜色。用户输入中间态如单个井号
         // 或不足六位字符保持原色，且不显示错误打断编辑；失活时再恢复规范文本。
         if ( hexChanged ) {
             glm::vec4 parsedColor;
-            if ( parseHexColor(m_colorHexBuffer.data(), parsedColor) ) {
+            if ( parseHexColor(palette.m_colorHexBuffer.data(), parsedColor) ) {
                 // 输入达到合法格式后即时预览，并同步对应运行时目标。
                 activeColor = parsedColor;
                 if ( editingNote ) {
                     // 笔记颜色拖动期间只更新画笔，不反复修改已有选择。
-                    pushColorCommands(m_activeColorSlot, activeColor, false);
+                    pushColorCommands(
+                        palette.m_activeColorSlot, activeColor, false);
                 } else {
                     // 分拍线颜色属于视觉配置，需要启用覆盖并立即提交。
-                    m_overrideBeatLinePalette = true;
+                    palette.m_overrideBeatLinePalette = true;
                     pushBeatLinePaletteToRenderer();
                 }
             }
@@ -4887,24 +4945,24 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         // 文本编辑结束时规范化显示，并对笔记选择提交最终颜色。
         if ( ImGui::IsItemDeactivatedAfterEdit() ) {
             glm::vec4 parsedColor;
-            if ( parseHexColor(m_colorHexBuffer.data(), parsedColor) ) {
+            if ( parseHexColor(palette.m_colorHexBuffer.data(), parsedColor) ) {
                 activeColor = parsedColor;
                 // 合法输入统一格式化为大写且包含 Alpha 的文本。
                 setColorHexBuffer(
-                    m_activePaletteTab, activeSlotIndex, activeColor);
+                    palette.m_activePaletteTab, activeSlotIndex, activeColor);
                 if ( editingNote ) {
                     // 仅在编辑结束时把最终笔记颜色应用到当前选择。
                     pushPaletteToSelection();
                 } else {
-                    m_overrideBeatLinePalette = true;
+                    palette.m_overrideBeatLinePalette = true;
                     pushBeatLinePaletteToRenderer();
                 }
             } else {
                 // 非法输入不改变实际颜色，并恢复对应合法文本。
                 setColorHexBuffer(
-                    m_activePaletteTab, activeSlotIndex, activeColor);
+                    palette.m_activePaletteTab, activeSlotIndex, activeColor);
             }
-            m_colorHexInputActive = false;
+            palette.m_colorHexInputActive = false;
         }
 
         // 颜色选择器始终提供 Alpha，并按用户模式显示 RGB 或 HSV 数值。
@@ -4912,8 +4970,8 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGuiColorEditFlags pickerFlags =
             ImGuiColorEditFlags_AlphaBar |
             ImGuiColorEditFlags_AlphaPreviewHalf |
-            (m_colorPickerUseHsv ? ImGuiColorEditFlags_DisplayHSV
-                                 : ImGuiColorEditFlags_DisplayRGB);
+            (palette.m_colorPickerUseHsv ? ImGuiColorEditFlags_DisplayHSV
+                                         : ImGuiColorEditFlags_DisplayRGB);
 
         // 取色器直接绑定活动数组元素，拖动自然保留本地连续状态。下游更新策略
         // 仍按标签页区分：画笔命令轻量即时，选择修改延迟到手势结束；分拍线
@@ -4922,9 +4980,10 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                  "##PaletteColorPicker", &activeColor.r, pickerFlags) ) {
             // 连续选择器变化即时更新画笔或分拍线渲染预览。
             if ( editingNote ) {
-                pushColorCommands(m_activeColorSlot, activeColor, false);
+                pushColorCommands(
+                    palette.m_activeColorSlot, activeColor, false);
             } else {
-                m_overrideBeatLinePalette = true;
+                palette.m_overrideBeatLinePalette = true;
                 pushBeatLinePaletteToRenderer();
             }
         }
@@ -4957,8 +5016,8 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                              ImGuiColorEditFlags_AlphaPreviewHalf,
                          ImVec2(swatchSize, swatchSize)) ) {
                     // 点击默认色同时切换槽位、恢复颜色并应用到画笔与选择。
-                    m_activeColorSlot  = slot;
-                    m_paletteColors[i] = defaultColor;
+                    palette.m_activeColorSlot  = slot;
+                    palette.m_paletteColors[i] = defaultColor;
                     pushColorCommands(slot, defaultColor, false);
                     pushPaletteToSelection();
                 }
@@ -4981,7 +5040,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                      TR("ui.toolbar.note_palette.clear_custom").data(),
                      ImVec2(std::floor(140.0f * dpiScale), buttonH)) ) {
                 // 清除后本地预览恢复皮肤色，逻辑命令使用空 optional 表达继承。
-                auto slot   = m_activeColorSlot;
+                auto slot   = palette.m_activeColorSlot;
                 activeColor = toVec4(skinColorForSlot(slot));
                 pushColorCommands(slot, std::nullopt, true);
             }
@@ -5024,7 +5083,8 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
             ImGui::TextUnformatted(
                 TR("ui.toolbar.note_palette.beat_line_skin_defaults").data());
             // 分拍线默认色块同样按槽位顺序横向排列。
-            for ( std::size_t i = 0; i < m_beatLinePaletteColors.size(); ++i ) {
+            for ( std::size_t i = 0; i < palette.m_beatLinePaletteColors.size();
+                  ++i ) {
                 if ( i > 0 ) ImGui::SameLine();
                 // 皮肤 helper 包含旧键名兼容和槽位回退。
                 const glm::vec4 defaultColor = toVec4(skinBeatLineColor(i));
@@ -5037,9 +5097,9 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                              ImGuiColorEditFlags_AlphaPreviewHalf,
                          ImVec2(swatchSize, swatchSize)) ) {
                     // 单槽恢复仍启用覆盖，以保留其他自定义分拍线颜色。
-                    m_activeBeatLineColorSlot  = i;
-                    m_beatLinePaletteColors[i] = defaultColor;
-                    m_overrideBeatLinePalette  = true;
+                    palette.m_activeBeatLineColorSlot  = i;
+                    palette.m_beatLinePaletteColors[i] = defaultColor;
+                    palette.m_overrideBeatLinePalette  = true;
                     pushBeatLinePaletteToRenderer();
                 }
                 if ( ImGui::IsItemHovered() ) {
@@ -5052,16 +5112,17 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
             if ( ::MMM::UI::FeedbackButton(
                      TR("ui.toolbar.note_palette.use_skin_beat_lines").data(),
                      ImVec2(std::floor(180.0f * dpiScale), buttonH)) ) {
-                fillBeatLinePaletteWithSkinDefaults(m_beatLinePaletteColors);
-                m_overrideBeatLinePalette = true;
+                fillBeatLinePaletteWithSkinDefaults(
+                    palette.m_beatLinePaletteColors);
+                palette.m_overrideBeatLinePalette = true;
                 pushBeatLinePaletteToRenderer();
             }
         }
 
         // 保存本帧实际尺寸，下一帧定位时用于视口边界夹取。
-        ImVec2 sz          = ImGui::GetWindowSize();
-        m_colorPopupWidth  = sz.x;
-        m_colorPopupHeight = sz.y;
+        ImVec2 sz                  = ImGui::GetWindowSize();
+        palette.m_colorPopupWidth  = sz.x;
+        palette.m_colorPopupHeight = sz.y;
     }
     // Begin 无论是否返回可绘制内容都必须对应 End。
     ImGui::End();
@@ -5387,9 +5448,9 @@ void ToolbarView::drawLayoutButton(float width, float height, bool showLabel,
             m_showLayoutPopup = false;
         } else {
             // 保存进入前工具，并关闭与布局浮层互斥的音效工具。
-            m_toolBeforeLayout    = m_currentTool;
-            m_showLayoutPopup     = true;
-            m_showSoundEffectTool = false;
+            m_toolBeforeLayout            = m_currentTool;
+            m_showLayoutPopup             = true;
+            m_impl->m_soundEffects.m_open = false;
         }
         m_currentTool = nextTool;
         // 视图成员和逻辑引擎通过同一命令保持同步。
@@ -5682,7 +5743,7 @@ void ToolbarView::renderBeatLinePopup(float dpiScale)
             updateEditorConfig(updatedConfig);
             // 记录显式用户选择，供模式历史恢复逻辑使用。
             // 历史对象忽略 Hidden 或按自身规则记录最近可恢复模式。
-            m_beatLineDisplayModeHistory.observe(candidate);
+            m_impl->m_beatLineDisplayModeHistory.observe(candidate);
             appConfig.save();
             // 离散模式已经立即保存，不属于连续滑条脏状态。
             m_beatLinePopupConfigDirty = false;
