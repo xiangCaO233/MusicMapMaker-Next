@@ -128,6 +128,11 @@
  * 时的默认行为。
  */
 
+#if defined(__linux__)
+#    include <csignal>
+#    include <sys/resource.h>
+#endif
+
 namespace
 {
 
@@ -1176,8 +1181,8 @@ bool testSingleAudioExporterCompatibility(
         const MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(boundOSUPath);
         const auto         binding =
             reloaded.m_allNotes.empty()
-                ? std::optional<MMM::AudioSampleBinding>{}
-                : reloaded.m_allNotes.front().get().getSampleBinding();
+                        ? std::optional<MMM::AudioSampleBinding>{}
+                        : reloaded.m_allNotes.front().get().getSampleBinding();
         ok &= check(
             binding.has_value() && binding->m_audioResourceId == "hit.wav",
             "osu! should round-trip a playable sample file");
@@ -1527,6 +1532,44 @@ bool testMMMBeatmapAnnotationsRoundTrip(
                  "MMM player annotation target identity should round-trip");
 }
 
+#if defined(__linux__)
+/// @brief 模拟缓冲写入失败，验证正式保存入口保留已有谱面。
+/// @param source 已可由目标格式正常写出的谱面。
+/// @param path 预先成功写出的目标路径。
+/// @return 写入失败能反馈给会话，并且原谱面字节保持一致时为真。
+/// @details 每种格式先执行公共保存入口的正常路径，确保后续失败来自
+/// 文件流短写，而不是元数据或格式预检先行返回。
+/// Linux 的 RLIMIT_FSIZE 实际影响写系统调用，也覆盖先写入用户态缓冲的输出。
+/// 短写后立即恢复进程设置，使后续格式转换与测试日志继续用正常限额。
+bool testFailedWritePreservesBeatmap(const MMM::BeatMap&          source,
+                                     const std::filesystem::path& path)
+{
+    // 同一入口在短写前后都读取原始字节，保留换行和二进制字段差异。
+    const auto readBytes = [&path] {
+        std::ifstream stream(path, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(stream), {});
+    };
+    const auto before = readBytes();
+    // 允许前 16 字节写入，让其余缓冲在 flush 或 close 时报告短写。
+    struct rlimit saved{};
+    if ( getrlimit(RLIMIT_FSIZE, &saved) != 0 ) return false;
+    // 忽略自动终止信号，让写入将 EFBIG 交回流，由生产事务负责清理。
+    const auto previous = std::signal(SIGXFSZ, SIG_IGN);
+    if ( previous == SIG_ERR ) return false;
+    auto limited        = saved;
+    limited.rlim_cur    = 16;
+    const bool setup    = setrlimit(RLIMIT_FSIZE, &limited) == 0;
+    const bool rejected = setup && !source.saveToFile(path);
+    // 即使断言条件为假也必须恢复，否则会影响同一进程的其他夹具。
+    const bool restored = setrlimit(RLIMIT_FSIZE, &saved) == 0;
+    std::signal(SIGXFSZ, previous);
+    // 只检查存在会接受部分写入，这里要求与原成功产物逐字节一致。
+    return check(
+        restored && rejected && before.size() > 16 && readBytes() == before,
+        "short write should reject save and preserve the original");
+}
+#endif
+
 /// @brief 验证四种受支持谱面格式均能读入并写出另外三种格式。
 /// @param outputDirectory 构建树中的独立测试输出目录。
 /// @return 十二条转换路径均产出可重新读取的普通 Note 时为 true。
@@ -1575,6 +1618,9 @@ bool testBeatmapConverterFormatMatrix(
             ok = false;
             continue;
         }
+#if defined(__linux__)
+        ok &= testFailedWritePreservesBeatmap(source, inputPath);
+#endif
         MMM::BeatMap loaded = MMM::BeatMap::loadFromFile(inputPath);
         // map_path 为空是加载器的失败标志；物件数量验证实际内容被解析。
         if ( !check(!loaded.m_baseMapMetadata.map_path.empty() &&
@@ -1607,6 +1653,16 @@ bool testBeatmapConverterFormatMatrix(
                         "converter matrix output should be readable");
         }
     }
+#if defined(__linux__)
+    // BMS 保持独立于四格式转换矩阵，也需验证文本流缓冲关闭错误。
+    // BMS 积分读取 BPM 事件参数，其他四种格式还使用已派生的 m_bpm。
+    timing.m_timingEffect          = MMM::TimingEffect::BPM;
+    timing.m_timingEffectParameter = 120.0;
+    const auto bmsPath             = outputDirectory / "Converter_4k_Test.bms";
+    ok &=
+        check(source.saveToFile(bmsPath), "prepare BMS short-write baseline") &&
+        testFailedWritePreservesBeatmap(source, bmsPath);
+#endif
     return ok;
 }
 

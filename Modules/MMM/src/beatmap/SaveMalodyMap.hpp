@@ -1,5 +1,7 @@
 #pragma once
 
+#include "mmm/beatmap/BeatmapOutputFile.h"
+
 #include "MalodyInitialTiming.h"
 #include "MalodyVolume.h"
 
@@ -380,25 +382,25 @@ inline bool buildMalodyMapDocument(const BeatMap& beatMap, json& fileData,
     int trackCount = static_cast<int>(beatMap.m_baseMapMetadata.track_count);
     if ( trackCount <= 0 ) trackCount = 4;
 
-    const double defaultXW     = trackCount == 4   ? 64.0
-                                 : trackCount == 5 ? 51.0
-                                 : trackCount == 6 ? 43.0
-                                 : trackCount == 7
-                                     ? 36.5
-                                     : 256.0 / static_cast<double>(trackCount);
-    const int    defaultWW     = trackCount == 4   ? 60
-                                 : trackCount == 5 ? 50
-                                 : trackCount == 6 ? 40
-                                 : trackCount == 7 ? 30
-                                 : trackCount == 8
-                                     ? 20
-                                     : static_cast<int>(std::round(defaultXW));
-    const int defaultLongNoteW = trackCount == 7 || trackCount == 8
-                                     ? defaultWW
-                                     : static_cast<int>(std::round(defaultXW));
-    const int defaultFlickW    = trackCount == 7   ? 30
-                                 : trackCount == 8 ? 20
-                                                   : defaultWW;
+    const double defaultXW        = trackCount == 4   ? 64.0
+                                    : trackCount == 5 ? 51.0
+                                    : trackCount == 6 ? 43.0
+                                    : trackCount == 7
+                                        ? 36.5
+                                        : 256.0 / static_cast<double>(trackCount);
+    const int    defaultWW        = trackCount == 4   ? 60
+                                    : trackCount == 5 ? 50
+                                    : trackCount == 6 ? 40
+                                    : trackCount == 7 ? 30
+                                    : trackCount == 8
+                                        ? 20
+                                        : static_cast<int>(std::round(defaultXW));
+    const int    defaultLongNoteW = trackCount == 7 || trackCount == 8
+                                        ? defaultWW
+                                        : static_cast<int>(std::round(defaultXW));
+    const int    defaultFlickW    = trackCount == 7   ? 30
+                                    : trackCount == 8 ? 20
+                                                      : defaultWW;
 
     /// @brief 将轨道索引转换为 mode 7 的 x 坐标。
     /// @return 256 宽虚拟画布中的最近整数中心坐标。
@@ -1400,7 +1402,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     if ( !buildMalodyMapDocument(beatMap, fileData, audioLeadInMilliseconds) )
         return false;
     // 所有兼容检查和 JSON 构造成功后才打开目标路径。
-    std::ofstream ofs(path);
+    Internal::BeatmapOutputFile staged(path);
+    auto&                       ofs = staged.stream();
     if ( !ofs.is_open() ) {
         XERROR("Failed to open file [{}] for Malody map write",
                Config::pathToUtf8(path));
@@ -1408,6 +1411,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     }
     // 四空格缩进便于版本控制审阅，语义不依赖排版。
     ofs << fileData.dump(4);
+    if ( !staged.commit() ) return false;
     XINFO("Successfully saved map to {}", Config::pathToUtf8(path));
     return true;
 }

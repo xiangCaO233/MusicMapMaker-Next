@@ -1,5 +1,7 @@
 #pragma once
 
+#include "mmm/beatmap/BeatmapOutputFile.h"
+
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
@@ -190,7 +192,8 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
     }
 
     // 全部领域可表达性预检完成后才创建或截断目标文件。
-    std::ofstream ofs(path);
+    Internal::BeatmapOutputFile staged(path);
+    auto&                       ofs = staged.stream();
     if ( !ofs.is_open() ) {
         XWARN("打开文件[{}]进行写出失败", Config::pathToUtf8(path));
         return false;
@@ -448,9 +451,11 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
         }
     }
 
-    // 流在函数退出时关闭；到达此处表示所有预检与字段写入路径完成。
+    // 先确认关闭时的缓冲写入，再记录目标文件已替换。
+    // 文件尾部包含最后一批 HitObject；短写即使仍能被加载也必须拒绝。
+    // 暂存文件不会被重新打开为谱面，避免目录扫描登记部分导出结果。
+    if ( !staged.commit() ) return false;
     XINFO("Successfully saved osu map to {}", Config::pathToUtf8(path));
-    // 调用方可根据 true 继续登记输出资源，false 分支均已在此前返回。
     // 文件内容的重新加载一致性由独立 OSUConsistencyTest 覆盖。
     return true;
 }
