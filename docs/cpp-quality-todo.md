@@ -701,7 +701,9 @@
 
 ### P3 · R28 · 公开 Clipper 是不写输出的占位节点
 
-- [ ] 可构造并接入效果链，却不写目标缓冲；复用目标可保留旧样本。主仓未定位到实际使用者。明确可用性或实现削波，以非零旧目标缓冲测试预期输出。
+- [x] 可构造并接入效果链，却不写目标缓冲；复用目标可保留旧样本。主仓未定位到实际使用者。明确可用性或实现削波，以非零旧目标缓冲测试预期输出。
+
+  已验证。Linux RelWithDebInfo ICE 独立全量构建和 3 项 CTest 通过。新回归以非零旧目标覆盖双声道削波、满块、短块及空块，验证 NaN 静音、正负无穷限幅、非活动后缀保持和回调零堆操作。旧占位实现运行同一回归产生 44 个活动样本断言失败。 主仓 Linux 全量构建和 6 项音频回归通过。ICE 来源 [IonCachyEngine #11](https://github.com/xiangCaO233/IonCachyEngine/pull/11)，指针指向合并提交 `483e0f8c2b438df0276477153f486b363f8f9e11`。默认构建采用仓库内的预编译 ICE，源码修复待指定环境刷新预编译包后才由默认构建使用。
 
 [3rdpty/sources/IonCachyEngine/include/ice/core/effect/Clipper.hpp:9](../3rdpty/sources/IonCachyEngine/include/ice/core/effect/Clipper.hpp#L9) [3rdpty/sources/IonCachyEngine/src/ice/core/effect/Clipper.cpp:10](../3rdpty/sources/IonCachyEngine/src/ice/core/effect/Clipper.cpp#L10) [3rdpty/sources/IonCachyEngine/src/ice/core/effect/IEffectNode.cpp:71](../3rdpty/sources/IonCachyEngine/src/ice/core/effect/IEffectNode.cpp#L71)
 
