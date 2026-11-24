@@ -251,7 +251,7 @@
   - 验收：Windows 超 MAX_PATH 的可执行路径、macOS 符号链接启动、Linux procfs 失败均有明确一致结果；日志初始化顺序与资源相对路径行为保持兼容。
   - 已复用 Config 查询，并修复原生启动探针在主线复现的日志退出析构顺序问题。Linux 全量构建、9 项 CTest、符号链接与缺少 procfs 启动探针通过。debsrv MSVC 交叉编译后，Wine 中 288 字符中文路径与正常退出均通过。AppleClang ARM64 最低部署目标 11.0 全量构建、7 项 CTest、符号链接启动和正常退出均通过。
 
-- [ ] **PLAT-06（P3）窗口平台状态策略仍直接驻留通用渲染文件**
+- [x] **PLAT-06（P3）窗口平台状态策略仍直接驻留通用渲染文件**
 
   - 位置：`Modules/Game/Graphic/src/imguivk/VKRendererRender.cpp:526-612`、`:623-665`；`Modules/Game/Graphic/src/glfw/NativeWindow.cpp:760-805`、`:1700-1725`、`:1775-1815`。
   - 行为：Vulkan renderer 同时承担 HWND property、ShowWindow/SetWindowPos/SetForegroundWindow；`MMMRestoreMaximizedAfterMinimize` 常量分别出现在 renderer、NativeWindow（:274）和 Win32WindowAdapter（:31）。平台适配器已经存在，但最大化恢复协议仍跨三处维护。
@@ -260,7 +260,8 @@
 
   - 窗口组激活、浮动视口外观、启动窗裁剪和最大化恢复状态已迁到 GLFW 窗口层及 Win32 适配器。恢复意图只维护一份 HWND 属性。最小化的工具窗以无激活方式恢复，组内最后一次前台请求交给主窗。通用 Vulkan 录制代码只收集视口并发起窗口动作。
   - Linux Clang 22 RelWithDebInfo 全量构建和 11 项相关 CTest 通过。X11 与 Weston Wayland 窗口探针通过；X11 的由窗口管理器决定的焦点表现与原操作序列一致。原生 macOS arm64、部署目标 11.0 的探针验证了启动窗、模拟最大化和还原。
-  - Windows 在 debsrv 现有 MSVC-clang Runner 交叉编译，Wine 探针通过任务栏所有者、`WM_SYSCOMMAND` 恢复最大化、最小化浮窗恢复及主窗焦点验证。真实 Windows Explorer 任务栏交互尚待实机验收。两台 Runner 已恢复到验证前提交。
+  - Windows 在 debsrv 现有 MSVC-clang Runner 交叉编译，Wine 探针通过任务栏所有者、`WM_SYSCOMMAND` 恢复最大化、最小化浮窗恢复及主窗焦点验证。两台 Runner 已恢复到验证前提交。
+  - 以 `a7ea17b3` 在 debsrv 原有 Runner 容器重新交叉编译窗口探针，链接 #218 的实际 `NativeWindow` 和 Win32 适配器。Windows 10 22H2（19045）原生 Explorer 回归通过。实际点击任务栏完成最小化及恢复，再从 Explorer 窗口缩略图的系统菜单最小化并从任务栏恢复。两轮均恢复为最大化，浮动视口正常恢复，主窗保持前台和键盘焦点。探针针对原生窗口行为，不初始化 Vulkan 渲染。
   - 注释／代码行数分别为 `NativeWindow.h` 123/102、`NativeWindow.cpp` 578/1110、`Win32WindowAdapter.h` 86/65、`Win32WindowAdapter.cpp` 301/634、`VKRendererRender.cpp` 292/659，均达到 30%。
 
 - [x] **PLAT-07（P3）致命提示接口的平台实现不完整**
