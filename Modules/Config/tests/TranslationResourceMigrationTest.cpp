@@ -139,6 +139,55 @@ int main(int argc, char* argv[])
                 "完成标记存在时不得重复执行删除");
     ok &= check(std::filesystem::is_regular_file(firstChinese),
                 "一次性迁移不得误删后来创建的覆写文件");
+    // 皮肤本身是真实目录，只有中间的 lang 指向另一个目录。
+    // 原实现会沿目录链接删除共享语言文件，故断言外部哨兵和可重试标记。
+    // 本场景使用独立根及标记，否则前置成功场景会直接触发快速返回。
+    // 共享目录与皮肤根同属构建树，但相互独立，不触碰用户皮肤。
+    const auto linkRoot = outputRoot / "linked-skins";
+    // 外部根单独命名，确保候选皮肤枚举不会把共享目标当作正常皮肤。
+    const auto sharedLang = outputRoot / "shared-lang";
+    const auto parent     = linkRoot / "linked/resources";
+    const auto linkMarker = outputRoot / ".linked-marker";
+    // 选择迁移确实会删除的文件名，防止无关哨兵无法检出越界删除。
+    const auto sentinel = sharedLang / "zh_cn.lua";
+    ok &= check(writeFile(sentinel, "return { shared = true }"),
+                "共享哨兵写入失败");
+    // 先创建真实 resources 父目录，再单独把 lang 设置为目录链接。
+    std::filesystem::create_directories(parent, filesystemError);
+    ok &= check(!filesystemError, "链接父目录创建失败");
+    // 创建时传完整的外部目录，测试不依赖相对链接的基准解析。
+    std::filesystem::create_directory_symlink(
+        sharedLang, parent / "lang", filesystemError);
+#if defined(_WIN32)
+    // 无开发者模式或提升权限的 Windows 环境不能创建符号链接。
+    if ( !filesystemError )
+#else
+    ok &= check(!filesystemError, "目录符号链接创建失败");
+#endif
+    {
+        // 禁止仅靠返回错误判断安全；必须同时验证真实外部文件还在。
+        // 标记不存在意味着下次启动仍有机会迁移这份本地皮肤。
+        const auto blocked = MMM::Config::migrateLegacySkinTranslationFiles(
+            linkRoot, translationsRoot, linkMarker);
+        ok &= check(!blocked.completed &&
+                        std::filesystem::is_regular_file(sentinel) &&
+                        !std::filesystem::exists(linkMarker),
+                    "外部翻译必须保留，且迁移可重试");
+        // 用户将链接改回本地文件后再次迁移；旧共享目录不能受到影响。
+        // 删除的是目录链接本身，外部哨兵不能被测试清理步骤遮蔽。
+        std::filesystem::remove(parent / "lang", filesystemError);
+        ok &= check(!filesystemError &&
+                        writeFile(parent / "lang/zh_cn.lua", "return {}"),
+                    "替换为皮肤内目录失败");
+        // 使用原根和标记再次调用，检查恢复后的正常删除路径。
+        const auto retry = MMM::Config::migrateLegacySkinTranslationFiles(
+            linkRoot, translationsRoot, linkMarker);
+        // 外部哨兵经历失败和成功两个阶段都应保持原状。
+        ok &= check(retry.completed &&
+                        !std::filesystem::exists(parent / "lang/zh_cn.lua") &&
+                        std::filesystem::is_regular_file(sentinel),
+                    "重试只清除皮肤内翻译");
+    }
     // 二次调用后的保留文件是一次性语义的最终行为证据。
     // 测试输出留在构建目录供失败诊断，下次运行会在开头安全重建。
     // 聚合返回码让所有后置断言执行完毕并保留完整失败日志。

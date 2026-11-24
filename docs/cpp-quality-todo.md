@@ -130,11 +130,13 @@
 
   修复与测试已落地。适配器析构注销订阅，在途回调只访问独立状态；Windows x64 探针在 Wine 下验证旧窗口销毁、重建以及新旧命中区域。原生 Win10 CTest 待验收。
 
-- [ ] **R47 · P1 · 皮肤翻译迁移可能删除皮肤根之外的同名文件**
+- [x] **R47 · P1 · 皮肤翻译迁移可能删除皮肤根之外的同名文件**
 
   启动清理仅检查皮肤条目本身，随后通过 resources/lang 等中间目录删除旧文件。用户以目录链接共享资源时，删除会作用于链接指向的位置。 限定迁移操作可达的真实父目录，处理目录链接及 Windows 重解析点，无法确认归属时保留文件。正常旧翻译可清理；共享目录中的哨兵文件保留，失败后可重试。
 
   [TranslationResourceMigration.cpp L119](../Modules/Config/src/skin/TranslationResourceMigration.cpp#L119)、[main.cpp L598](../Modules/Main/src/main.cpp#L598)
+
+  已验证。逐级检查皮肤父目录，拒绝目录链接和 Windows 目录重解析点。Linux 回归验证外部哨兵保留且修复目录后可重试；Win32 实现通过交叉编译检查。
 
 - [ ] **R48 · P1 · 插件倍速导出失败可截断已有目标音频**
 

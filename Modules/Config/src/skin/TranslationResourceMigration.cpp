@@ -8,6 +8,10 @@
 #include <string_view>
 #include <utility>
 
+#if defined(_WIN32)
+#    include <windows.h>
+#endif
+
 namespace MMM::Config
 {
 namespace
@@ -28,6 +32,43 @@ constexpr std::array<std::string_view, 2> DEFAULT_TRANSLATION_FILE_NAMES{
 constexpr std::array<std::string_view, 2> LEGACY_TRANSLATION_RELATIVE_PATHS{
     "resources/lang/en_us.lua", "resources/lang/zh_cn.lua"
 };
+
+/// @brief 查询路径本身，拒绝包括 Windows junction 在内的重定向目录。
+/// @param path 要检查的单级目录；调用方已从可信根检查其父目录。
+/// @param error 查询错误或链接拒绝原因，正常缺失时保持为空。
+/// @return 真表示可以继续检查子目录；缺失或普通非目录返回假。
+/// @details 不确认归属的条目标记错误，使启动迁移可以在修复后重试。
+bool isPlainMigrationDirectory(const std::filesystem::path& path,
+                               std::error_code&             error)
+{
+    // 查询对象自身，避免 status 跟随链接并把外部目录误认作本地目录。
+    // 旧版本允许皮肤缺少任一资源层级，此情况无需迁移，也可正常完成。
+    const auto status = std::filesystem::symlink_status(path, error);
+    if ( error == std::errc::no_such_file_or_directory ) error.clear();
+    if ( error ) return false;
+    // 将拒绝与普通缺失区分，保留启动重试机会。
+    if ( std::filesystem::is_symlink(status) ) {
+        error = std::make_error_code(std::errc::too_many_symbolic_link_levels);
+        return false;
+    }
+    if ( !std::filesystem::is_directory(status) ) return false;
+#if defined(_WIN32)
+    // 标准库的文件类型不能识别所有目录重解析点，尤其是目录 junction。
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    // Win32 查询失败时没有足够信息证明目录可安全进入。
+    if ( attributes == INVALID_FILE_ATTRIBUTES ) {
+        error = std::error_code(static_cast<int>(GetLastError()),
+                                std::system_category());
+        return false;
+    }
+    // 所有目录重解析点都保留，迁移不依赖特定供应商的重解析标签。
+    if ( attributes & FILE_ATTRIBUTE_REPARSE_POINT ) {
+        error = std::make_error_code(std::errc::too_many_symbolic_link_levels);
+        return false;
+    }
+#endif
+    return true;
+}
 
 /// @brief 生成迁移失败结果。
 /// @param message 失败原因。
@@ -98,6 +139,10 @@ TranslationResourceMigrationResult migrateLegacySkinTranslationFiles(
     // 只有前置资源验证全部通过后才创建结果并开始遍历用户皮肤。
     // removedFiles 默认空，随后只追加 remove 明确返回 true 的路径。
     TranslationResourceMigrationResult result;
+    // 从可信根开始验证每一级父目录，不能只检查单个皮肤入口。
+    // 即便调用方传入自定义皮肤目录，根自身也不能是将遍历重定向的链接。
+    if ( !isPlainMigrationDirectory(skinsRoot, filesystemError) )
+        return migrationError("无法确认用户皮肤目录：" + pathToUtf8(skinsRoot));
     // directory_iterator 构造失败通常代表根目录缺失或权限不足，不能写标记。
     fs::directory_iterator skinDirectoryIt(skinsRoot, filesystemError);
     if ( filesystemError ) {
@@ -106,6 +151,7 @@ TranslationResourceMigrationResult migrateLegacySkinTranslationFiles(
                               filesystemError.message());
     }
 
+    // 枚举一级皮肤目录即可；不递归扫描任意用户文件。
     const fs::directory_iterator end;
     // 使用增量 error_code 迭代，任一目录读取失败都会中止并保留未完成状态。
     for ( ; skinDirectoryIt != end;
@@ -115,10 +161,18 @@ TranslationResourceMigrationResult migrateLegacySkinTranslationFiles(
             return migrationError("遍历用户皮肤目录失败：" +
                                   filesystemError.message());
         }
-        // 跳过符号链接防止迁移越出 skins 根；普通文件同样不是皮肤目录。
-        if ( skinDirectoryIt->is_symlink(filesystemError) || filesystemError ||
-             !skinDirectoryIt->is_directory(filesystemError) ) {
-            // 清除条目级错误后继续下一项，单个特殊条目不阻止其他皮肤迁移。
+        // 使用枚举到的绝对或相对原生路径，避免把非 ASCII 名称来回转码。
+        const auto& skin = skinDirectoryIt->path();
+        // 逐级查询路径本身。只要有一级不是实际目录，就不访问其子项。
+        if ( !isPlainMigrationDirectory(skin, filesystemError) ||
+             !isPlainMigrationDirectory(skin / "resources", filesystemError) ||
+             !isPlainMigrationDirectory(skin / "resources" / "lang",
+                                        filesystemError) ) {
+            // 留下首个无法迁移的皮肤并继续检查其他皮肤，重试时已清理条目是空操作。
+            // 跳过时清除错误码，使下一次目录迭代能够独立报告自身失败。
+            if ( filesystemError && result.errorMessage.empty() )
+                result.errorMessage =
+                    "无法确认旧版翻译目录：" + pathToUtf8(skin);
             filesystemError.clear();
             continue;
         }
@@ -127,7 +181,20 @@ TranslationResourceMigrationResult migrateLegacySkinTranslationFiles(
         for ( const auto relativePath : LEGACY_TRANSLATION_RELATIVE_PATHS ) {
             const fs::path legacyFile =
                 skinDirectoryIt->path() / utf8ToPath(std::string(relativePath));
-            // remove 对不存在路径返回 false，仍属于无需记录的成功状态。
+            // 只清理普通文件。若固定名称被用于目录或用户链接，将其原样保留。
+            // 固定语言名不代表条目必然属于旧版安装内容。
+            const auto status = fs::symlink_status(legacyFile, filesystemError);
+            if ( filesystemError == std::errc::no_such_file_or_directory )
+                filesystemError.clear();
+            if ( filesystemError ) {
+                result.errorMessage =
+                    "无法查询旧版皮肤翻译文件：" + pathToUtf8(legacyFile);
+                filesystemError.clear();
+                continue;
+            }
+            // 缺失文件可能已在之前的部分迁移中清理，允许直接进入下一项。
+            if ( !fs::is_regular_file(status) ) continue;
+            // 删除仅从已确认的父目录发起，且只尝试这一个旧文件名。
             const bool removed = fs::remove(legacyFile, filesystemError);
             if ( filesystemError ) {
                 // 删除失败时不写完成标记，使下次启动仍可重试未完成迁移。
@@ -139,6 +206,13 @@ TranslationResourceMigrationResult migrateLegacySkinTranslationFiles(
             if ( removed ) result.removedFiles.push_back(legacyFile);
         }
     }
+
+    // increment 失败可能直接使迭代器成为 end，必须在循环外再次检查。
+    if ( filesystemError )
+        result.errorMessage =
+            "遍历用户皮肤目录失败：" + filesystemError.message();
+    // 同一轮已完成的删除仍会报告给调用方；标记仅在无遗留风险时写出。
+    if ( !result.errorMessage.empty() ) return result;
 
     // 所有皮肤处理成功后再创建标记父目录，标记代表完整事务已结束。
     fs::create_directories(markerPath.parent_path(), filesystemError);
@@ -156,7 +230,11 @@ TranslationResourceMigrationResult migrateLegacySkinTranslationFiles(
     }
     // 版本文本供人工诊断，存在性仍是当前迁移流程的快速判断依据。
     markerFile << "translation-layout-v2\n";
+    // 必须观察 flush 和 close 的结果；成功 open 不能证明最终内容落盘。
+    markerFile.close();
     if ( !markerFile.good() ) {
+        // 尽力撤销失败的标记，否则下次启动可能把部分写入视为成功。
+        fs::remove(markerPath, filesystemError);
         // 写入失败可能留下空文件；结果仍标为失败供启动界面提示。
         return migrationError("翻译资源迁移标记写入失败：" +
                               pathToUtf8(markerPath));
