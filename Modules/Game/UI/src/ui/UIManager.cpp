@@ -47,6 +47,7 @@
 #include "ui/layout/CLayWrapperCore.h"
 #include "ui/plugin/ToolPluginView.h"
 #include "ui/project/ProjectDropRouter.h"
+#include "ui/project/ProjectUiLifecycleState.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughService.h"
@@ -54,63 +55,144 @@
 #include "ui/walkthrough/WelcomeView.h"
 #include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
+#include <atomic>
 #include <concurrentqueue.h>
 #include <ice/thread/ThreadPool.hpp>
 #include <latch>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace MMM::UI
 {
-/// @brief 项目生命周期传递的私有重状态，避免向视图传播完整项目与队列实现。
-/// @details
-/// 队列仍使用原有同步方式；每帧注册表、观察指针与原子标志保留在管理器中。
+/// @brief 分别持有视图所有权与工程工作区状态，仅在管理器初始化时分配。
 struct UIManager::Impl {
-    /// @brief 平台工厂仅在初始化时选择布局策略，不在各视图内判断 Android。
-    std::unique_ptr<IWorkspacePresentation> m_workspacePresentation{
-        createWorkspacePresentation()
+    /// @brief UI 线程注册的视图及其有序索引。
+    /// @details 注册表独占视图。能力索引记录同一个视图的名字，
+    /// 以便注销时同时收回绘制和纹理入口。
+    /// 帧准备和离屏录制缓存只借用视图。回到主线程并等待任务完成后才允许
+    /// 遍历后的注销阶段销毁视图。
+    struct ViewRegistry {
+        /// @brief 所有ui接口
+        std::unordered_map<std::string, std::unique_ptr<IUIView>> m_uiviews;
+
+        /// @brief ui接口注册顺序
+        std::vector<std::string> m_uiSequence;
+
+        /// @brief 可再渲染ui接口注册顺序
+        std::vector<std::string> m_renderableUiSequence;
+
+        /// @brief 主线程筛选的本帧离屏任务，工作线程完成前借用的视图保持有效。
+        mutable std::vector<IRenderableView*> m_frameOffscreenRecordViews;
+
+        /// @brief 纹理加载器接口注册顺序
+        std::vector<std::string> m_textureLoaderSequence;
+
+        /// @brief 每帧可预先准备 UI 数据的候选视图缓存。
+        std::vector<IParallelUiPreparable*> m_uiPrepareCandidates;
+
+        /// @brief 当前帧实际需要执行准备任务的视图缓存。
+        std::vector<IParallelUiPreparable*> m_uiPrepareViews;
+
+        /// @brief 当前帧必须在 UI 主线程执行准备的视图缓存。
+        std::vector<IParallelUiPreparable*> m_mainThreadUiPrepareViews;
+
+        /// @brief 当前帧允许在线程池执行准备的纯数据视图缓存。
+        std::vector<IParallelUiPreparable*> m_parallelUiPrepareViews;
+
+        /// @brief 借用已注册的视图。仅在 UI 线程查找，结果随注销失效。
+        /// @warning 帧路径只做一次哈希查找，不分配内存。
+        [[nodiscard]] IUIView* find(const std::string& name) const
+        {
+            const auto entry = m_uiviews.find(name);
+            return entry == m_uiviews.end() ? nullptr : entry->second.get();
+        }
     };
-    /// @brief 跨线程投递到 UI 的项目生命周期快照。
-    struct ProjectUiLifecycleUpdate {
-        /// @brief 本次更新类型。
-        ProjectUiLifecycleKind kind{ ProjectUiLifecycleKind::Closed };
 
-        /// @brief 事件对应的项目路径。
-        std::filesystem::path projectRoot;
+    /// @brief 接收逻辑线程通知，并由 UI 线程归约和恢复项目工作区。
+    /// @details 加载完成事件携带值快照，恢复过程中不用借用逻辑线程的工程。
+    /// 加载进度与生命周期分别投递。只有生命周期队列决定活动工程归属。
+    struct ProjectWorkspaceCoordinator {
+        /// @brief 平台工厂仅在初始化时选择布局策略，不在各视图内判断 Android。
+        std::unique_ptr<IWorkspacePresentation> m_workspacePresentation{
+            createWorkspacePresentation()
+        };
+        /// @brief 跨线程投递到 UI 的项目生命周期快照。
+        struct ProjectUiLifecycleUpdate {
+            /// @brief 本次更新类型。
+            ProjectUiLifecycleKind kind{ ProjectUiLifecycleKind::Closed };
 
-        /// @brief 加载完成时复制的项目工作区。
-        ProjectWorkspaceState workspace;
+            /// @brief 事件对应的项目路径。
+            std::filesystem::path projectRoot;
 
-        /// @brief 加载完成时复制的项目音频资源，用于恢复音轨控制器。
-        std::vector<AudioResource> audioResources;
+            /// @brief 加载完成时复制的项目工作区。
+            ProjectWorkspaceState workspace;
 
-        /// @brief 是否包含可用于恢复的项目快照。
-        bool hasProjectSnapshot{ false };
+            /// @brief 加载完成时复制的项目音频资源，用于恢复音轨控制器。
+            std::vector<AudioResource> audioResources;
+
+            /// @brief 是否包含可用于恢复的项目快照。
+            bool hasProjectSnapshot{ false };
+        };
+
+        /// @brief 等待 UI 线程应用的新项目工作区快照。
+        ProjectWorkspaceState m_pendingProjectWorkspace;
+        /// @brief 与待应用工作区一起捕获的项目音频资源快照。
+        std::vector<AudioResource> m_pendingProjectAudioResources;
+        /// @brief 项目生命周期跨线程更新队列。
+        moodycamel::ConcurrentQueue<ProjectUiLifecycleUpdate>
+            m_pendingProjectLifecycleUpdates;
+        /// @brief 项目加载进度跨线程更新队列。
+        moodycamel::ConcurrentQueue<ProjectOpenProgressState>
+            m_pendingProjectOpenProgressUpdates;
+        /// @brief 项目开始打开事件订阅 ID。
+        Event::SubscriptionID m_projectOpenStartedSubId{ 0 };
+        /// @brief 项目加载进度事件订阅 ID。
+        Event::SubscriptionID m_projectOpenProgressSubId{ 0 };
+        /// @brief 项目加载完成事件订阅 ID。
+        Event::SubscriptionID m_projectLoadedSubId{ 0 };
+        /// @brief 项目关闭完成事件订阅 ID。
+        Event::SubscriptionID m_projectClosedSubId{ 0 };
+        /// @brief 项目打开失败事件订阅 ID。
+        Event::SubscriptionID m_projectOpenFailedSubId{ 0 };
+        /// @brief 临时项目保存到正式目录事件订阅 ID。
+        Event::SubscriptionID m_temporaryProjectSaveResultSubId{ 0 };
+        /// @brief 上一次已应用项目工作区的项目路径。
+        std::string m_workspaceProjectPath;
+
+        /// @brief 当前 UI 已确认加载完成的项目根目录。
+        std::filesystem::path m_activeProjectRoot;
+
+        /// @brief UI 线程归约后的项目生命周期状态。
+        ProjectUiLifecycleState m_projectLifecycleState;
+
+        /// @brief 是否有加载完成后的项目工作区等待应用。
+        bool m_projectWorkspaceRestorePending{ false };
+
+        /// @brief UI 线程当前展示的项目加载进度。
+        ProjectOpenProgressState m_projectOpenProgress;
+
+        /// @brief 逻辑线程已经发起、但 UI 线程可能尚未消费的项目切换标志。
+        /// @warning 写入者为逻辑线程生命周期回调，读取者为 UI 线程；用于阻止
+        /// 同一 UI 帧后半段继续读取已关闭项目，必须使用跨线程原子同步。
+        std::atomic_bool m_projectTransitionSignal{ false };
+
+        /// @brief 无项目默认工作区是否已经应用。
+        bool m_noProjectWorkspaceDefaultApplied{ false };
+        /// @brief 下一次允许捕获项目工作区的 ImGui 时间。
+        double m_nextWorkspaceCaptureTime{ 0.0 };
+
+        /// @brief 在 UI 线程按到达顺序归约通知并准备待恢复快照。
+        /// @warning 每帧消费队列，只移动已有数据，不执行文件 I/O。
+        void consumePendingUpdates();
     };
 
-    /// @brief 等待 UI 线程应用的新项目工作区快照。
-    ProjectWorkspaceState m_pendingProjectWorkspace;
-    /// @brief 与待应用工作区一起捕获的项目音频资源快照。
-    std::vector<AudioResource> m_pendingProjectAudioResources;
-    /// @brief 项目生命周期跨线程更新队列。
-    moodycamel::ConcurrentQueue<ProjectUiLifecycleUpdate>
-        m_pendingProjectLifecycleUpdates;
-    /// @brief 项目加载进度跨线程更新队列。
-    moodycamel::ConcurrentQueue<ProjectOpenProgressState>
-        m_pendingProjectOpenProgressUpdates;
-    /// @brief 项目开始打开事件订阅 ID。
-    Event::SubscriptionID m_projectOpenStartedSubId{ 0 };
-    /// @brief 项目加载进度事件订阅 ID。
-    Event::SubscriptionID m_projectOpenProgressSubId{ 0 };
-    /// @brief 项目加载完成事件订阅 ID。
-    Event::SubscriptionID m_projectLoadedSubId{ 0 };
-    /// @brief 项目关闭完成事件订阅 ID。
-    Event::SubscriptionID m_projectClosedSubId{ 0 };
-    /// @brief 项目打开失败事件订阅 ID。
-    Event::SubscriptionID m_projectOpenFailedSubId{ 0 };
-    /// @brief 临时项目保存到正式目录事件订阅 ID。
-    Event::SubscriptionID m_temporaryProjectSaveResultSubId{ 0 };
+    /// @brief 注册视图在工作区状态及 UI 服务释放之前销毁。
+    ViewRegistry m_views;
+    /// @brief 队列与恢复状态在管理器整个生命周期内保持稳定。
+    ProjectWorkspaceCoordinator m_workspace;
+
     /// @brief 原生窗口焦点状态事件订阅 ID。
     Event::SubscriptionID m_nativeWindowFocusSubId{ 0 };
 };
@@ -468,7 +550,7 @@ Walkthrough::Spotlight& UIManager::walkthroughSpotlight()
 /// @brief 返回管理器独占的外壳策略，不复制所有权或重新选择平台。
 IWorkspacePresentation& UIManager::workspacePresentation()
 {
-    return *m_impl->m_workspacePresentation;
+    return *m_impl->m_workspace.m_workspacePresentation;
 }
 
 /// @brief 构造 UI 管理器、引导服务、拖放路由并订阅项目生命周期事件。
@@ -506,20 +588,21 @@ UIManager::UIManager() : m_impl(std::make_unique<Impl>())
 
     // 保存所有订阅 ID，析构时逐项精确注销。
     auto& eventBus = Event::EventBus::instance();
-    m_impl->m_projectOpenStartedSubId =
+    m_impl->m_workspace.m_projectOpenStartedSubId =
         eventBus.subscribe<Event::ProjectOpenStartedEvent>(
             [this](const Event::ProjectOpenStartedEvent& event) {
                 // 发布 transition 信号让同帧其他视图立即停止读取旧项目。
-                m_projectTransitionSignal.store(true,
-                                                std::memory_order_release);
+                m_impl->m_workspace.m_projectTransitionSignal.store(
+                    true, std::memory_order_release);
                 // 具体生命周期转换排队到 UI 线程消费。
-                Impl::ProjectUiLifecycleUpdate update;
+                Impl::ProjectWorkspaceCoordinator::ProjectUiLifecycleUpdate
+                    update;
                 update.kind        = ProjectUiLifecycleKind::OpenStarted;
                 update.projectRoot = Config::utf8ToPath(event.m_projectPath);
-                m_impl->m_pendingProjectLifecycleUpdates.enqueue(
+                m_impl->m_workspace.m_pendingProjectLifecycleUpdates.enqueue(
                     std::move(update));
             });
-    m_impl->m_projectOpenProgressSubId =
+    m_impl->m_workspace.m_projectOpenProgressSubId =
         eventBus.subscribe<Event::ProjectOpenProgressEvent>(
             [this](const Event::ProjectOpenProgressEvent& event) {
                 // 进度事件复制所有文本和值，队列不保留事件引用。
@@ -528,65 +611,67 @@ UIManager::UIManager() : m_impl(std::make_unique<Impl>())
                 update.stage    = event.m_stage;
                 update.fraction = event.m_fraction;
                 update.detail   = event.m_detail;
-                m_impl->m_pendingProjectOpenProgressUpdates.enqueue(
+                m_impl->m_workspace.m_pendingProjectOpenProgressUpdates.enqueue(
                     std::move(update));
             });
-    m_impl->m_projectLoadedSubId =
-        eventBus.subscribe<Event::ProjectLoadedEvent>(
-            [this](const Event::ProjectLoadedEvent& event) {
-                // 加载完成更新携带规范化项目根和可选完整 UI 快照。
-                Impl::ProjectUiLifecycleUpdate update;
-                update.kind        = ProjectUiLifecycleKind::Opened;
-                update.projectRoot = Config::utf8ToPath(event.m_projectPath);
+    m_impl->m_workspace
+        .m_projectLoadedSubId = eventBus.subscribe<Event::ProjectLoadedEvent>(
+        [this](const Event::ProjectLoadedEvent& event) {
+            // 加载完成更新携带规范化项目根和可选完整 UI 快照。
+            Impl::ProjectWorkspaceCoordinator::ProjectUiLifecycleUpdate update;
+            update.kind        = ProjectUiLifecycleKind::Opened;
+            update.projectRoot = Config::utf8ToPath(event.m_projectPath);
 
-                EditorProjectUiSnapshot snapshot;
-                if ( m_editorApplicationService &&
-                     m_editorApplicationService->currentProjectUiSnapshot(
-                         snapshot) &&
-                     snapshot.projectRoot.lexically_normal() ==
-                         update.projectRoot.lexically_normal() ) {
-                    // 只有服务快照与事件根一致时才作为恢复真值。
-                    update.workspace      = std::move(snapshot.workspace);
-                    update.audioResources = std::move(snapshot.audioResources);
-                    update.hasProjectSnapshot = true;
-                }
-                m_impl->m_pendingProjectLifecycleUpdates.enqueue(
-                    std::move(update));
-            });
-    m_impl->m_projectClosedSubId =
-        eventBus.subscribe<Event::ProjectClosedEvent>(
-            [this](const Event::ProjectClosedEvent& event) {
-                // 关闭事件只排队根路径，当前工作区捕获由 UI 线程按状态处理。
-                Impl::ProjectUiLifecycleUpdate update;
-                update.kind        = ProjectUiLifecycleKind::Closed;
-                update.projectRoot = event.m_projectPath;
-                m_impl->m_pendingProjectLifecycleUpdates.enqueue(
-                    std::move(update));
-            });
-    m_impl->m_projectOpenFailedSubId =
+            EditorProjectUiSnapshot snapshot;
+            if ( m_editorApplicationService &&
+                 m_editorApplicationService->currentProjectUiSnapshot(
+                     snapshot) &&
+                 snapshot.projectRoot.lexically_normal() ==
+                     update.projectRoot.lexically_normal() ) {
+                // 只有服务快照与事件根一致时才作为恢复真值。
+                update.workspace          = std::move(snapshot.workspace);
+                update.audioResources     = std::move(snapshot.audioResources);
+                update.hasProjectSnapshot = true;
+            }
+            m_impl->m_workspace.m_pendingProjectLifecycleUpdates.enqueue(
+                std::move(update));
+        });
+    m_impl->m_workspace
+        .m_projectClosedSubId = eventBus.subscribe<Event::ProjectClosedEvent>(
+        [this](const Event::ProjectClosedEvent& event) {
+            // 关闭事件只排队根路径，当前工作区捕获由 UI 线程按状态处理。
+            Impl::ProjectWorkspaceCoordinator::ProjectUiLifecycleUpdate update;
+            update.kind        = ProjectUiLifecycleKind::Closed;
+            update.projectRoot = event.m_projectPath;
+            m_impl->m_workspace.m_pendingProjectLifecycleUpdates.enqueue(
+                std::move(update));
+        });
+    m_impl->m_workspace.m_projectOpenFailedSubId =
         eventBus.subscribe<Event::ProjectOpenFailedEvent>(
             [this](const Event::ProjectOpenFailedEvent& event) {
                 // 打开失败会结束 transition
                 // 并恢复无项目或旧状态，延迟统一处理。
-                Impl::ProjectUiLifecycleUpdate update;
+                Impl::ProjectWorkspaceCoordinator::ProjectUiLifecycleUpdate
+                    update;
                 update.kind        = ProjectUiLifecycleKind::OpenFailed;
                 update.projectRoot = Config::utf8ToPath(event.m_projectPath);
-                m_impl->m_pendingProjectLifecycleUpdates.enqueue(
+                m_impl->m_workspace.m_pendingProjectLifecycleUpdates.enqueue(
                     std::move(update));
             });
-    m_impl->m_temporaryProjectSaveResultSubId =
+    m_impl->m_workspace.m_temporaryProjectSaveResultSubId =
         eventBus.subscribe<Event::TemporaryProjectSaveResultEvent>(
             [this](const Event::TemporaryProjectSaveResultEvent& event) {
                 // 只有保存成功且返回新路径时才切换活动工作区根。
                 if ( !event.m_success || event.m_savedProjectPath.empty() ) {
                     return;
                 }
-                Impl::ProjectUiLifecycleUpdate update;
+                Impl::ProjectWorkspaceCoordinator::ProjectUiLifecycleUpdate
+                    update;
                 // 临时项目另存后视图状态不变，只更新持久化归属根。
                 update.kind = ProjectUiLifecycleKind::RootChanged;
                 update.projectRoot =
                     Config::utf8ToPath(event.m_savedProjectPath);
-                m_impl->m_pendingProjectLifecycleUpdates.enqueue(
+                m_impl->m_workspace.m_pendingProjectLifecycleUpdates.enqueue(
                     std::move(update));
             });
     m_impl->m_nativeWindowFocusSubId =
@@ -617,34 +702,43 @@ UIManager::~UIManager()
     // 先解除外部静态文件选择器对 NativeWindow handle 的观察。
     NativeFileDialog::bindMainWindow(nullptr);
     auto& eventBus = Event::EventBus::instance();
-    if ( m_impl->m_projectOpenStartedSubId != 0 ) {
+    if ( m_impl->m_workspace.m_projectOpenStartedSubId != 0 ) {
         eventBus.unsubscribe<Event::ProjectOpenStartedEvent>(
-            m_impl->m_projectOpenStartedSubId);
+            m_impl->m_workspace.m_projectOpenStartedSubId);
     }
-    if ( m_impl->m_projectOpenProgressSubId != 0 ) {
+    if ( m_impl->m_workspace.m_projectOpenProgressSubId != 0 ) {
         eventBus.unsubscribe<Event::ProjectOpenProgressEvent>(
-            m_impl->m_projectOpenProgressSubId);
+            m_impl->m_workspace.m_projectOpenProgressSubId);
     }
-    if ( m_impl->m_projectLoadedSubId != 0 ) {
+    if ( m_impl->m_workspace.m_projectLoadedSubId != 0 ) {
         eventBus.unsubscribe<Event::ProjectLoadedEvent>(
-            m_impl->m_projectLoadedSubId);
+            m_impl->m_workspace.m_projectLoadedSubId);
     }
-    if ( m_impl->m_projectClosedSubId != 0 ) {
+    if ( m_impl->m_workspace.m_projectClosedSubId != 0 ) {
         eventBus.unsubscribe<Event::ProjectClosedEvent>(
-            m_impl->m_projectClosedSubId);
+            m_impl->m_workspace.m_projectClosedSubId);
     }
-    if ( m_impl->m_projectOpenFailedSubId != 0 ) {
+    if ( m_impl->m_workspace.m_projectOpenFailedSubId != 0 ) {
         eventBus.unsubscribe<Event::ProjectOpenFailedEvent>(
-            m_impl->m_projectOpenFailedSubId);
+            m_impl->m_workspace.m_projectOpenFailedSubId);
     }
-    if ( m_impl->m_temporaryProjectSaveResultSubId != 0 ) {
+    if ( m_impl->m_workspace.m_temporaryProjectSaveResultSubId != 0 ) {
         eventBus.unsubscribe<Event::TemporaryProjectSaveResultEvent>(
-            m_impl->m_temporaryProjectSaveResultSubId);
+            m_impl->m_workspace.m_temporaryProjectSaveResultSubId);
     }
     if ( m_impl->m_nativeWindowFocusSubId != 0 ) {
         eventBus.unsubscribe<Event::GLFWNativeEvent>(
             m_impl->m_nativeWindowFocusSubId);
     }
+    // 保持原成员析构顺序，视图的析构可能访问仍存活的编辑器服务。
+    m_impl->m_views.m_uiviews.clear();
+}
+
+/// @brief 查找视图时只借用注册表仍持有的对象。
+/// @warning UI 热路径，只做一次哈希查找。
+IUIView* UIManager::findView(const std::string& name) const
+{
+    return m_impl->m_views.find(name);
 }
 
 /// @brief 绑定主原生窗口并同步给原生文件选择器。
@@ -699,21 +793,22 @@ Graphic::IWindowFrameAdapter* UIManager::getWindowFrameAdapter() const
 /// @warning UI 热路径：使用 acquire 读取发布状态，不得增加阻塞等待。
 bool UIManager::isProjectTransitionInProgress() const
 {
-    return m_projectTransitionSignal.load(std::memory_order_acquire);
+    return m_impl->m_workspace.m_projectTransitionSignal.load(
+        std::memory_order_acquire);
 }
 
 /// @brief 获取 UI 线程最近消费的项目打开进度。
 /// @return 仅在下一次生命周期消费前有效的只读引用。
 const ProjectOpenProgressState& UIManager::getProjectOpenProgress() const
 {
-    return m_projectOpenProgress;
+    return m_impl->m_workspace.m_projectOpenProgress;
 }
 
 /// @brief 查询 UI 生命周期是否持有活动项目工作区。
 /// @return 已完成项目打开且尚未关闭时返回 true。
 bool UIManager::hasActiveProjectUiState() const
 {
-    return m_projectLifecycleState.hasActiveProject;
+    return m_impl->m_workspace.m_projectLifecycleState.hasActiveProject;
 }
 
 /// @brief 查询工作区是否存在真实谱面编辑器标签页。
@@ -747,7 +842,7 @@ bool UIManager::isTimelineTimingDragging()
 /// @return UIManager 持有的规范路径引用；无项目时为空。
 const std::filesystem::path& UIManager::getActiveProjectRoot() const
 {
-    return m_activeProjectRoot;
+    return m_impl->m_workspace.m_activeProjectRoot;
 }
 
 /// @brief 替换标题栏提供的原生窗口拖拽基础区域。
@@ -788,9 +883,10 @@ void UIManager::syncNativeWindowDragAreas()
 /// @warning 低频保存路径：会序列化 ImGui ini 和查询平台窗口，不得逐帧调用。
 void UIManager::captureProjectWorkspaceState()
 {
+    auto& coordinator = m_impl->m_workspace;
     // 过渡中或无项目时不能把临时 UI 状态写入任意项目。
     if ( isProjectTransitionInProgress() ||
-         !m_projectLifecycleState.hasActiveProject ) {
+         !coordinator.m_projectLifecycleState.hasActiveProject ) {
         return;
     }
 
@@ -799,7 +895,7 @@ void UIManager::captureProjectWorkspaceState()
         return;
     }
     auto* workspace = m_editorApplicationService->mutableCurrentWorkspace(
-        m_activeProjectRoot);
+        coordinator.m_activeProjectRoot);
     // 根路径不匹配或项目已切换时服务可拒绝返回对象。
     if ( !workspace ) {
         return;
@@ -810,7 +906,7 @@ void UIManager::captureProjectWorkspaceState()
     // 慢速载图时画布可能尚未提交首帧，此时保留磁盘中已保存的完整停靠树。
     const auto* tabs = getView<CanvasTabManager>("CanvasTabManager");
     // 移动外壳保留项目原有桌面布局数据，不能用手机窗口树覆盖它。
-    if ( m_impl->m_workspacePresentation->usesDesktopLayout() &&
+    if ( coordinator.m_workspacePresentation->usesDesktopLayout() &&
          (!tabs || !tabs->projectWorkspaceDockRestorePending()) ) {
         size_t      iniSize = 0;
         const char* iniData = ImGui::SaveIniSettingsToMemory(&iniSize);
@@ -820,7 +916,7 @@ void UIManager::captureProjectWorkspaceState()
     }
 
     if ( m_nativeWindow &&
-         m_impl->m_workspacePresentation->usesDesktopLayout() ) {
+         coordinator.m_workspacePresentation->usesDesktopLayout() ) {
         // 主窗口位置属于项目工作区，但只有绑定原生窗口时才可取得。
         auto& windowState = workspace->m_mainWindow;
         m_nativeWindow->getWindowPlacement(windowState.m_x,
@@ -1063,7 +1159,7 @@ void UIManager::synchronizeProfessionalEditingMode()
 void UIManager::reloadOpenEffectAudioTracks()
 {
     // 注册表拥有所有动态控制器，名称前缀先做低成本过滤。
-    for ( const auto& [name, view] : m_uiviews ) {
+    for ( const auto& [name, view] : m_impl->m_views.m_uiviews ) {
         if ( name.rfind("TrackController_", 0) != 0 || !view ) {
             continue;
         }
@@ -1104,12 +1200,11 @@ void UIManager::applyNoProjectDefaultWorkspace()
 /// 先合并所有进度更新，再按到达顺序归约生命周期状态。Opened 准备待恢复工作区，
 /// Closed/OpenFailed 清理活动根，RootChanged 只迁移同一活动工作区归属。
 /// @warning UI 热路径：每帧调用；队列消费只做值移动，不直接执行项目 IO。
-void UIManager::consumePendingProjectLifecycleUpdates()
+void UIManager::Impl::ProjectWorkspaceCoordinator::consumePendingUpdates()
 {
     // 进度事件可能高频到达，循环消费到当前队列为空。
     ProjectOpenProgressState progressUpdate;
-    while ( m_impl->m_pendingProjectOpenProgressUpdates.try_dequeue(
-        progressUpdate) ) {
+    while ( m_pendingProjectOpenProgressUpdates.try_dequeue(progressUpdate) ) {
         applyProjectOpenProgress(m_projectOpenProgress,
                                  progressUpdate.stage,
                                  progressUpdate.fraction,
@@ -1117,8 +1212,8 @@ void UIManager::consumePendingProjectLifecycleUpdates()
     }
 
     // 生命周期事件必须保持队列顺序以正确归约状态机。
-    Impl::ProjectUiLifecycleUpdate update;
-    while ( m_impl->m_pendingProjectLifecycleUpdates.try_dequeue(update) ) {
+    ProjectUiLifecycleUpdate update;
+    while ( m_pendingProjectLifecycleUpdates.try_dequeue(update) ) {
         // 纯状态转换由 reduce helper 集中定义。
         m_projectLifecycleState =
             reduceProjectUiLifecycleState(m_projectLifecycleState, update.kind);
@@ -1138,12 +1233,12 @@ void UIManager::consumePendingProjectLifecycleUpdates()
             // 活动根与可选工作区快照在同一事件中切换。
             m_activeProjectRoot                = std::move(update.projectRoot);
             m_noProjectWorkspaceDefaultApplied = false;
-            m_impl->m_pendingProjectWorkspace  = ProjectWorkspaceState{};
-            m_impl->m_pendingProjectAudioResources.clear();
+            m_pendingProjectWorkspace          = ProjectWorkspaceState{};
+            m_pendingProjectAudioResources.clear();
             if ( update.hasProjectSnapshot ) {
                 // 快照值移动到 UI 待恢复槽，下一阶段再操作视图。
-                m_impl->m_pendingProjectWorkspace = std::move(update.workspace);
-                m_impl->m_pendingProjectAudioResources =
+                m_pendingProjectWorkspace = std::move(update.workspace);
+                m_pendingProjectAudioResources =
                     std::move(update.audioResources);
             }
             // 完成进度并 release 发布过渡结束。
@@ -1157,7 +1252,7 @@ void UIManager::consumePendingProjectLifecycleUpdates()
                 // 状态机确认无活动项目后才清理根和待恢复数据。
                 m_activeProjectRoot.clear();
                 m_projectWorkspaceRestorePending = false;
-                m_impl->m_pendingProjectAudioResources.clear();
+                m_pendingProjectAudioResources.clear();
             }
             if ( update.kind == ProjectUiLifecycleKind::OpenFailed ) {
                 // 失败明确结束进度和过渡；普通 Closed 可能属于切换中间态。
@@ -1189,33 +1284,35 @@ void UIManager::consumePendingProjectLifecycleUpdates()
 /// @warning UI 热路径：每帧调用；完整捕获只在低频计时分支发生。
 void UIManager::syncProjectWorkspaceState()
 {
+    auto& coordinator = m_impl->m_workspace;
     // 切换期间旧新项目归属未稳定，不清理也不写入工作区。
     if ( isProjectTransitionInProgress() ) {
         return;
     }
 
-    if ( shouldApplyNoProjectWorkspace(m_projectLifecycleState) ) {
+    if ( shouldApplyNoProjectWorkspace(coordinator.m_projectLifecycleState) ) {
         // 离开项目后先销毁所有项目动态工具。
-        if ( !m_workspaceProjectPath.empty() ) {
+        if ( !coordinator.m_workspaceProjectPath.empty() ) {
             clearProjectWorkspaceViews();
         }
-        m_workspaceProjectPath.clear();
+        coordinator.m_workspaceProjectPath.clear();
         // 默认侧栏只应用一次，保留用户在无项目状态下后续手动操作。
-        if ( !m_noProjectWorkspaceDefaultApplied ) {
+        if ( !coordinator.m_noProjectWorkspaceDefaultApplied ) {
             applyNoProjectDefaultWorkspace();
-            m_noProjectWorkspaceDefaultApplied = true;
+            coordinator.m_noProjectWorkspaceDefaultApplied = true;
         }
         return;
     }
 
-    m_noProjectWorkspaceDefaultApplied = false;
-    if ( m_projectWorkspaceRestorePending ) {
+    coordinator.m_noProjectWorkspaceDefaultApplied = false;
+    if ( coordinator.m_projectWorkspaceRestorePending ) {
         // 新根成为当前工作区身份，旧动态视图在恢复前全部清理。
-        m_workspaceProjectPath = Config::pathToUtf8(m_activeProjectRoot);
+        coordinator.m_workspaceProjectPath =
+            Config::pathToUtf8(coordinator.m_activeProjectRoot);
         clearProjectWorkspaceViews();
 
-        const auto& workspace = m_impl->m_pendingProjectWorkspace;
-        if ( m_impl->m_workspacePresentation->usesDesktopLayout() &&
+        const auto& workspace = coordinator.m_pendingProjectWorkspace;
+        if ( coordinator.m_workspacePresentation->usesDesktopLayout() &&
              !workspace.m_imguiIniData.empty() ) {
             // 过滤平台多视口和欢迎页后才交给 ImGui 加载。
             std::string sanitizedIni =
@@ -1234,7 +1331,8 @@ void UIManager::syncProjectWorkspaceState()
         // 画布可能在加载布局后下一帧才首次 Begin；以实际成功恢复的会话
         // 核对原节点，避免缺失谱面或显式打开单谱面阻止后续布局捕获。
         if ( auto* tabs = getView<CanvasTabManager>("CanvasTabManager");
-             tabs && m_impl->m_workspacePresentation->usesDesktopLayout() ) {
+             tabs &&
+             coordinator.m_workspacePresentation->usesDesktopLayout() ) {
             std::vector<CanvasWorkspaceEntry> entries;
             if ( auto* canvasWorkspace = getCanvasWorkspaceService() ) {
                 canvasWorkspace->fillEntries(entries);
@@ -1243,7 +1341,7 @@ void UIManager::syncProjectWorkspaceState()
         }
 
         if ( m_nativeWindow && workspace.m_mainWindow.m_valid &&
-             m_impl->m_workspacePresentation->usesDesktopLayout() ) {
+             coordinator.m_workspacePresentation->usesDesktopLayout() ) {
             // 只有有效 placement 且窗口已绑定时恢复平台窗口几何。
             const auto& windowState = workspace.m_mainWindow;
             m_nativeWindow->applyWindowPlacement(windowState.m_x,
@@ -1254,20 +1352,20 @@ void UIManager::syncProjectWorkspaceState()
         }
 
         // 视图恢复在布局和窗口位置之后执行，使新窗口能找到目标 Dock。
-        restoreProjectWorkspaceViews(workspace,
-                                     m_impl->m_pendingProjectAudioResources);
+        restoreProjectWorkspaceViews(
+            workspace, coordinator.m_pendingProjectAudioResources);
 
         // 延迟首次捕获，给新注册视图至少一个完整布局帧。
-        m_nextWorkspaceCaptureTime       = ImGui::GetTime() + 0.5;
-        m_projectWorkspaceRestorePending = false;
-        m_impl->m_pendingProjectAudioResources.clear();
+        coordinator.m_nextWorkspaceCaptureTime       = ImGui::GetTime() + 0.5;
+        coordinator.m_projectWorkspaceRestorePending = false;
+        coordinator.m_pendingProjectAudioResources.clear();
     }
 
     // 活动项目按非阻塞时间门槛周期捕获工作区。
     double now = ImGui::GetTime();
-    if ( now >= m_nextWorkspaceCaptureTime ) {
+    if ( now >= coordinator.m_nextWorkspaceCaptureTime ) {
         captureProjectWorkspaceState();
-        m_nextWorkspaceCaptureTime = now + 2.0;
+        coordinator.m_nextWorkspaceCaptureTime = now + 2.0;
     }
 }
 
@@ -1291,11 +1389,12 @@ void UIManager::captureProjectWorkspaceViews(ProjectWorkspaceState& workspace)
     workspace.m_metadataEditorOpen     = false;
     workspace.m_noteMetadataEditorOpen = false;
 
-    // m_uiSequence 提供确定的视图捕获顺序。
-    for ( const auto& name : m_uiSequence ) {
-        auto viewIt = m_uiviews.find(name);
+    // m_impl->m_views.m_uiSequence 提供确定的视图捕获顺序。
+    for ( const auto& name : m_impl->m_views.m_uiSequence ) {
+        auto viewIt = m_impl->m_views.m_uiviews.find(name);
         // 已注销或关闭视图不写入工作区。
-        if ( viewIt == m_uiviews.end() || !viewIt->second->isOpen() ) {
+        if ( viewIt == m_impl->m_views.m_uiviews.end() ||
+             !viewIt->second->isOpen() ) {
             continue;
         }
 
@@ -1471,13 +1570,13 @@ void UIManager::restoreProjectWorkspaceViews(
 
 /// @brief 注销所有随项目工作区生命周期变化的动态视图。
 ///
-/// 先收集名称再逐项注销，避免遍历 m_uiSequence 时修改同一容器。应用级视图和固定
-/// Canvas 不受影响。
+/// 先收集名称再逐项注销，避免遍历 m_impl->m_views.m_uiSequence
+/// 时修改同一容器。应用级视图和固定 Canvas 不受影响。
 void UIManager::clearProjectWorkspaceViews()
 {
     // 临时数组只包含当前注册顺序中的动态名称。
     std::vector<std::string> dynamicViews;
-    for ( const auto& name : m_uiSequence ) {
+    for ( const auto& name : m_impl->m_views.m_uiSequence ) {
         if ( isProjectWorkspaceDynamicView(name) ) {
             dynamicViews.push_back(name);
         }
@@ -1530,8 +1629,9 @@ IEditorApplicationService* UIManager::getEditorApplicationService() const
 /// @warning UI 热路径：只查询本地注册表并调用能力访问器。
 ICanvasView* UIManager::getCanvasView(const std::string& name) const
 {
-    const auto it = m_uiviews.find(name);
-    return it == m_uiviews.end() ? nullptr : it->second->asCanvasView();
+    const auto it = m_impl->m_views.m_uiviews.find(name);
+    return it == m_impl->m_views.m_uiviews.end() ? nullptr
+                                                 : it->second->asCanvasView();
 }
 
 /// @brief 按注册名查询独立窗口能力观察指针。
@@ -1541,9 +1641,10 @@ ICanvasView* UIManager::getCanvasView(const std::string& name) const
 IAuxiliaryWindowView* UIManager::getAuxiliaryWindowView(
     const std::string& name) const
 {
-    const auto it = m_uiviews.find(name);
-    return it == m_uiviews.end() ? nullptr
-                                 : it->second->asAuxiliaryWindowView();
+    const auto it = m_impl->m_views.m_uiviews.find(name);
+    return it == m_impl->m_views.m_uiviews.end()
+               ? nullptr
+               : it->second->asAuxiliaryWindowView();
 }
 
 /// @brief 注册视图并接管其唯一所有权。
@@ -1556,11 +1657,11 @@ void UIManager::registerView(const std::string&       name,
                              std::unique_ptr<IUIView> view)
 {
     // 通用序列包含所有视图并保持注册顺序。
-    m_uiSequence.push_back(name);
+    m_impl->m_views.m_uiSequence.push_back(name);
 
     if ( view->renderable() ) {
         // 可渲染视图参与离屏命令任务枚举。
-        m_renderableUiSequence.push_back(name);
+        m_impl->m_views.m_renderableUiSequence.push_back(name);
         XINFO("Registered Renderable [{}] UIView", name);
     } else {
         XINFO("Registered General [{}] UIView", name);
@@ -1569,11 +1670,11 @@ void UIManager::registerView(const std::string&       name,
     // 纹理加载能力独立于 renderable 标志查询。
     auto textureLoader = view->asTextureLoader();
     if ( textureLoader ) {
-        m_textureLoaderSequence.push_back(name);
+        m_impl->m_views.m_textureLoaderSequence.push_back(name);
     }
 
     // 最后移动所有权到注册表，前面能力检查期间对象仍由参数持有。
-    m_uiviews[name] = std::move(view);
+    m_impl->m_views.m_uiviews[name] = std::move(view);
 }
 
 /// @brief 注销并安全销毁一个视图。
@@ -1584,14 +1685,14 @@ void UIManager::registerView(const std::string&       name,
 void UIManager::unregisterView(const std::string& name)
 {
     /// @brief 即将被注销的视图迭代器。
-    auto viewIt = m_uiviews.find(name);
-    if ( viewIt != m_uiviews.end() ) {
+    auto viewIt = m_impl->m_views.m_uiviews.find(name);
+    if ( viewIt != m_impl->m_views.m_uiviews.end() ) {
         waitForGpuBeforeDestroyView(*viewIt->second);
-        m_uiviews.erase(viewIt);
+        m_impl->m_views.m_uiviews.erase(viewIt);
     }
-    std::erase(m_uiSequence, name);
-    std::erase(m_renderableUiSequence, name);
-    std::erase(m_textureLoaderSequence, name);
+    std::erase(m_impl->m_views.m_uiSequence, name);
+    std::erase(m_impl->m_views.m_renderableUiSequence, name);
+    std::erase(m_impl->m_views.m_textureLoaderSequence, name);
     XINFO("Unregistered [{}] UIView", name);
 }
 
@@ -1601,10 +1702,10 @@ void UIManager::unregisterView(const std::string& name)
 void UIManager::clearAllViews()
 {
     /// @brief 当前仍注册在 UIManager 内的视图条目。
-    for ( auto& entry : m_uiviews ) {
+    for ( auto& entry : m_impl->m_views.m_uiviews ) {
         waitForGpuBeforeDestroyView(*entry.second);
     }
-    m_uiviews.clear();
+    m_impl->m_views.m_uiviews.clear();
 }
 
 /// @brief 为全部能力视图准备离屏帧缓冲和纹理资源。
@@ -1641,13 +1742,14 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
             context->get().getRenderer().reloadSkinTextures();
         }
 
-        for ( const auto& name : m_renderableUiSequence ) {
+        for ( const auto& name : m_impl->m_views.m_renderableUiSequence ) {
             // 项目动态视图在过渡中保持旧资源直到生命周期稳定。
             if ( isProjectTransitionInProgress() &&
                  isProjectWorkspaceDynamicView(name) ) {
                 continue;
             }
-            auto renderableView = m_uiviews[name]->asRenderableView();
+            auto renderableView =
+                m_impl->m_views.m_uiviews[name]->asRenderableView();
             if ( renderableView ) {
                 // 失效 shader 缓存后立即重建离屏目标。
                 renderableView->requestSkinResourceReload();
@@ -1656,12 +1758,13 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
             }
         }
 
-        for ( const auto& name : m_textureLoaderSequence ) {
+        for ( const auto& name : m_impl->m_views.m_textureLoaderSequence ) {
             if ( isProjectTransitionInProgress() &&
                  isProjectWorkspaceDynamicView(name) ) {
                 continue;
             }
-            auto textureLoader = m_uiviews[name]->asTextureLoader();
+            auto textureLoader =
+                m_impl->m_views.m_uiviews[name]->asTextureLoader();
             if ( textureLoader ) {
                 // 强制调用 reload；needReload 查询用于让实现更新内部状态契约。
                 textureLoader->reloadTextures(
@@ -1674,12 +1777,13 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
     }
 
     // 普通路径只重建明确标记的离屏帧缓冲。
-    for ( const auto& name : m_renderableUiSequence ) {
+    for ( const auto& name : m_impl->m_views.m_renderableUiSequence ) {
         if ( isProjectTransitionInProgress() &&
              isProjectWorkspaceDynamicView(name) ) {
             continue;
         }
-        auto renderableView = m_uiviews[name]->asRenderableView();
+        auto renderableView =
+            m_impl->m_views.m_uiviews[name]->asRenderableView();
         if ( renderableView && renderableView->needReCreateFrameBuffer() ) {
             renderableView->reCreateFrameBuffer(
                 physicalDevice, logicalDevice, swapchain, cmdPool, queue);
@@ -1687,12 +1791,12 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
     }
 
     // 普通路径只调用报告需要重载的纹理能力视图。
-    for ( const auto& name : m_textureLoaderSequence ) {
+    for ( const auto& name : m_impl->m_views.m_textureLoaderSequence ) {
         if ( isProjectTransitionInProgress() &&
              isProjectWorkspaceDynamicView(name) ) {
             continue;
         }
-        auto textureLoader = m_uiviews[name]->asTextureLoader();
+        auto textureLoader = m_impl->m_views.m_uiviews[name]->asTextureLoader();
         if ( textureLoader && textureLoader->needReload() ) {
             textureLoader->reloadTextures(
                 physicalDevice, logicalDevice, cmdPool, queue);
@@ -1715,9 +1819,11 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
 /// 遍历或完整排序。
 void UIManager::onUpdateUI()
 {
+    auto& views = m_impl->m_views;
     // 平台策略只在帧边界绑定；触摸归属必须先于画布原始事件转换确定。
-    const WorkspaceFrameScope workspaceFrame(*m_impl->m_workspacePresentation);
-    m_impl->m_workspacePresentation->beginFrame(*this);
+    const WorkspaceFrameScope workspaceFrame(
+        *m_impl->m_workspace.m_workspacePresentation);
+    m_impl->m_workspace.m_workspacePresentation->beginFrame(*this);
     // 帧作用域为新方案提供真实 UI 服务，不延长窗口或会话生命周期。
     // 释放帧先交给旧控制器完成收尾，下一安全帧才允许替换方案。
     const Interaction::UiFrameScope interactionFrame(this);
@@ -1728,7 +1834,7 @@ void UIManager::onUpdateUI()
     const auto& requestedProfile = Config::AppConfig::instance()
                                        .getEditorSettings()
                                        .m_interactionProfileId;
-    bool        keyboardReleased = true;
+    bool keyboardReleased = true;
     if ( requestedProfile != Interaction::activeProfile().id() ) {
         for ( int key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END;
               ++key ) {
@@ -1770,14 +1876,14 @@ void UIManager::onUpdateUI()
     SetInteractionFeedbackEnabled(isInteractionFeedbackAllowed(m_nativeWindow));
     ProcessGlobalMouseFeedback();
 
-    consumePendingProjectLifecycleUpdates();
+    m_impl->m_workspace.consumePendingUpdates();
     // 常态帧只比较总开关；实际收起视图与清理选择只在关闭边沿执行。
     synchronizeProfessionalEditingMode();
     syncProjectWorkspaceState();
 
     // 先收集关闭视图名称，避免遍历注册表时直接 erase。
     std::vector<std::string> toRemove;
-    for ( auto& [name, view] : m_uiviews ) {
+    for ( auto& [name, view] : views.m_uiviews ) {
         if ( !view->isOpen() ) {
             toRemove.push_back(name);
         }
@@ -1785,16 +1891,16 @@ void UIManager::onUpdateUI()
 
     for ( const auto& name : toRemove ) {
         /// @brief 当前待销毁视图的迭代器。
-        auto viewIt = m_uiviews.find(name);
-        if ( viewIt != m_uiviews.end() ) {
+        auto viewIt = views.m_uiviews.find(name);
+        if ( viewIt != views.m_uiviews.end() ) {
             // GPU 能力视图销毁前确保资源不再被飞行命令使用。
             waitForGpuBeforeDestroyView(*viewIt->second);
-            m_uiviews.erase(viewIt);
+            views.m_uiviews.erase(viewIt);
         }
-        std::erase(m_uiSequence, name);
+        std::erase(views.m_uiSequence, name);
         // 同时从纹理加载器和可渲染序列中移除。
-        std::erase(m_renderableUiSequence, name);
-        std::erase(m_textureLoaderSequence, name);
+        std::erase(views.m_renderableUiSequence, name);
+        std::erase(views.m_textureLoaderSequence, name);
     }
 
     // 全局 ImGui 输入事件每帧只转换和发布一次。
@@ -1803,12 +1909,12 @@ void UIManager::onUpdateUI()
 
     // 预先准备视图数据；字体测量留在主线程，纯数据任务才进入线程池。
     // 四个容器复用容量，分别保存候选、总需准备、主线程与并行分组。
-    m_uiPrepareCandidates.clear();
-    m_uiPrepareViews.clear();
-    m_mainThreadUiPrepareViews.clear();
-    m_parallelUiPrepareViews.clear();
-    m_uiPrepareCandidates.reserve(m_uiSequence.size());
-    for ( const auto& name : m_uiSequence ) {
+    views.m_uiPrepareCandidates.clear();
+    views.m_uiPrepareViews.clear();
+    views.m_mainThreadUiPrepareViews.clear();
+    views.m_parallelUiPrepareViews.clear();
+    views.m_uiPrepareCandidates.reserve(views.m_uiSequence.size());
+    for ( const auto& name : views.m_uiSequence ) {
         // 过渡中跳过侧栏管理器和所有项目动态视图。
         if ( isProjectTransitionInProgress() &&
              (name == "SideBarManager" ||
@@ -1816,8 +1922,8 @@ void UIManager::onUpdateUI()
             continue;
         }
         // 序列与 map 若暂时不同步则跳过陈旧名称。
-        auto it = m_uiviews.find(name);
-        if ( it == m_uiviews.end() ) {
+        auto it = views.m_uiviews.find(name);
+        if ( it == views.m_uiviews.end() ) {
             continue;
         }
 
@@ -1825,11 +1931,11 @@ void UIManager::onUpdateUI()
         IParallelUiPreparable* preparable =
             it->second->asParallelUiPreparable();
         if ( preparable ) {
-            m_uiPrepareCandidates.push_back(preparable);
+            views.m_uiPrepareCandidates.push_back(preparable);
         }
     }
 
-    if ( !m_uiPrepareCandidates.empty() ) {
+    if ( !views.m_uiPrepareCandidates.empty() ) {
         // 一份不可变快照共享给本帧全部准备任务。
         UiFrameSnapshot snapshot = captureUiFrameSnapshot();
         // 分析窗口读取主画布时间与视野；标签隐藏时也须推进其读取快照。
@@ -1839,36 +1945,40 @@ void UIManager::onUpdateUI()
             snapshot.audioAnalysisCameraId =
                 Logic::EditorEngine::instance().getActiveCameraId();
         }
-        m_uiPrepareViews.reserve(m_uiPrepareCandidates.size());
-        m_mainThreadUiPrepareViews.reserve(m_uiPrepareCandidates.size());
-        m_parallelUiPrepareViews.reserve(m_uiPrepareCandidates.size());
-        for ( IParallelUiPreparable* preparable : m_uiPrepareCandidates ) {
+        views.m_uiPrepareViews.reserve(views.m_uiPrepareCandidates.size());
+        views.m_mainThreadUiPrepareViews.reserve(
+            views.m_uiPrepareCandidates.size());
+        views.m_parallelUiPrepareViews.reserve(
+            views.m_uiPrepareCandidates.size());
+        for ( IParallelUiPreparable* preparable :
+              views.m_uiPrepareCandidates ) {
             // 只把缓存未命中的视图加入实际工作集合。
             if ( preparable->needsParallelUiPrepare(snapshot) ) {
-                m_uiPrepareViews.push_back(preparable);
+                views.m_uiPrepareViews.push_back(preparable);
                 if ( preparable->requiresMainThreadUiPrepare() ) {
                     // 可能触发字体 Atlas 写入的测量必须串行。
-                    m_mainThreadUiPrepareViews.push_back(preparable);
+                    views.m_mainThreadUiPrepareViews.push_back(preparable);
                 } else {
                     // 明确只处理纯数据的视图允许并发。
-                    m_parallelUiPrepareViews.push_back(preparable);
+                    views.m_parallelUiPrepareViews.push_back(preparable);
                 }
             }
         }
 
         // ImGui 1.92 的文本测量可能按需烘焙字形并写入共享 FontAtlas；
         // 声明主线程约束的视图必须先串行准备，禁止与线程池任务并发访问字体状态。
-        for ( IParallelUiPreparable* preparable : m_mainThreadUiPrepareViews ) {
+        for ( IParallelUiPreparable* preparable :
+              views.m_mainThreadUiPrepareViews ) {
             preparable->prepareUiFrameData(snapshot);
         }
 
         auto* appThreadPool = MMM::Runtime::AppThreadPool::instance().get();
-        if ( appThreadPool && m_parallelUiPrepareViews.size() > 1 ) {
+        if ( appThreadPool && views.m_parallelUiPrepareViews.size() > 1 ) {
             // 只有多个纯数据任务时才值得进入线程池。
-            std::latch prepareLatch(
-                static_cast<std::ptrdiff_t>(m_parallelUiPrepareViews.size()));
+            std::latch prepareLatch(static_cast<std::ptrdiff_t>(
+                views.m_parallelUiPrepareViews.size()));
             for ( IParallelUiPreparable* preparable :
-                  m_parallelUiPrepareViews ) {
+                  views.m_parallelUiPrepareViews ) {
                 appThreadPool->enqueue_void(
                     [preparable, &snapshot, &prepareLatch]() {
                         // snapshot 与 latch 生命周期延续到下方 wait 返回。
@@ -1882,40 +1992,42 @@ void UIManager::onUpdateUI()
         } else {
             // 无线程池或只有一个任务时直接串行，避免调度开销。
             for ( IParallelUiPreparable* preparable :
-                  m_parallelUiPrepareViews ) {
+                  views.m_parallelUiPrepareViews ) {
                 preparable->prepareUiFrameData(snapshot);
             }
         }
         // 所有准备完成后按同一总集合顺序切换缓存。
-        for ( IParallelUiPreparable* preparable : m_uiPrepareViews ) {
+        for ( IParallelUiPreparable* preparable : views.m_uiPrepareViews ) {
             preparable->swapPreparedUiFrameData();
         }
     }
 
     // 按注册顺序更新本帧开始前已存在的 UI。
     // update() 过程中可能注册新视图，使用索引和名称副本避免迭代器失效。
-    const size_t initialViewCount = m_uiSequence.size();
-    for ( size_t i = 0; i < initialViewCount && i < m_uiSequence.size(); ++i ) {
-        const std::string name = m_uiSequence[i];
+    const size_t initialViewCount = views.m_uiSequence.size();
+    for ( size_t i = 0; i < initialViewCount && i < views.m_uiSequence.size();
+          ++i ) {
+        const std::string name = views.m_uiSequence[i];
         // 工具插件在 UIManager 构造时注册，早于主 DockSpace。
         // ImGui 要求先提交 DockSpace 再提交可停靠窗口；因此工具窗口
         // 必须等本轮普通视图（包括主停靠区）全部绘制完成后再提交。
         if ( name == "ToolPluginView" ) continue;
-        auto it = m_uiviews.find(name);
-        if ( it == m_uiviews.end() ) {
+        auto it = views.m_uiviews.find(name);
+        if ( it == views.m_uiviews.end() ) {
             // 先前视图更新可能注销后续名称，查找失败时跳过。
             continue;
         }
 
         // 视图内部提交 ImGui 控件及必要画笔数据。
-        if ( m_impl->m_workspacePresentation->updatesView(name) )
+        if ( m_impl->m_workspace.m_workspacePresentation->updatesView(name) )
             it->second->update(this);
     }
 
     // 这里仍处于同一 ImGui 帧，插件列表和主编辑区节点均已创建。
     // 用户可把工具窗口拖到画布、时间线或其他窗口，而非只能拖到插件列表。
     // 视图可能在本轮被注销；只从注册表查询当前存活实例。
-    if ( m_impl->m_workspacePresentation->updatesView("ToolPluginView") )
+    if ( m_impl->m_workspace.m_workspacePresentation->updatesView(
+             "ToolPluginView") )
         if ( auto* tools = getView<ToolPluginView>("ToolPluginView") )
             tools->update(this);
 
@@ -1947,7 +2059,7 @@ void UIManager::onUpdateUI()
     }
 
     // 抽屉与遮罩最后组合，不能把移动端布局混入桌面视图的更新函数。
-    m_impl->m_workspacePresentation->endFrame(*this);
+    m_impl->m_workspace.m_workspacePresentation->endFrame(*this);
     // 所有控件完成目标上报后再绘制突出层，亮区使用本帧最终布局坐标。
     m_walkthroughSpotlight->render(
         Config::AppConfig::instance().getWindowContentScale(),
@@ -2018,21 +2130,22 @@ void UIManager::onRecordOffscreen(vk::CommandBuffer& cmd, uint32_t frameIndex)
 /// @warning 渲染热路径：主线程在派发前筛选一次，复用任务列表的容量。
 uint32_t UIManager::getOffscreenRecordTaskCount() const
 {
-    m_frameOffscreenRecordViews.clear();
+    m_impl->m_views.m_frameOffscreenRecordViews.clear();
     const bool transitioning = isProjectTransitionInProgress();
-    for ( const auto& name : m_renderableUiSequence ) {
+    for ( const auto& name : m_impl->m_views.m_renderableUiSequence ) {
         // 会话过渡时避开仍可能引用即将释放的项目资源的视图。
         if ( transitioning && isProjectWorkspaceDynamicView(name) ) continue;
-        const auto it = m_uiviews.find(name);
-        if ( it == m_uiviews.end() ) continue;
+        const auto it = m_impl->m_views.m_uiviews.find(name);
+        if ( it == m_impl->m_views.m_uiviews.end() ) continue;
 
         // 先过滤隐藏和无需重绘的视图，避免为它们调度空命令缓冲。
         auto* view = it->second->asRenderableView();
         if ( view && view->shouldRecordOffscreen() ) {
-            m_frameOffscreenRecordViews.push_back(view);
+            m_impl->m_views.m_frameOffscreenRecordViews.push_back(view);
         }
     }
-    return static_cast<uint32_t>(m_frameOffscreenRecordViews.size());
+    return static_cast<uint32_t>(
+        m_impl->m_views.m_frameOffscreenRecordViews.size());
 }
 
 /// @brief 录制指定可渲染视图的离屏命令。
@@ -2044,9 +2157,10 @@ uint32_t UIManager::getOffscreenRecordTaskCount() const
 void UIManager::onRecordOffscreenTask(vk::CommandBuffer& cmd,
                                       uint32_t frameIndex, uint32_t taskIndex)
 {
-    if ( taskIndex < m_frameOffscreenRecordViews.size() ) {
+    if ( taskIndex < m_impl->m_views.m_frameOffscreenRecordViews.size() ) {
         // 每个任务只录制自己的离屏目标，不提交队列或等待 GPU。
-        m_frameOffscreenRecordViews[taskIndex]->recordCmds(cmd, frameIndex);
+        m_impl->m_views.m_frameOffscreenRecordViews[taskIndex]->recordCmds(
+            cmd, frameIndex);
     }
 }
 

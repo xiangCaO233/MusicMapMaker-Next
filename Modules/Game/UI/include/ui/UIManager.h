@@ -7,13 +7,10 @@
 #include "graphic/imguivk/IGraphicUserHook.h"
 #include "ui/imgui/audio/AudioTrackControllerTypes.h"
 #include "ui/project/ProjectOpenProgressState.h"
-#include "ui/project/ProjectUiLifecycleState.h"
-#include <atomic>
 #include <filesystem>
 #include <memory>
 #include <string>
 #include <type_traits>
-#include <unordered_map>
 #include <vector>
 
 namespace MMM
@@ -235,9 +232,7 @@ public:
     /// @brief 泛型获取裸指针 外部不负责销毁
     template<typename T> T* getView(const std::string& name)
     {
-        auto it = m_uiviews.find(name);
-        if ( it != m_uiviews.end() ) {
-            IUIView* raw = it->second.get();
+        if ( IUIView* raw = findView(name) ) {
             if constexpr ( std::is_same_v<T, IUIView> ) {
                 return raw;
             } else {
@@ -289,6 +284,9 @@ public:
                                uint32_t taskIndex) override;
 
 private:
+    /// @brief 按名称借用 UI 线程注册的视图，注销后指针失效。
+    /// @warning UI 热路径只查询注册表，无分配或锁。
+    [[nodiscard]] IUIView* findView(const std::string& name) const;
     /// @brief 隔离工作区快照、跨线程队列与事件订阅，只在管理器构造时分配。
     struct Impl;
     /// @brief 在所有视图销毁后释放；析构函数先解除事件订阅。
@@ -303,10 +301,6 @@ private:
     bool m_openWelcome{ false };
     /// @brief 无项目时应用一次默认侧边栏工作区。
     void applyNoProjectDefaultWorkspace();
-
-    /// @brief 消费逻辑线程投递的项目生命周期更新。
-    /// @warning UI 热路径：每帧只清空低频生命周期队列并更新本地状态。
-    void consumePendingProjectLifecycleUpdates();
 
     /// @brief 同步当前项目的 ImGui 布局保存和恢复状态。
     /// @warning UI 热路径低频分支：每帧只比较当前项目路径；实际保存 ImGui
@@ -352,33 +346,6 @@ private:
     /// @brief Game 组合根注入的编辑器应用服务。
     std::unique_ptr<IEditorApplicationService> m_editorApplicationService;
 
-    /// @brief 所有ui接口
-    std::unordered_map<std::string, std::unique_ptr<IUIView>> m_uiviews;
-
-    /// @brief ui接口注册顺序
-    std::vector<std::string> m_uiSequence;
-
-    /// @brief 可再渲染ui接口注册顺序
-    std::vector<std::string> m_renderableUiSequence;
-
-    /// @brief 主线程筛选的本帧离屏任务，工作线程完成前借用的视图保持有效。
-    mutable std::vector<IRenderableView*> m_frameOffscreenRecordViews;
-
-    /// @brief 纹理加载器接口注册顺序
-    std::vector<std::string> m_textureLoaderSequence;
-
-    /// @brief 每帧可预先准备 UI 数据的候选视图缓存。
-    std::vector<IParallelUiPreparable*> m_uiPrepareCandidates;
-
-    /// @brief 当前帧实际需要执行准备任务的视图缓存。
-    std::vector<IParallelUiPreparable*> m_uiPrepareViews;
-
-    /// @brief 当前帧必须在 UI 主线程执行准备的视图缓存。
-    std::vector<IParallelUiPreparable*> m_mainThreadUiPrepareViews;
-
-    /// @brief 当前帧允许在线程池执行准备的纯数据视图缓存。
-    std::vector<IParallelUiPreparable*> m_parallelUiPrepareViews;
-
     /// @brief 主窗口标题栏允许原生拖拽的基础区域。
     std::vector<Event::DragArea> m_nativeWindowDragAreas;
 
@@ -393,49 +360,17 @@ private:
     /// @warning 共享所有权仅在接收或释放资源时变化，用于保持缓存文件生命周期。
     std::shared_ptr<const Project> m_collaborationAudioProject;
 
-    /// @brief 上一次已应用项目工作区的项目路径。
-    std::string m_workspaceProjectPath;
-
-    /// @brief 当前 UI 已确认加载完成的项目根目录。
-    std::filesystem::path m_activeProjectRoot;
-
-
-
-    /// @brief UI 线程归约后的项目生命周期状态。
-    ProjectUiLifecycleState m_projectLifecycleState;
-
-    /// @brief 是否有加载完成后的项目工作区等待应用。
-    bool m_projectWorkspaceRestorePending{ false };
-
-
-
-    /// @brief UI 线程当前展示的项目加载进度。
-    ProjectOpenProgressState m_projectOpenProgress;
-
-    /// @brief 逻辑线程已经发起、但 UI 线程可能尚未消费的项目切换标志。
-    /// @warning 写入者为逻辑线程生命周期回调，读取者为 UI 线程；用于阻止
-    /// 同一 UI 帧后半段继续读取已关闭项目，必须使用跨线程原子同步。
-    std::atomic_bool m_projectTransitionSignal{ false };
-
-
-
-
     /// @brief 上一帧拥有导航焦点的 ImGui 根窗口 ID。
     ImGuiID m_lastFocusedImGuiRootId{ 0 };
 
     /// @brief 是否已经取得首帧 ImGui 焦点基线。
     bool m_imGuiFocusTrackingInitialized{ false };
 
-    /// @brief 无项目默认工作区是否已经应用。
-    bool m_noProjectWorkspaceDefaultApplied{ false };
 
     /// @brief 上次应用的专业模式，首次普通编辑帧也必须清除恢复前的旧选择。
     bool m_lastProfessionalEditingMode{ true };
 
     /// @brief 是否已请求重载皮肤相关图形资源。
     bool m_skinResourceReloadRequested{ false };
-
-    /// @brief 下一次允许捕获项目工作区的 ImGui 时间。
-    double m_nextWorkspaceCaptureTime{ 0.0 };
 };
 }  // namespace MMM::UI
