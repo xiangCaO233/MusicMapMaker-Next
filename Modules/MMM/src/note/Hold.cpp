@@ -1,6 +1,6 @@
 #include "mmm/note/Hold.h"
 #include "mmm/SafeParse.h"
-#include <cmath>
+#include "mmm/beatmap/OsuManiaTracks.h"
 #include <iomanip>
 #include <sstream>
 #include <string_view>
@@ -58,9 +58,15 @@ std::string composeOsuHoldHitSample(std::string_view original,
 /// @details
 /// 逗号字段负责起点、轨道和音效位，最后一段再以冒号拆出终点及 HitSample。
 /// SafeParse 负责缺失字段的默认化，本函数同步刷新通用采样绑定。
-void Hold::from_osu_description(const std::vector<std::string>& description,
+bool Hold::from_osu_description(const std::vector<std::string>& description,
                                 int32_t                         orbit_count)
 {
+    // 校验横坐标后再修改对象，坏物件不会污染复用对象或持久化状态。
+    // 轨号校验失败时也不覆盖已经设置的长条时长及采样引用。
+    const auto track =
+        Internal::osuManiaTrack(Internal::safeAt(description, 0), orbit_count);
+    if ( !track ) return false;
+    m_track = *track;
     using enum NoteMetadataType;
     auto& osunote_prop = m_metadata.note_properties[OSU];
 
@@ -69,13 +75,6 @@ void Hold::from_osu_description(const std::vector<std::string>& description,
     for ( int i = 0; i < description.size(); ++i ) {
         // 仅解析通用模型需要的逗号字段，其余来源字段保持在原描述中。
         switch ( i ) {
-        case 0: {
-            // 与普通 Note 使用相同的 0 至 512 横坐标离散规则。
-            m_track = std::floor(
-                MMM::Internal::safeStod(MMM::Internal::safeAt(description, 0)) *
-                orbit_count / 512);
-            break;
-        }
         case 2: {
             // osu! 时间统一以毫秒为单位，无需在领域层换算。
             m_timestamp =
@@ -110,6 +109,7 @@ void Hold::from_osu_description(const std::vector<std::string>& description,
     m_duration = static_cast<int32_t>(MMM::Internal::safeStod(
                      MMM::Internal::safeAt(last_paras, 0))) -
                  m_timestamp;
+    return true;
 }
 
 /// @brief 转换为 osu!mania Hold HitObject 描述。
@@ -130,11 +130,10 @@ std::string Hold::to_osu_description(int32_t orbit_count)
     // osu!mania HitObject 使用整数横坐标与毫秒时间输出。
     oss << std::fixed << std::setprecision(0);
 
-    // x 坐标 (根据轨道数计算)
-    // 原公式: orbit = floor(x * orbit_count / 512)
-    // 反推: x = orbit * 512 / orbit_count
-    int x = static_cast<int>((double(m_track) + 0.5) * 512 / orbit_count);
-    oss << x << ",";
+    // 采用与读取同一套轨道边界；无效物件不能生成默认轨道上的乐谱行。
+    const auto x = Internal::osuManiaCoordinate(m_track, orbit_count);
+    if ( !x ) return {};
+    oss << *x << ",";
 
     // y 坐标 (固定192)
     oss << "192,";

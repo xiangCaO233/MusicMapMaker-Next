@@ -3,8 +3,11 @@
 #include "config/Utf8Path.h"
 #include "mmm/beatmap/BeatMap.h"
 
+#include <array>
 #include <filesystem>
 #include <fstream>
+#include <string>
+#include <string_view>
 #include <system_error>
 
 /**
@@ -99,6 +102,158 @@ static bool checkBreakRoundTrip(const std::filesystem::path& output)
     return preserved;
 }
 
+/// @brief 生成实际文件，显式检查关闭状态，防止不完整夹具误报解析成功。
+/// @param path 由用例输出路径派生的独立物理文件。
+/// @param content 精确字节，允许 CRLF、BOM 和空输入这些专门的边界样本。
+/// @return 包含 close 在内的所有写入成功时返回真。
+bool writeFixture(const std::filesystem::path& path, std::string_view content)
+{
+    // 二进制模式避免 Windows 额外转换换行，保留夹具的原始结构。
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    file << content;
+    // 显式关闭让底层 I/O 失败传播到用例，不会拿上一次留下的字节继续验证。
+    file.close();
+    return file.good();
+}
+
+/// @brief 用生产加载入口验证有效签名、无签名首节及损坏版本的行为。
+/// @param output 同一 CTest 注册提供的输出基名，各谱面用例可并行。
+/// @return 签名状态及首节数据均正确、遇到无效文件返回空图时为真。
+/// @details 用真实文件覆盖有签名和无签名两条读入路径。
+/// 读取只能出现在首节的字段，防止猜测签名时误丢首个节标题。
+bool checkHeaderAndBounds(const std::filesystem::path& output)
+{
+    auto path = output;
+    path.replace_extension(".header.osu");
+    // 各输入共用首节内容，以便把差异明确归因于首行处理。
+    const std::string sections =
+        "[General]\r\nAudioFilename:test.wav\r\nMode:3\r\n"
+        "[Metadata]\r\nTitle:header\r\n[Difficulty]\r\nCircleSize:4\r\n";
+    // 同一判定覆盖标准签名、无签名的第一节和不被识别的普通文本行。
+    const auto valid = [&](const std::string& input, bool hasHeader) {
+        if ( !writeFixture(path, input) ) return false;
+        // 读取的是实际分派后的谱面，只有解析入口能填充来源属性和歌曲提示。
+        const auto map = MMM::BeatMap::loadFromFile(path);
+        // 使用已有属性迭代器。不能使用会插入新键的下标访问填补缺失元数据。
+        const auto osu =
+            map.m_metadata.map_properties.find(MMM::MapMetadataType::OSU);
+        if ( osu == map.m_metadata.map_properties.end() ) return false;
+        // 没有签名时根本不应赋值；检查不存在与默认 v14 的结果不同。
+        const auto version = osu->second.find("file_format_version");
+        // 首节上的 AudioFilename 证明没有因探测首行而掉失该节。
+        return map.m_baseMapMetadata.song_file_hint == "test.wav" &&
+               (hasHeader
+                    ? version != osu->second.end() && version->second == "v14"
+                    : version == osu->second.end());
+    };
+    // 普通文本 format 曾误触发越界；整行不能作为版本，后续节必须保留。
+    if ( !valid("\xEF\xBB\xBFosu file format v14\r\n" + sections, true) ||
+         !valid(sections, false) || !valid("format\r\n" + sections, false) )
+        return false;
+
+    // 遍历显式截断版本、畸形版本和空文件。失败返回空路径而非默认有效谱面。
+    // 损坏声明和空内容都应拒绝，但无签名的正常节区仍能加载。
+    // 截断样本不带后续行，暴露此前从 format 位置向后跨越长度的错误。
+    for ( const auto malformed : { "osu file format",
+                                   "osu file format v",
+                                   "osu file format v14broken",
+                                   "" } ) {
+        if ( !writeFixture(path, malformed) ||
+             !MMM::BeatMap::loadFromFile(path)
+                  .m_baseMapMetadata.map_path.empty() )
+            return false;
+    }
+    std::error_code ignored;
+    // 夹具文件与测试套件正式输出分开，此处只删除自己重复使用的输入。
+    std::filesystem::remove(path, ignored);
+    return true;
+}
+
+/// @brief 对 1K、4K、7K 和密集轨道检查边界、无效物件及长条往返。
+/// @param output 用于派生独立输入和重开文件，避免覆盖资源原件。
+/// @return 所有模式的单键和长条都在原轨往返、非法坐标未进入模型时为真。
+/// @details 起止两轨各有独立时刻和时长，用对象属性而非总数确认映射。
+/// 非法物件和异常键数分别覆盖单行跳过与整图拒绝。
+bool checkManiaTracks(const std::filesystem::path& output)
+{
+    auto input = output;
+    input.replace_extension(".tracks.osu");
+    // 读入与再打开使用不同文件名，确保断言确实覆盖了写出的正文字节。
+    auto saved = output;
+    saved.replace_extension(".tracks-export.osu");
+    // 把键数作为唯一可替换的字段，合法和非法模式共用同一组对象。
+    const std::string prefix =
+        "osu file format v14\n[General]\nMode:3\n"
+        "[Metadata]\nTitle:track-boundary\n[Difficulty]\nCircleSize:";
+    // 范围外、非有限、数值溢出和尾随垃圾交替放在不同对象类型，
+    // 使两个读取器必须遵守同样的字段验证规则。
+    const std::string rows =
+        "\n[TimingPoints]\n0,500,4,2,0,100,1,0\n[HitObjects]\n"
+        "0,192,1000,1,0,0:0:0:0:\n"
+        "2,192,1200,1,0,0:0:0:0:\n"
+        "512,192,1500,1,0,0:0:0:0:\n"
+        "0,192,2000,128,0,2300:0:0:0:0:\n"
+        "512,192,2500,128,0,2900:0:0:0:0:\n"
+        "-1,192,3000,1,0,0:0:0:0:\n"
+        "513,192,3500,128,0,3800:0:0:0:0:\n"
+        "nan,192,4000,1,0,0:0:0:0:\n"
+        "1e999,192,4500,128,0,4800:0:0:0:0:\n"
+        "2invalid,192,5000,1,0,0:0:0:0:\n";
+    // 依次覆盖单轨、常用键型和稠密键型。
+    // 稠密模式的整数坐标不能只按理论中点向下取整。
+    for ( const int keys : { 1, 4, 7, 500 } ) {
+        if ( !writeFixture(input, prefix + std::to_string(keys) + rows) )
+            return false;
+        // 内部轨号从零开始，末端检查同时能检测误映射到 BGM 轨。
+        const auto lastTrack = static_cast<unsigned>(keys - 1);
+        // 同一判定作用于原始夹具和 writer 输出，不允许两次不同方式变更物件。
+        const auto matches = [&](const MMM::BeatMap& map) {
+            const auto& notes = map.m_noteData.notes;
+            const auto& holds = map.m_noteData.holds;
+            // 两端各有单键和长条，非法对象应全部跳过。
+            // 中间的 2 像素在 500K 会落到内列，写出时不能取整到它的前一轨。
+            // 长条时长保持原值，证明轨道变化未改动持续时间字段。
+            return map.m_baseMapMetadata.track_count == keys &&
+                   notes.size() == 3 && notes[0].m_track == 0 &&
+                   notes[1].m_track == static_cast<unsigned>(2 * keys / 512) &&
+                   notes[2].m_track == lastTrack && holds.size() == 2 &&
+                   holds[0].m_track == 0 && holds[0].m_duration == 300 &&
+                   holds[1].m_track == lastTrack && holds[1].m_duration == 400;
+        };
+        // 先断言读入结果，再执行真实写出和重开；前后共同丢掉一个对象也不能通过。
+        auto map = MMM::BeatMap::loadFromFile(input);
+        map.sync();
+        if ( !matches(map) || !map.saveToFile(saved) ||
+             !matches(MMM::BeatMap::loadFromFile(saved)) )
+            return false;
+    }
+    // 小于一、超出坐标范围和解析失败都需要在转换前拒绝，
+    // 否则可能构造错误轨号或让视图为无法表达的轨数分配资源。
+    // 校验键数先于浮点转整和物件构造；越界文件不得被识别成有效谱面。
+    for ( const auto bad : { "0", "-1", "513", "nan", "1e999", "0x4p0" } ) {
+        if ( !writeFixture(input, prefix + bad + rows) ||
+             !MMM::BeatMap::loadFromFile(input)
+                  .m_baseMapMetadata.map_path.empty() )
+            return false;
+    }
+    // 旧版允许仅有时间点的文件写出 -1，把这种存量文件读为正常默认键数。
+    // 与上一组含物件的 -1 区分，确保回退不会吞掉真实的轨道编辑错误。
+    if ( !writeFixture(input,
+                       prefix + "-1\n[TimingPoints]\n0,500,4,2,0,100,1,0\n") )
+        return false;
+    // 时间点计数证明兼容路径完成了实际导入，而不是返回空图后碰巧使用默认键数。
+    const auto timingOnly = MMM::BeatMap::loadFromFile(input);
+    // 兼容回退只补齐轨道数，时间点不可从旧文件中丢失。
+    if ( timingOnly.m_baseMapMetadata.track_count != 4 ||
+         timingOnly.m_timings.size() != 1 )
+        return false;
+    // 夹具和重开文件都由本次测试独占，移除它们不会影响下方整谱的章节比较。
+    std::error_code ignored;
+    std::filesystem::remove(input, ignored);
+    std::filesystem::remove(saved, ignored);
+    return true;
+}
+
 /// @brief 用完整谱面验证四种后缀的实际保存、打开及原路径再次保存。
 /// @param output 提供工作目录和各测试用例独立的文件名前缀。
 /// @return 四种格式都按原路径保存、读取及再次写出时为真。
@@ -156,6 +311,16 @@ int main(int argc, char* argv[])
     if ( !checkHoldTypeFlags(output) ) return 1;
 
     if ( !checkBreakRoundTrip(output) ) return 1;
+    // 将解析、轨道和路径断言分开记录，便于直接定位格式回归。
+    if ( !checkHeaderAndBounds(output) ) {
+        XERROR("osu! header handling failed");
+        return 1;
+    }
+    // 主动标明阶段，避免再次引入的轨号错误被误诊为项目测试资源不足。
+    if ( !checkManiaTracks(output) ) {
+        XERROR("osu!mania coordinate handling failed");
+        return 1;
+    }
     if ( !checkMixedCaseExtensions(output) ) {
         XERROR("Mixed-case chart extension round trip failed");
         return 1;

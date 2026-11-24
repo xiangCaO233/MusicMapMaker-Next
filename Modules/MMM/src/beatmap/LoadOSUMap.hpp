@@ -4,13 +4,17 @@
 #include "log/colorful-log.h"
 #include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/beatmap/OsuManiaTracks.h"
 #include "mmm/note/Hold.h"
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <string_view>
+#include <system_error>
 
 namespace MMM
 {
@@ -34,6 +38,37 @@ namespace MMM
  * - 单个 AudioFilename 不代表真实文件已存在，只建立项目资源引用提示。
  * - 返回成功只表示完成结构解析，不等价于视觉、音频或游戏规则验收。
  */
+
+/// @brief 规整首行的传输标记，使二进制与文本模式的签名检查一致。
+inline std::string_view osuHeaderLine(std::string_view line)
+{
+    // UTF-8 BOM 只在首行去掉；CRLF 在 Unix 平台会留下行尾 CR。
+    if ( line.starts_with("\xEF\xBB\xBF") ) line.remove_prefix(3);
+    if ( line.ends_with('\r') ) line.remove_suffix(1);
+    return line;
+}
+
+/// @note 正式加载和无后缀探测共享下方解析器；不会因某个普通章节碰巧含
+/// format 字样就识别成版本行。
+/// @brief 提取完整签名中的版本（含 v）；空结果表示缺少或损坏的签名。
+inline std::string_view osuFormatVersion(std::string_view line)
+{
+    constexpr std::string_view prefix = "osu file format v";
+    line                              = osuHeaderLine(line);
+    if ( !line.starts_with(prefix) ) return {};
+    // 先确认前缀，随后只能在现有的视图范围内取子串。
+    const auto digits = line.substr(prefix.size());
+    if ( digits.empty() ) return {};
+    // 版本字段没有符号。用整数解析验证范围，同时保留原文用于兼容性元数据。
+    unsigned version = 0;
+    const auto [end, error] =
+        std::from_chars(digits.data(), digits.data() + digits.size(), version);
+    // 严格消费版本字段；截断、尾随垃圾和溢出都不能作为有效签名。
+    if ( error != std::errc{} || end != digits.data() + digits.size() ||
+         version == 0 )
+        return {};
+    return line.substr(prefix.size() - 1);
+}
 
 /// @brief 原地移除字符串前导空白。
 /// @param s 待规整字符串。
@@ -206,7 +241,7 @@ public:
 /// @par 失败边界
 /// - 路径不存在、权限失败或文件无法打开时返回空 BeatMap。
 /// - 相对路径绝对化失败不阻止继续使用原路径尝试读取。
-/// - 首行没有格式签名时会回退重读，不能丢失首个章节。
+/// - 首行没有格式签名时继续消费首节；签名截断与空文件报告导入失败。
 /// - 空行与两类注释行跳过，不进入来源元数据。
 /// - 缺失普通字段使用各自格式默认值，不访问越界数组。
 /// - 无效数值由 SafeParse 收敛，不从加载边界抛出异常。
@@ -241,19 +276,27 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
     // 首行可能是格式签名；其余有效行交给结构读取器按章节分组。
     OsuFileReader osureader;
     std::string   read_buffer;
-    std::getline(ifs, read_buffer);
-
-    // 签名只提取版本尾段，不要求固定的 v 前缀。
-    auto cpos = read_buffer.find("format");
-    if ( cpos != std::string::npos ) {
-        // 取出osu版本
-        auto vnum = read_buffer.substr(cpos + 8, read_buffer.size() - 1);
-        osumeta_props["file_format_version"] = vnum;
+    // 空文件和首行读错误都无法确认可读取的文本，返回与打不开相同的空图。
+    if ( !std::getline(ifs, read_buffer) ) return {};
+    const auto version = osuFormatVersion(read_buffer);
+    if ( !version.empty() ) {
+        // 属性表复制版本，后续 getline 复用 read_buffer 不影响元数据。
+        osumeta_props["file_format_version"] = version;
     } else {
-        // 首行不是签名时回退到开头，不能丢失它所属的章节或字段。
-        ifs.clear();
-        // 回到文件开头
-        ifs.seekg(0, std::ios::beg);
+        const auto firstLine = osuHeaderLine(read_buffer);
+        // 对明确声明格式的损坏文件返回失败；无签名的首节仍交给读入器。
+        if ( firstLine == "osu file format" ||
+             firstLine.starts_with("osu file format ") ) {
+            XWARN("无效的 osu! 谱面版本：{}",
+                  Config::pathToUtf8(basemeta.map_path));
+            return {};
+        }
+        // 普通无签名文本继续按原有章节语法消费，首节中的音频引用保持原位置。
+        if ( !firstLine.empty() && !firstLine.starts_with(';') &&
+             !firstLine.starts_with("//") ) {
+            // 首行可能是节名，直接消费可避免重新定位及再次处理 BOM。
+            osureader.parse_line(std::string(firstLine));
+        }
     }
 
     while ( std::getline(ifs, read_buffer) ) {
@@ -381,8 +424,20 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
         osureader.get_value("Difficulty", "CircleSize", std::string("4.0"));
     trim(raw_circle_size);
     osumeta_props["Difficulty::CircleSize"] = raw_circle_size;
-    basemeta.track_count                    = static_cast<int32_t>(
-        std::round(MMM::Internal::safeStod(raw_circle_size, 4.0)));
+    // 键数决定玩家轨与后续自动采样轨布局，非法值会使整个谱面的轨道语义不确定。
+    // 必须在解析 HitObjects 与建立 BGM 轨之前停止，避免以默认 4K 误读音符。
+    auto keyCount = MMM::Internal::parseOsuManiaKeyCount(raw_circle_size);
+    // 旧版本可能把纯时间轴的未设置值 -1 写入文件。这类文件没有物件可误映射，
+    // 仍能读取其时间点；含物件的负键数仍属于无法解析的谱面。
+    if ( !keyCount && raw_circle_size == "-1" &&
+         osureader.current_hitobject_index == 0 )
+        keyCount = MMM::Internal::OSU_DEFAULT_KEYS;
+    if ( !keyCount ) {
+        XWARN("无效的 osu!mania 键数：{}", raw_circle_size);
+        return {};
+    }
+    // 确认范围后按统一键数写入，使 Note、Hold 与 BGM 轨使用同一边界。
+    basemeta.track_count = *keyCount;
 
     osumeta_props["Difficulty::OverallDifficulty"] = osureader.get_value(
         "Difficulty", "OverallDifficulty", std::string("8.0"));
@@ -476,6 +531,8 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
             note_paras.emplace_back(token);
         }
 
+        // 两类对象都通过同一套横坐标校验。坏行不参与后续长度计算，也不占用轨。
+        // 对合法边沿仍保留原输入节奏，只把 x=512 映射到最后一轨。
         // osu!mania 用第 7 位标记长条，其他位可以同时携带组合标志。
         constexpr int HOLD_TYPE_BIT = 1 << 7;
         const auto    type =
@@ -483,7 +540,8 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
         // 负数不是合法的标志集合，避免符号扩展把坏数据误认成长条。
         if ( type >= 0 && (type & HOLD_TYPE_BIT) != 0 ) {
             Hold hold;
-            hold.from_osu_description(note_paras, basemeta.track_count);
+            if ( !hold.from_osu_description(note_paras, basemeta.track_count) )
+                continue;
             // Hold 内容末尾由起点加持续时间决定。
             if ( hold.m_timestamp + hold.m_duration > basemeta.map_length )
                 basemeta.map_length = hold.m_timestamp + hold.m_duration;
@@ -492,9 +550,10 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
         } else {
             Note note;
             // 普通物件复用 Note 的字段级安全解析和 HitSample 迁移。
-            note.from_osu_description(note_paras, basemeta.track_count);
+            if ( !note.from_osu_description(note_paras, basemeta.track_count) )
+                continue;
             // 更新谱面时长
-            if ( int64_t(note.m_timestamp) > basemeta.map_length )
+            if ( note.m_timestamp > basemeta.map_length )
                 basemeta.map_length = note.m_timestamp;
 
             // 加入物件列表
@@ -502,6 +561,7 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
         }
     }
 
+    // 无效物件已在上一阶段忽略；独立时间点即使没有可用物件也保持原有加载顺序。
     // TimingPoints 保持来源顺序，首个红线为谱面参考 BPM。
     bool firstBpmSet = false;
     for ( int i = 0; i < osureader.current_timing_index; i++ ) {

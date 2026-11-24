@@ -31,7 +31,8 @@ public:
     /// @brief 从 osu!mania HitObject 字段加载长条。
     /// @param description 按逗号切分的 HitObject 字段。
     /// @param orbit_count 目标玩家轨道数。
-    void from_osu_description(const std::vector<std::string>& description,
+    /// @return 横坐标和键数有效并加载成功时返回真。
+    bool from_osu_description(const std::vector<std::string>& description,
                               int32_t orbit_count) override;
     /// @brief 转换为 osu!mania Hold HitObject 描述。
     /// @param orbit_count 用于把内部轨道映射回 0 至 512 的轨道坐标。

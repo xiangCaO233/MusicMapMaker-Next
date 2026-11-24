@@ -1,6 +1,6 @@
 #include "mmm/note/Note.h"
 #include "mmm/SafeParse.h"
-#include <cmath>
+#include "mmm/beatmap/OsuManiaTracks.h"
 #include <iomanip>
 #include <sstream>
 #include <string_view>
@@ -60,17 +60,19 @@ Note::~Note() {}
 
 /// @brief 从 osu!mania HitObject 字段加载普通物件。
 /// @details 缺失或非法字段由 SafeParse 收敛为默认值，不从格式边界抛出异常。
-void Note::from_osu_description(const std::vector<std::string>& description,
+bool Note::from_osu_description(const std::vector<std::string>& description,
                                 int32_t                         orbit_count)
 {
+    // 轨道字段不使用 SafeParse 的默认回退，否则损坏的坐标会被导入成第一轨。
+    // 上游可根据返回值决定跳过这一行，同时保留谱面中的其他合法物件。
+    // 校验横坐标后再修改对象，坏物件不会污染复用对象或持久化状态。
+    const auto track =
+        Internal::osuManiaTrack(Internal::safeAt(description, 0), orbit_count);
+    if ( !track ) return false;
+    m_track = *track;
     using enum NoteMetadataType;
     auto& osunote_prop = m_metadata.note_properties[OSU];
     m_type             = NoteType::NOTE;
-
-    // osu! 横坐标使用 0 至 512 连续区间，向下取整映射到内部离散轨道。
-    m_track = uint32_t(std::floor(
-        MMM::Internal::safeStod(MMM::Internal::safeAt(description, 0)) *
-        double(orbit_count) / 512.));
 
     // 时间戳
     m_timestamp =
@@ -90,6 +92,7 @@ void Note::from_osu_description(const std::vector<std::string>& description,
     } else {
         setSampleBinding(AudioSampleBinding{ sampleFile, 1.0F });
     }
+    return true;
 }
 
 /// @brief 转换为 osu!mania 普通 HitObject 描述。
@@ -111,11 +114,11 @@ std::string Note::to_osu_description(int32_t orbit_count)
     // 整数精度与 osu! HitObject 的时间和横坐标写法保持一致。
     oss << std::fixed << std::setprecision(0);
 
-    // x 坐标 (根据轨道数计算)
-    // 原公式: orbit = floor(x * orbit_count / 512)
-    // 反推: x = orbit * 512 / orbit_count
-    auto x = static_cast<int>((double(m_track) + 0.5) * 512 / orbit_count);
-    oss << x << ",";
+    // 采用与读取同一套轨道边界；无效物件不能生成默认轨道上的乐谱行。
+    // 返回空字符串让谱面 writer 结束此次提交，而非在文件中混入非法坐标。
+    const auto x = Internal::osuManiaCoordinate(m_track, orbit_count);
+    if ( !x ) return {};
+    oss << *x << ",";
 
     // y 坐标 (固定192)
     oss << "192,";

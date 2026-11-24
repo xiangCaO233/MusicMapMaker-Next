@@ -85,7 +85,8 @@ public:
     /// @brief 从 osu!mania HitObject 字段加载普通物件。
     /// @param description 按逗号切分的 HitObject 字段。
     /// @param orbit_count 目标玩家轨道数。
-    virtual void from_osu_description(
+    /// @return 横坐标和键数有效并加载成功时返回真。
+    virtual bool from_osu_description(
         const std::vector<std::string>& description, int32_t orbit_count);
 
     /// @brief 转换为 osu!mania 普通 HitObject 描述。

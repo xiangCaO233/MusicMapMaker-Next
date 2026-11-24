@@ -121,7 +121,7 @@ BeatMap BeatMap::loadFromFile(std::filesystem::path mapFilePath)
             std::string firstLine;
             // 只读取首行，避免为一次探测加载整个潜在大文件。
             if ( std::getline(ifs, firstLine) ) {
-                if ( firstLine.find("osu file format") != std::string::npos ) {
+                if ( !osuFormatVersion(firstLine).empty() ) {
                     return loadOSUMap(mapFilePath);
                 }
             }
