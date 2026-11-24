@@ -9,6 +9,8 @@
 #include <functional>
 #include <memory>
 #include <tuple>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace MMM::Event
@@ -58,12 +60,34 @@ public:
     template<typename EventType>
     SubscriptionID subscribe(std::function<void(const EventType&)> callback)
     {
-        // 类型擦除层只保存 void 地址；模板包装器负责恢复精确事件类型。
+        // 已擦除的回调可能包含可变私有状态，维持逐次调用副本的既有语义。
         return subscribeImpl(
             detail::getStaticTypeId<EventType>(),
-            [callback](const void* eventPtr) {
+            [callback = std::move(callback)](const void* eventPtr) {
                 callback(*static_cast<const EventType*>(eventPtr));
-            });
+            },
+            true);
+    }
+
+    /// @brief 直接登记可通过常量引用调用的处理器，发布时不复制其捕获。
+    /// @tparam Callback 能以 const 引用调用的、可复制的处理器。
+    /// @param callback 由订阅记录拥有，发布端只借用其常量调用入口。
+    /// @return 可在此事件类型上撤销订阅的进程内令牌。
+    /// @note 回调及其引用的外部状态必须允许来自多个发布线程的并发调用。
+    template<typename EventType, typename Callback>
+        requires(!std::is_same_v<std::decay_t<Callback>,
+                                 std::function<void(const EventType&)>> &&
+                 std::is_invocable_v<const std::decay_t<Callback>&,
+                                     const EventType&>)
+    SubscriptionID subscribe(Callback&& callback)
+    {
+        // 非 mutable lambda 无需先构造一份 std::function 再进行第二次类型擦除。
+        return subscribeImpl(
+            detail::getStaticTypeId<EventType>(),
+            [handler = std::forward<Callback>(callback)](const void* eventPtr) {
+                std::invoke(handler, *static_cast<const EventType*>(eventPtr));
+            },
+            false);
     }
 
     /// @brief 取消具体事件类型上的一条订阅。
@@ -77,7 +101,7 @@ public:
     /// @brief 同步发布事件，并分发给当前类型及所有已注册父类。
     /// @param event 发布期间保持有效的只读事件对象。
     /// @warning
-    /// 输入和画布路径可能高频调用；回调不得阻塞，当前实现还会复制订阅快照。
+    /// 输入和画布路径可能高频调用；只获取一次只读表的生命周期，回调不得阻塞。
     template<typename EventType> void publish(const EventType& event)
     {
         // 类型层级首次使用时构建，后续发布只复用缓存结果。
@@ -91,10 +115,12 @@ private:
     /// @brief 注册已类型擦除的订阅回调。
     /// @param typeId 事件类型 ID。
     /// @param callback 接收事件地址的回调。
+    /// @param copyOnPublish 擦除前可变性未知时保留原复制语义。
     /// @return 可用于取消订阅的 ID。
     /// @warning 该低频操作获取订阅表写锁，并可能扩容容器。
     SubscriptionID subscribeImpl(uint64_t                         typeId,
-                                 std::function<void(const void*)> callback);
+                                 std::function<void(const void*)> callback,
+                                 bool copyOnPublish);
 
     /// @brief 取消已类型擦除的订阅。
     /// @param typeId 事件类型 ID。
@@ -113,7 +139,7 @@ private:
     /// @brief 向相关事件类型的订阅者发布对象。
     /// @param routes 精确类型及父类的缓存分发次序。
     /// @param eventPtr 发布期间有效的完整事件对象地址。
-    /// @warning 高频发布会复制匹配订阅记录，回调在释放读锁后同步执行。
+    /// @warning 高频发布只借用不可变分组，回调在释放快照锁后同步执行。
     void publishImpl(const std::vector<DispatchRoute>& routes,
                      const void*                       eventPtr);
 
