@@ -5,7 +5,6 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/beatmap/BeatmapOutputFile.h"
 
-#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <nlohmann/json.hpp>
@@ -91,13 +90,15 @@ bool writeMalodyExportWithAudio(const BeatMap&               beatMap,
         nlohmann::json* pairedMain = nullptr;
         // 完整引用优先，避免不同目录的同名效果音也被算作 Main。
         // 文件名回退仅兼容没有精确引用的旧谱面，不能扩大已确认资源的身份。
-        const bool hasExactMainReference = std::any_of(
-            document["note"].begin(),
-            document["note"].end(),
-            [&](const auto& node) {
-                return isMalodyAutomaticAudioNode(node) &&
-                       node.value("sound", std::string{}) == songFile;
-            });
+        bool hasExactMainReference = false;
+        for ( const auto& node : document["note"] ) {
+            // JSON 节点识别和字段读取包含多层调用，匹配后直接结束本次扫描。
+            if ( isMalodyAutomaticAudioNode(node) &&
+                 node.value("sound", std::string{}) == songFile ) {
+                hasExactMainReference = true;
+                break;
+            }
+        }
         // 身份优先级先独立确定，不能因 note[] 的时间排序不同而改变 Main 选择。
         // 精确命中后仍检查真正 Main 是否重复，不能用优先级掩盖多次触发歧义。
         // 节点指针只在当前数组内借用，之后不扩容 note[]，保证重写资源名安全。

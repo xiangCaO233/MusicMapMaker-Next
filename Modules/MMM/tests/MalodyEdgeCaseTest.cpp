@@ -834,9 +834,11 @@ void testQuantizedStaircaseExportsRmSegments()
     TEST_ASSERT(!document.is_discarded(), "MC should contain valid JSON");
     // 自动采样也位于 note 数组，不能假定玩家折线固定排在第一项。
     const auto node =
-        std::find_if(document["note"].begin(),
-                     document["note"].end(),
-                     [](const json& value) { return value.contains("seg"); });
+        // JSON 迭代器搜索采用 ranges 入口，逐项比较并在首个目标处结束。
+        std::ranges::find_if(
+            document["note"].begin(),
+            document["note"].end(),
+            [](const json& value) { return value.contains("seg"); });
     TEST_ASSERT(node != document["note"].end(), "staircase root should exist");
     const auto& segments = (*node)["seg"];
     // 先限定段落数量，再逐段索引，避免缺失节点变成无关的 JSON 断言。
@@ -1373,7 +1375,7 @@ void testSlideAudioNodeUsesSoundType()
                 "slide note array should not be empty");
     // 使用公共判定器兼容读取两种 SOUND 类型，再单独断言 Slide 的字符串形态。
     const auto audioNode =
-        std::find_if(j["note"].begin(), j["note"].end(), isSoundNode);
+        std::ranges::find_if(j["note"].begin(), j["note"].end(), isSoundNode);
     TEST_ASSERT(audioNode != j["note"].end(),
                 "slide audio sample should be present");
     // 类型和值都检查，避免任意字符串被误认为有效 SOUND。
@@ -1425,7 +1427,7 @@ void test_internal_offset_metadata_not_exported()
     TEST_ASSERT(!j["meta"].contains("audioOffset"),
                 "audioOffset should not be exported to Malody meta");
     const auto sampleIt =
-        std::find_if(j["note"].begin(), j["note"].end(), isSoundNode);
+        std::ranges::find_if(j["note"].begin(), j["note"].end(), isSoundNode);
     TEST_ASSERT(sampleIt != j["note"].end(),
                 "explicit audio sample should remain present");
     TEST_ASSERT(sampleIt->value("offset", 0.0) == -75.0,
@@ -2008,10 +2010,10 @@ void test_non_malody_lead_in_exports_timing_origin_and_audio_compensation()
             "first-half-beat red line should pair main offset with delay");
 
         // 普通玩家对象需要前移一个导出拍，才能与回卷后的时间原点对齐。
-        const auto noteIt =
-            std::find_if(exported["note"].begin(),
-                         exported["note"].end(),
-                         [](const json& node) { return !isSoundNode(node); });
+        const auto noteIt = std::ranges::find_if(
+            exported["note"].begin(),
+            exported["note"].end(),
+            [](const json& node) { return !isSoundNode(node); });
         TEST_ASSERT(noteIt != exported["note"].end(),
                     "lead-in export should keep the playable note");
         TEST_ASSERT((*noteIt)["beat"] == json::array({ 1, 0, 1 }),
@@ -2063,7 +2065,7 @@ void test_late_first_timing_keeps_paired_main_offset()
     std::ifstream stream(outputPath);
     json          exported;
     stream >> exported;
-    const auto sample = std::find_if(
+    const auto sample = std::ranges::find_if(
         exported["note"].begin(), exported["note"].end(), isSoundNode);
 
     // 真实 BPM 位于合成锚点之后六拍：五拍前导加一拍相位进位。
@@ -2162,13 +2164,14 @@ void test_late_first_timing_prepends_anchor_and_shifts_all_content()
     json          withinExported;
     withinOutputFile >> withinExported;
     // 从共享 note[] 分别定位主 SOUND 和玩家 Note，不依赖输出排序。
-    const auto withinMainSample = std::find_if(withinExported["note"].begin(),
-                                               withinExported["note"].end(),
-                                               isSoundNode);
-    const auto withinPlayable =
-        std::find_if(withinExported["note"].begin(),
-                     withinExported["note"].end(),
-                     [](const json& node) { return !isSoundNode(node); });
+    const auto withinMainSample =
+        std::ranges::find_if(withinExported["note"].begin(),
+                             withinExported["note"].end(),
+                             isSoundNode);
+    const auto withinPlayable = std::ranges::find_if(
+        withinExported["note"].begin(),
+        withinExported["note"].end(),
+        [](const json& node) { return !isSoundNode(node); });
     // 合成锚点位于 beat 0，原红线和同拍 Scroll 必须一起留在 beat 1。
     TEST_ASSERT(
         withinExported["time"].size() == 2 &&
@@ -3312,10 +3315,10 @@ void test_paired_first_delay_round_trips_variable_bpm()
                         exportedSample->value("offset", -1) == 237,
                     "first-half-beat main SOUND should pair offset");
         // Note 与 SCROLL 分属不同数组，但导出拍号分别对应 101 与 111。
-        const auto exportedPlayable =
-            std::find_if(exported["note"].begin(),
-                         exported["note"].end(),
-                         [](const json& node) { return !isSoundNode(node); });
+        const auto exportedPlayable = std::ranges::find_if(
+            exported["note"].begin(),
+            exported["note"].end(),
+            [](const json& node) { return !isSoundNode(node); });
         TEST_ASSERT(
             exportedPlayable != exported["note"].end() &&
                 (*exportedPlayable)["beat"] == json::array({ 101, 0, 1 }) &&
@@ -3697,7 +3700,7 @@ void testEditedSampleTimestampOverridesImportedBeat()
     json          exported;
     exportedFile >> exported;
     // 输出层直接检查拍号，防止重载容错再次隐藏旧 beat。
-    const auto sampleIt = std::find_if(
+    const auto sampleIt = std::ranges::find_if(
         exported["note"].begin(), exported["note"].end(), isSoundNode);
     TEST_ASSERT(sampleIt != exported["note"].end(),
                 "moved sample should remain in output");
@@ -4076,7 +4079,7 @@ void testMalodyTimelineUsesFixedHighPrecisionFractions()
             exported["effect"][0]["beat"] == json::array({ 1, 1919, 1920 }),
         "timeline effect should preserve 1919/1920");
     // 从 note[] 排除主 SOUND 后定位折线根，再检查首个相对 seg。
-    const auto gameNote = std::find_if(
+    const auto gameNote = std::ranges::find_if(
         exported["note"].begin(), exported["note"].end(), [](const json& node) {
             return !isSoundNode(node);
         });
