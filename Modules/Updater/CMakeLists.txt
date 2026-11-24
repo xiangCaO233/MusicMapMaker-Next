@@ -9,10 +9,13 @@ endif()
 # 等待代码。 macOS 和 Linux 的替换语义独立，源码选择与目标平台一致。 macOS 主程序和更新器仍共享成功标记协议头。
 # 平台条件不传播到共同流程的翻译单元。
 if(WIN32)
+  # 宽字符入口与系统启动都交给 Windows 实现，路径编码在安装过程中保持一致。
   set(UPDATER_PLATFORM UpdaterWindows.cpp)
 elseif(APPLE)
+  # Bundle 事务依赖 macOS 工具，不能让 Linux 目标编译此文件。
   set(UPDATER_PLATFORM UpdaterPosix.cpp UpdaterMac.cpp)
 else()
+  # Linux 实现只处理单文件替换，并与 macOS 共用 POSIX 父进程协议。
   set(UPDATER_PLATFORM UpdaterPosix.cpp UpdaterLinux.cpp)
 endif()
 

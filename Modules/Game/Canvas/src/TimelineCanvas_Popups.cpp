@@ -3442,6 +3442,7 @@ void TimelineCanvas::TimingTableController::render(TimelineCanvas& canvas)
                                 const auto target = getElementEntity(
                                     elements[visibleElementIndices[static_cast<
                                         std::size_t>(selectedIndex)]]);
+                                // 起笔集合只记录本次表格手势，切换谱面时另行失效。
                                 // 每帧从起笔集合重算，减选范围缩回时恢复未再覆盖的成员。
                                 // 释放帧也应用最后位置，快速松手不能丢失最后跨过的行。
                                 // 纯鼠标终点取样与持续移动共用一段逻辑，经典保持原释放处理。
