@@ -27,7 +27,7 @@
 #include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "runtime/AppThreadPool.h"
-#include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/imgui/DockNodeIds.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 
@@ -1574,7 +1574,7 @@ void ToolPluginView::update(UIManager* sourceManager)
             // 插件视图在主 DockSpace 前注册，但由 UIManager 延后绘制。
             // 独立测试或工作区重建时中心节点仍可能暂时不可用。
             // 已保存的浮动窗口须迁回主停靠树，否则 FirstUseEver 不会生效。
-            const ImGuiID centerDockId = MainDockSpaceUI::getCenterDockId();
+            const ImGuiID centerDockId = DockNodeIds::getCenterDockId();
             if ( centerDockId != 0 ) {
                 const auto* saved = ImGui::FindWindowSettingsByID(
                     ImHashStr(plugin.windowTitle.c_str()));

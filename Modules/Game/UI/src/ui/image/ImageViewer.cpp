@@ -17,7 +17,7 @@
 #include "graphic/mobile/MobileTouchInput.h"
 #include "ui/UIManager.h"
 #include "ui/export/BeatmapLongScreenshot.h"
-#include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/imgui/DockNodeIds.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/workspace/IWorkspacePresentation.h"
 
@@ -136,7 +136,7 @@ std::optional<FileImage> readFileImage(const std::filesystem::path& path,
         // SVG 默认长度很小也保留细节；限制最长边并避免极端长宽比变成零像素。
         const double scale = static_cast<double>(SVG_EDGE) /
                              std::max(doc->width(), doc->height());
-        const int    w =
+        const int w =
             std::max(1, static_cast<int>(std::lround(doc->width() * scale)));
         const int h =
             std::max(1, static_cast<int>(std::lround(doc->height() * scale)));
@@ -194,8 +194,8 @@ ImagePixels sampleFileImage(const FileImage& image, ImageRegion region,
     output.m_pixels.resize(std::size_t{ 4 } * output.m_width * output.m_height);
     for ( int y = 0; y < output.m_height; ++y ) {
         if ( stop.stop_requested() ) return {};
-        const auto  sy  = region.m_y + (2LL * y + 1) * region.m_height /
-                                           (2LL * output.m_height);
+        const auto sy = region.m_y + (2LL * y + 1) * region.m_height /
+                                         (2LL * output.m_height);
         const auto* row = image.m_data.get() + sy * image.m_stride;
         auto*       target =
             output.m_pixels.data() + std::size_t{ 4 } * y * output.m_width;
@@ -830,7 +830,7 @@ void ImageViewer::update(UIManager*)
     m_impl->startFileLoad();
     if ( m_impl->m_openRequested ) {
         // 宿主在项目切换时可能还在构建；等中央节点可用才提交窗口。
-        const auto dockId = MainDockSpaceUI::getCenterDockId();
+        const auto dockId = DockNodeIds::getCenterDockId();
         if ( !dockId ) return;
         ImGui::SetNextWindowDockID(dockId, ImGuiCond_Always);
         ImGui::SetNextWindowFocus();

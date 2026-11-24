@@ -8,7 +8,7 @@
 #include "mmm/SafeParse.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
-#include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/imgui/DockNodeIds.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/manager/SettingsSearchIndex.h"
 #include "ui/layout/LayoutContext.h"
@@ -956,7 +956,7 @@ void SettingsView::update(UIManager* sourceManager)
     ImGuiID dockId = 0;
     if ( m_dockToCenterNextFrame ) {
         // 中心节点可能尚未创建，只有非零结果才视为请求完成。
-        dockId = MainDockSpaceUI::getCenterDockId();
+        dockId = DockNodeIds::getCenterDockId();
     }
     if ( m_focusRequestFramesRemaining > 0 ) {
         // 连续数帧请求焦点，确保新建或刚停靠窗口最终成为活动标签。

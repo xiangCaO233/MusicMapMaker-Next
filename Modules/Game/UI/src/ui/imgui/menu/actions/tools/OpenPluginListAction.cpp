@@ -10,7 +10,7 @@
 #include "graphic/imguivk/VKContext.h"
 #include "graphic/theme/ImGuiThemeRegistry.h"
 #include "ui/UIManager.h"
-#include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/imgui/DockNodeIds.h"
 #include "ui/plugin/ToolPluginView.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -90,7 +90,7 @@ public:
         if ( m_pendingInitialDock ) {
             // 旧版浮动记录不会响应 FirstUseEver，打开时迁回主 DockSpace。
             // 既有 DockId 则保留用户在项目工作区创建的标签或分栏。
-            const ImGuiID centerDockId = MainDockSpaceUI::getCenterDockId();
+            const ImGuiID centerDockId = DockNodeIds::getCenterDockId();
             if ( centerDockId != 0 ) {
                 const auto* saved = ImGui::FindWindowSettingsByID(
                     ImHashStr(windowTitle.c_str()));

@@ -4,6 +4,7 @@
 
 #include "event/core/SubscriptionID.h"
 #include "ui/ITextureLoader.h"
+#include "ui/imgui/DockNodeIds.h"
 #include "ui/imgui/feedback/BeatmapLoadDiagnosticFeedback.h"
 #include "ui/imgui/feedback/SaveResultFeedback.h"
 #include "ui/imgui/manager/ToolbarView.h"
@@ -35,13 +36,16 @@ public:
     /// @brief 更新并绘制不抢占焦点的文件操作进度或结果气泡。
     /// @warning UI 每帧执行，只消费通知并绘制固定规模的反馈。
     void           updateSaveFeedback();
-    static ImGuiID getCenterDockId() { return s_centerDockId; }
-    static void    setCenterDockId(ImGuiID id) { s_centerDockId = id; }
+    static ImGuiID getCenterDockId() { return DockNodeIds::getCenterDockId(); }
+    static void    setCenterDockId(ImGuiID id)
+    {
+        DockNodeIds::setCenterDockId(id);
+    }
     /// @brief 获取解除固定时工具窗口使用的右侧停靠节点。
-    static ImGuiID getToolDockId() { return s_toolDockId; }
+    static ImGuiID getToolDockId() { return DockNodeIds::getToolDockId(); }
     /// @brief 设置解除固定时工具窗口使用的右侧停靠节点。
     /// @param id 右侧工具停靠节点 ID。
-    static void setToolDockId(ImGuiID id) { s_toolDockId = id; }
+    static void setToolDockId(ImGuiID id) { DockNodeIds::setToolDockId(id); }
     /// @brief 标记本帧已加载项目专属 ImGui 布局，跳过默认 DockBuilder 重置。
     static void markProjectWorkspaceLayoutLoaded()
     {
@@ -63,9 +67,7 @@ private:
     /// @brief 音频导入请求订阅，随视图销毁明确注销。
     Event::SubscriptionID m_audioImportSubscription{};
 
-    static inline ImGuiID s_centerDockId{ 0 };
-    static inline ImGuiID s_toolDockId{ 0 };
-    static inline bool    s_projectWorkspaceLayoutLoaded{ false };
+    static inline bool s_projectWorkspaceLayoutLoaded{ false };
 
     /// @brief 临时项目保存后需要继续执行的 UI 动作。
     enum class TemporaryProjectAfterSaveAction {

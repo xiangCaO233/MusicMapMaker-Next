@@ -1,7 +1,7 @@
 #include "ui/plugin/ToolPluginView.h"
 #include "config/AppPaths.h"
 #include "log/colorful-log.h"
-#include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/imgui/DockNodeIds.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -94,7 +94,7 @@ bool testDockablePluginWindows()
     // 插件视图拥有两个独立 Lua 状态，窗口身份由稳定 ### ID 区分。
     MMM::UI::ToolPluginView view;
     bool                    opened = view.openPlugin("mmm.audio_transcoder") &&
-                                     view.openPlugin("mmm.beatmap_converter");
+                  view.openPlugin("mmm.beatmap_converter");
     // 查找只用 ### 后稳定 ID；可见中文标题更换不应改变窗口归属。
 
     /// @brief 提交一帧主 DockSpace 与两个插件窗口。
@@ -135,7 +135,7 @@ bool testDockablePluginWindows()
             // 它每帧保持存在，才能验证插件停靠后实际共享编辑器节点。
             ImGui::Begin(editorWindow);
             ImGui::End();
-            MMM::UI::MainDockSpaceUI::setCenterDockId(dockId);
+            MMM::UI::DockNodeIds::setCenterDockId(dockId);
             // NextWindowSize 只作用于接下来第一个工具窗口，即音频插件。
             // 停靠解除后可比较同一声明布局在宽窄两个浮动面板中的高度。
             if ( pluginWidth > 0.0F )
@@ -214,7 +214,7 @@ bool testDockablePluginWindows()
             audio ? audio->ContentSize.y : 0.0F);
     // 静态中心 ID 只在本测试有效，销毁上下文前清零以免影响后续测试。
     // 视图对象晚于上下文销毁；其析构只释放 Lua 和内存状态，不调用 ImGui。
-    MMM::UI::MainDockSpaceUI::setCenterDockId(0);
+    MMM::UI::DockNodeIds::setCenterDockId(0);
     ImGui::DestroyContext();
     return initiallyDocked && splitRemains && floatingInsideMain &&
            responsiveLayout;
