@@ -1928,7 +1928,15 @@ ProjectController::OpenProjectResult ProjectController::openProject(
         ProjectStorage::hasProjectConfiguration(actualProjectPath);
     // 保留打开时的存在性快照，后面首次保存创建配置不能改变默认值应用判断。
     /// @brief 从分片或旧单文件读取出的持久化项目配置。
-    auto persistedProject = m_state->m_projectStorage.load(actualProjectPath);
+    auto persistedProject = [&] {
+        // 同路径重开时先作废旧后台请求；若它已经开始则在本次读取前完成。
+        // 先读后合并才能还原资源的显式设置，不能与旧后台分片替换交错。
+        // 读取只在这个作用域排他，后续音频探测及事件派发不占用分片写锁。
+        const auto& order = m_state->m_directorySaveOrder;
+        order->m_latest.fetch_add(1, std::memory_order_relaxed);
+        std::lock_guard diskLock(order->m_diskMutex);
+        return m_state->m_projectStorage.load(actualProjectPath);
+    }();
     // 配置是否存在与读取是否成功分别保留，创建默认值不能掩盖已存在但损坏的配置。
     // 先恢复排除列表及工作区等用户状态，再合并音频配置；不直接用旧列表替代扫描。
     if ( persistedProject.m_success ) {
@@ -2028,23 +2036,33 @@ ProjectController::OpenProjectResult ProjectController::openProject(
     std::string storageError;
     // 存储错误独立于扫描结果，写回失败不会撤销已恢复的候选内存内容。
     // 新分片成功写入后才清理旧配置；写入失败仍允许阅览已恢复到内存的项目。
-    if ( m_state->m_projectStorage.save(
-             *newProject, actualProjectPath, storageError) ) {
-        // 打开临时谱包时同样保存描述文件，但写入目录是缓存，不是原始谱包。
-        if ( persistedProject.m_success &&
-             !m_state->m_projectStorage.removeLegacyProjectFile(
-                 actualProjectPath, storageError) ) {
+    {
+        // 写回完整候选时再次推进保存序号，避免旧监视通知随后覆盖已恢复配置。
+        // 正式接管工程和发布进度均在写锁外，回调无需等待此锁。
+        const auto& order = m_state->m_directorySaveOrder;
+        order->m_latest.fetch_add(1, std::memory_order_relaxed);
+        std::lock_guard diskLock(order->m_diskMutex);
+        if ( m_state->m_projectStorage.save(
+                 *newProject, actualProjectPath, storageError) ) {
+            // 打开临时谱包时同样保存描述文件，但写入目录是缓存，不是原始谱包。
+            if ( persistedProject.m_success &&
+                 !m_state->m_projectStorage.removeLegacyProjectFile(
+                     actualProjectPath, storageError) ) {
+                XWARN(
+                    "Project split storage saved but legacy file could not be "
+                    "removed: {}",
+                    storageError);
+            } else if ( persistedProject.m_source ==
+                        ProjectStorage::Source::Legacy ) {
+                XINFO(
+                    "Legacy mmm_project.json migrated to split .mmm storage.");
+            }
+        } else {
             XWARN(
-                "Project split storage saved but legacy file could not be "
-                "removed: {}",
+                "Failed to save split project storage while opening project: "
+                "{}",
                 storageError);
-        } else if ( persistedProject.m_source ==
-                    ProjectStorage::Source::Legacy ) {
-            XINFO("Legacy mmm_project.json migrated to split .mmm storage.");
         }
-    } else {
-        XWARN("Failed to save split project storage while opening project: {}",
-              storageError);
     }
 
     publishProjectOpenProgress(Event::ProjectOpenProgressStage::PreparingAudio,
@@ -2256,7 +2274,13 @@ ProjectController::saveTemporaryProjectTo(
         return result;
     }
 
-    std::string errorMessage;
+    // 转正也会复制内部配置文件。正在写入的旧配置先完成，已排队但未写入
+    // 的内容由下面的完整新快照取代。
+    // 同一锁串行化源目录复制与监视保存，随后新目录仍由独立候选工程写入。
+    const auto& order = m_state->m_directorySaveOrder;
+    order->m_latest.fetch_add(1, std::memory_order_relaxed);
+    std::unique_lock diskLock(order->m_diskMutex);
+    std::string      errorMessage;
     if ( !copyDirectoryContents(
              m_currentProject->m_projectRoot, saveRoot, errorMessage) ) {
         result.m_errorMessage = errorMessage;
@@ -2282,6 +2306,8 @@ ProjectController::saveTemporaryProjectTo(
 
     // 原地更新保留 Project
     // 对象地址；监听根与最近项目记录在持久化成功后一起切换。
+    // 锁只约束文件副本和配置分片，后续身份更新、目录监听和设置更新不得占用它。
+    diskLock.unlock();
     *m_currentProject = savedProject;
     // 另存转正会更换资源解析根，旧向导的写请求不能落到正式工程。
     ++m_projectGeneration;
@@ -2318,7 +2344,13 @@ ProjectController::CloseProjectResult ProjectController::closeProject()
         if ( !m_currentProject ) return result;
         result.m_projectTitle = m_currentProject->m_metadata.m_title;
         projectPath           = m_currentProject->m_projectRoot;
-        result.m_project      = std::move(m_currentProject);
+        // 迟到的保存结果失去当前工程身份。常规关闭前已显式保存最终状态。
+        m_state->m_directorySaveOrder->m_latest.fetch_add(
+            1, std::memory_order_relaxed);
+        // 所有权转移时仅让待写序号失效，不等待后台目录枚举返回。
+        // 保存清理归逻辑收尾路径，而纯关闭接口不重新生成旧工程的磁盘快照。
+        // 结果消费还会核对工程版本，因此同根重开也不会接管关闭前的资源列表。
+        result.m_project = std::move(m_currentProject);
         publishUiSnapshot();
     }
     // unique_ptr 转移不拷贝项目资源，返回结果成为后续释放项目的所有者。
@@ -2351,77 +2383,6 @@ void ProjectController::stopDirectoryWatcher()
 bool ProjectController::consumeDirectoryChangePending()
 {
     return m_projectDirectoryWatcher.consumeChangePending();
-}
-
-/// @brief 扫描当前项目目录并同步项目资源列表。
-/// @return 目录同步结果，包含是否改变项目和需要预加载的音效。
-/// @details 无项目或扫描失败返回默认结果，不以空扫描覆盖现有资源。
-/// @note 成功扫描为空可以移除全部资源，这与无法扫描有意采用不同结果。
-/// @warning 涉及文件系统枚举；应由目录变更等低频事件触发，不逐帧执行。
-DirectorySyncResult ProjectController::scanProjectDirectory()
-{
-    /// @brief 本次目录扫描同步结果。
-    DirectorySyncResult result;
-    // 默认结果不宣称扫描成功，未扫描不能等同于成功的空目录。
-    if ( !m_currentProject ) {
-        return result;
-    }
-
-    /// @brief 当前项目根目录路径。
-    auto actualProjectPath = m_currentProject->m_projectRoot;
-    /// @brief 当前项目目录扫描结果。
-    ProjectDirectoryScanner::ScanResult directoryScan;
-
-    directoryScan = m_state->m_projectDirectoryScanner.scan(actualProjectPath);
-    // 根目录在扫描前按值保存，不依赖扫描期间复用当前项目的路径引用。
-    if ( !directoryScan.m_success ) {
-        return result;
-    }
-
-    // 只有完整扫描成功才做差量同步，枚举失败不能把暂时不可见的文件当成已删除。
-    return m_state->m_projectResourceService.syncDirectoryResources(
-        *m_currentProject, directoryScan);
-}
-
-/// @brief 保存当前项目配置。
-/// @return 保存成功时返回 true。
-/// @note 保存的是项目配置分片，不代替打开谱面的内容保存，也不重新打包源谱包。
-/// 成功事件使用分片清单路径，消费者不应将它视为旧版单文件 JSON。
-/// @warning 同步保存与旧格式删除只适用于显式保存或低频自动保存。
-/// @note 此入口不拒绝临时项目；保存临时项目时写入缓存，不会转成正式项目。
-/// 成功事件只携带配置位置，不携带项目对象所有权或打开谱面的保存状态。
-bool ProjectController::saveProject()
-{
-    if ( !m_currentProject ) return false;
-    // UI 按内存实际内容刷新；磁盘保存失败不能让选择器继续使用旧资源 ID。
-    publishUiSnapshot();
-    // 保存必须有项目上下文，不能因没有待写内容就发布成功事件。
-
-    const auto manifest =
-        ProjectStorage::manifestPath(m_currentProject->m_projectRoot);
-    XINFO("Saving split project storage to {}", Config::pathToUtf8(manifest));
-
-    std::string errorMessage;
-    if ( !m_state->m_projectStorage.save(*m_currentProject,
-                                         m_currentProject->m_projectRoot,
-                                         errorMessage) ) {
-        XERROR("Failed to save split project storage: {}", errorMessage);
-        return false;
-    }
-    // 分片保存完成后再删除旧格式；任一步失败都不发布保存成功事件。
-    if ( !m_state->m_projectStorage.removeLegacyProjectFile(
-             m_currentProject->m_projectRoot, errorMessage) ) {
-        // 分片已经写入，返回 false 不表示磁盘完全未变化，也不尝试撤销分片保存。
-        XERROR("Failed to remove legacy project configuration: {}",
-               errorMessage);
-        return false;
-    }
-
-    XINFO("Project saved successfully.");
-    Event::EventBus::instance().publish(Event::ProjectSavedEvent{
-        .m_projectFilePath = Config::pathToUtf8(manifest),
-    });
-    return true;
 }
 
 /// @brief 创建谱面文件并登记到当前项目。

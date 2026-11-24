@@ -1538,9 +1538,11 @@ bool EditorEngine::needsCanvasCloseBeforeProjectOpen() const
 /// 正在播放的活动会话使用同一次 steady_clock 采样外推连续时间；其他会话
 /// 保留最近一次逻辑更新时间，避免后台节流导致捕获过程主动推进其状态。
 /// @note 不保存谱面正文，也不直接把项目设置写入磁盘。
-/// @warning 保存、切换项目等低频入口；持有会话锁遍历列表并规范化路径，
-/// 可能访问文件系统，不得移入每 update 的连续状态发布路径。
-void EditorEngine::captureProjectWorkspaceState()
+/// @param queryFilesystem
+/// 为真时保留显式保存的符号链接解析；目录刷新用词法路径。
+/// @warning 保存、切换项目等低频入口；持有会话锁遍历列表并规范化路径。
+/// 只有 queryFilesystem 为真时才可能访问磁盘；不可在连续状态发布中调用。
+void EditorEngine::captureProjectWorkspaceState(bool queryFilesystem)
 {
     auto* project = ProjectController::instance().currentProject();
     if ( !project ) {
@@ -1587,8 +1589,14 @@ void EditorEngine::captureProjectWorkspaceState()
 
         auto absoluteMapPath = resolveProjectPath(
             *project, ctx.currentBeatmap->m_baseMapMetadata.map_path);
+        // 目录刷新只做词法转换，已登记的会话路径仍能用于恢复。
+        // 显式保存继续将符号链接解析为相对于项目根的规范路径。
         auto relativeMapPath =
-            makeProjectRelativePath(*project, absoluteMapPath);
+            queryFilesystem
+                ? makeProjectRelativePath(*project, absoluteMapPath)
+                : absoluteMapPath.lexically_relative(project->m_projectRoot);
+        if ( relativeMapPath.empty() )
+            relativeMapPath = absoluteMapPath.filename();
 
         // 相对路径保证项目整体搬迁后仍可恢复；cameraId 保持停靠窗口身份，
         // displayName 只负责标签展示，不能代替文件身份参与查重。
@@ -4763,6 +4771,14 @@ void EditorEngine::loop()
     (void)refreshEditorConfigSnapshot(editorConfigSnapshot,
                                       editorConfigSnapshotRevision);
 
+    // 去抖状态只属于本轮逻辑线程生命周期，重启时不恢复旧通知。
+    // 目录等待与会话调度截止时间独立。慢磁盘只推迟资源刷新，不能扩大 dt。
+    // 即使当前没有画布，仍处理项目的扫描完成和配置落盘。
+    // 上一次扫描若仍在后台执行，普通循环不需要重新读取全量工程状态。
+    // 去抖只推迟提交时刻，不为同一批并发写入重复启动扫描。
+    auto lastDirectoryChange    = FrameLimitClock::now();
+    bool pendingDirectoryChange = false;
+
     while ( impl().m_running.load(std::memory_order_acquire) ) {
         // 限频偏好允许 UI 即时修改；设备刷新率参与 VSync 倍率到 UPS 的换算。
         // 本轮读取值固定使用到下个循环，避免同轮截止时间采用两套目标。
@@ -5108,34 +5124,27 @@ void EditorEngine::loop()
         }
         // 项目和活动会话状态已更新，只交接设置所需的小份值，文件探测由后台执行。
         processBeatmapSettingsRequest();
-        // 目录监视器只发布轻量待处理标记；真正扫描留在逻辑线程低频尾部。
-        // 静态状态属于唯一 EditorEngine 循环实例，并随线程重启保留最近默认值。
-        static auto lastChangeTime   = FrameLimitClock::now();
-        static bool hasPendingChange = false;
+        // 每轮轮询就绪槽；慢目录、谱面读取和分片写入都不阻塞这一轮。
+        // 保存完成在逻辑线程发布，避免文件工作者直接访问会话和界面对象。
+        // 独占的后台 IO 可以跨多次循环持有其快照，活动工程不依赖其返回。
+        // 先消费旧保存，随后提交新差异，避免本轮拿到两次同状态的存储快照。
+        projectController.pollDirectorySave();
+        if ( projectController.isDirectoryScanReady() &&
+             applyProjectDirectoryScan() )
+            pendingDirectoryChange = true;
 
+        const auto now = FrameLimitClock::now();
         if ( projectController.consumeDirectoryChangePending() ) {
-            // 连续事件只覆盖最后时间，不排队每个中间状态，批量复制最终只扫一次。
-            hasPendingChange = true;
-            lastChangeTime   = FrameLimitClock::now();
+            // 不因批量复制保存多份中间结果。扫描期间收到的新通知保留到下一轮。
+            // 每条通知只更新时间和待处理位；一个连续批次合并为一个扫描。
+            pendingDirectoryChange = true;
+            lastDirectoryChange    = now;
         }
-
-        if ( hasPendingChange ) {
-            // hasPendingChange 跨轮保留，不用 sleep
-            // 等待静止窗口，也不阻塞播放更新。
-            auto now = FrameLimitClock::now();
-            // 200ms
-            // 为非阻塞去抖：循环和会话仍正常推进，仅推迟低频完整目录扫描。
-            // 每次新事件覆盖
-            // lastChangeTime，扫描看到的是批量写入静止后的最终状态。
-            if ( std::chrono::duration<double>(now - lastChangeTime).count() >=
-                 0.2 ) {
-                XINFO(
-                    "Directory Watcher: filesystem changes settled, rescanning "
-                    "directory...");
-                scanProjectDirectory();
-                // 扫描完成后才清除标记；扫描期间到达的新通知会在下一轮重新置位。
-                hasPendingChange = false;
-            }
+        if ( pendingDirectoryChange &&
+             now - lastDirectoryChange >= std::chrono::milliseconds(200) ) {
+            // 并发的通知可以积累一个新请求，不为每条文件变动分配任务。
+            // 正在处理此前一轮时保留此标记，待其完成后才捕获新的工程值。
+            pendingDirectoryChange = !projectController.startDirectoryScan();
         }
     }
 }
@@ -6110,52 +6119,51 @@ std::size_t EditorEngine::remapAudioResourcePathsAfterMove(
     return changedCount;
 }
 
-/// @brief 扫描当前项目目录并把新增、删除或变更资源同步到运行时。
-/// @details
-/// ProjectController 负责目录枚举、资源清单差异和删除判断；EditorEngine 只
-/// 补充跨模块副作用，包括登记新增 Effect、使会话音频描述符失效、保存项目
-/// 配置并向 UI 发布刷新事件。扫描失败不发布成功事件，也不清空现有资源展示。
-/// @warning 目录监视去抖后的低频路径：持有 SessionRegistry 递归锁，执行完整
-/// 项目目录扫描、音效登记和可选项目保存，不得从每帧无条件调用。
-/// @post 扫描成功时发布 ProjectDirectoryRefreshedEvent 表明资源是否实际变化。
-void EditorEngine::scanProjectDirectory()
+/// @brief 应用已就绪的目录差异并更新当前工程的运行时资源。
+/// @return 同一工程的资源修订变化时为真，调用者应重新捕获输入。
+/// @details 会话锁只覆盖差异提交、音效登记和保存快照捕获。
+/// 目录遍历、谱面读取和项目配置写盘均由文件线程完成。
+/// @note 失败不清空显示列表。成功的空目录与扫描失败仍由结果标记区分。
+/// @warning 仅在 future 就绪时调用；它只将当前工程状态和运行时资源同步。
+/// 同根重开由控制器的工程代次区分，不按当前文件路径猜测归属。
+/// @details 回调只能看见提交后的项目；检查失败时不会发布任何界面资源事件。
+/// 同工程抢先编辑时由消费端返回重试，未应用的旧资源不会登记到音频系统。
+bool EditorEngine::applyProjectDirectoryScan()
 {
-    std::lock_guard<std::recursive_mutex> lock(
-        impl().m_sessionRegistry.mutex());
-    /// @brief 当前项目指针，仅用于解析音效资源绝对路径。
-    const auto* currentProject = ProjectController::instance().currentProject();
-    // 项目关闭后的迟到监视通知无须处理，下一项目会建立独立监视状态。
-    if ( !currentProject ) return;
+    auto& controller       = ProjectController::instance();
+    bool  resourcesChanged = false;
+    {
+        std::lock_guard lock(impl().m_sessionRegistry.mutex());
+        const auto      update = controller.applyDirectoryScan();
+        if ( update.m_retry ) return true;
+        if ( !update.m_sync.m_scanSucceeded ) return false;
 
-    /// @brief 当前目录资源同步结果。
-    auto syncResult = ProjectController::instance().scanProjectDirectory();
-    // 控制器结果已经完成项目资源表差异计算，本层只处理跨模块运行时副作用。
-
-    // 只登记控制器确认新增或更新的 Effect 描述；首次显式播放时才按需解码。
-    for ( const auto& res : syncResult.m_effectResourcesToRegister ) {
-        /// @brief 新音效资源的项目内绝对路径。
-        auto absAudioPath =
-            currentProject->m_projectRoot / Config::utf8ToPath(res.m_path);
-        // 控制器输出保持项目相对路径，跨入 AudioManager 前才解析为绝对路径。
-        Audio::AudioManager::instance().registerSoundEffect(
-            res.m_id, Config::pathToUtf8(absAudioPath), res.m_config);
+        const auto* project = controller.currentProject();
+        for ( const auto& resource :
+              update.m_sync.m_effectResourcesToRegister ) {
+            // 按需登记不读取音效；只有实际请求播放时才解码。
+            const auto path =
+                project->m_projectRoot / Config::utf8ToPath(resource.m_path);
+            Audio::AudioManager::instance().registerSoundEffect(
+                resource.m_id, Config::pathToUtf8(path), resource.m_config);
+        }
+        // 只在资源相关状态真正改动时刷新会话描述和安排持久化。
+        resourcesChanged = update.m_sync.m_changed;
+        if ( resourcesChanged ) {
+            markAudioTimelineDescriptorsDirtyUnsafe();
+            // 与显式保存一样记录逻辑工作区；监视路径不得在此解析磁盘符号链接。
+            // 分片序列化交给文件池，并按序号避免覆盖其后的显式保存。
+            captureProjectWorkspaceState(false);
+            controller.queueDirectorySave();
+        }
     }
 
-    // 任一目录变化都可能改变组合音频路径，先标脏会话再保存新的项目清单。
-    if ( syncResult.m_changed ) {
-        markAudioTimelineDescriptorsDirtyUnsafe();
-        saveProject();
-    }
-
-    if ( syncResult.m_scanSucceeded ) {
-        // 只有完整扫描成功才通知 UI
-        // 刷新；失败时保留现有展示，等待下次通知重试。
-        Event::EventBus::instance().publish(
-            Event::ProjectDirectoryRefreshedEvent{
-                // UI 可据 changed 区分只完成扫描与确有资源列表变化。
-                .m_resourcesChanged = syncResult.m_changed,
-            });
-    }
+    // 回调只观察完成后的状态，不在会话锁内通知界面。
+    // 保存可以晚于刷新事件，磁盘成功事件须在后续轮询独立交付。
+    Event::EventBus::instance().publish(Event::ProjectDirectoryRefreshedEvent{
+        .m_resourcesChanged = resourcesChanged,
+    });
+    return false;
 }
 
 }  // namespace MMM::Logic

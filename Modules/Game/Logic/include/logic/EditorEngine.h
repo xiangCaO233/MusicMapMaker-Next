@@ -649,7 +649,9 @@ private:
     void restoreBrushAudioResourceUnsafe(BeatmapSession& session) const;
 
     /// @brief 捕获当前打开谱面、播放进度和主音轨运行时配置到项目设置。
-    void captureProjectWorkspaceState();
+    /// @param queryFilesystem 是否将路径相对化时解析符号链接；后台刷新传
+    /// false。
+    void captureProjectWorkspaceState(bool queryFilesystem = true);
 
     /// @brief 根据当前项目的工作区状态恢复上次打开的谱面和播放进度。
     /// @param explicitBeatmapPath 本次打开项目时用户显式指定的谱面路径。
@@ -685,11 +687,9 @@ private:
     /// @return 指定的谱面成功创建会话时返回 true。
     bool finishOpenProject(const OpenProjectResult& openResult);
 
-    /**
-     * @brief 定期扫描项目目录变更（实现实时目录监听与资源同步）
-
-     */
-    void scanProjectDirectory();
+    /// @brief 在逻辑线程提交就绪的目录差异，不等待文件任务。
+    /// @return 同一工程已编辑，需要发起新一轮扫描时为真。
+    bool applyProjectDirectoryScan();
 
     /// @brief 清理当前已打开的项目并卸载项目音频状态。
     /// @return 没有当前项目或项目成功关闭时返回 true。
