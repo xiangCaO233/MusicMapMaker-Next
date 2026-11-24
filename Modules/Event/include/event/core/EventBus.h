@@ -3,6 +3,7 @@
 #include "event/EventDef.h"
 #include "event/core/SubscriptionID.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -80,7 +81,7 @@ public:
     template<typename EventType> void publish(const EventType& event)
     {
         // 类型层级首次使用时构建，后续发布只复用缓存结果。
-        publishImpl(relatedTypeIds<EventType>(), &event);
+        publishImpl(dispatchRoutes<EventType>(), std::addressof(event));
     }
 
 private:
@@ -101,52 +102,79 @@ private:
     /// @warning 该低频操作获取订阅表写锁并线性擦除匹配记录。
     void unsubscribeImpl(uint64_t typeId, SubscriptionID id);
 
-    /// @brief 向相关事件类型的订阅者发布对象。
-    /// @param relatedTypes 当前类型及所有注册父类的 ID。
-    /// @param eventPtr 发布期间有效的事件地址。
-    /// @warning 高频发布会复制匹配订阅记录；回调在释放读锁后同步执行。
-    void publishImpl(const std::vector<uint64_t>& relatedTypes,
-                     const void*                  eventPtr);
+    /// @brief 保存事件类型及从原对象到对应基类子对象的转换。
+    struct DispatchRoute {
+        /// @brief 与订阅表中的键对应的进程内类型编号。
+        uint64_t typeId;
+        /// @brief 按实际继承路径调整地址，不依赖基类的内存偏移。
+        const void* (*adjust)(const void*);
+    };
 
-    /// @brief 获取事件类型及其所有注册父类的稳定 ID 列表。
-    /// @return 首次使用时构建、之后复用的 ID 列表。
-    template<typename EventType>
-    static const std::vector<uint64_t>& relatedTypeIds()
+    /// @brief 向相关事件类型的订阅者发布对象。
+    /// @param routes 精确类型及父类的缓存分发次序。
+    /// @param eventPtr 发布期间有效的完整事件对象地址。
+    /// @warning 高频发布会复制匹配订阅记录，回调在释放读锁后同步执行。
+    void publishImpl(const std::vector<DispatchRoute>& routes,
+                     const void*                       eventPtr);
+
+    /// @brief 沿显式父类路径逐级转换，支持多继承与虚基类。
+    /// @details 逐级转换也适用于根类型上有多个同名基类子对象的事件。
+    template<typename Current, typename... Parents>
+    static const void* adjustEvent(const Current* event)
     {
-        // 静态缓存由语言规则保证线程安全初始化，避免每次发布遍历类型元数据。
-        static const std::vector<uint64_t> relatedTypes = [] {
-            std::vector<uint64_t> hierarchy;
-            // 先加入精确类型，使具体订阅者先于父类订阅者进入快照。
-            hierarchy.push_back(detail::getStaticTypeId<EventType>());
-            if constexpr ( std::tuple_size_v<
-                               typename EventTraits<EventType>::Parents> > 0 ) {
-                collectParents<typename EventTraits<EventType>::Parents>(
-                    hierarchy);
-            }
-            return hierarchy;
-        }();
-        return relatedTypes;
+        if constexpr ( sizeof...(Parents) == 0 ) {
+            // 所有转换已完成。回调恢复的类型与当前子对象类型相同。
+            return event;
+        } else {
+            return adjustParent<Parents...>(event);
+        }
     }
 
-    /// @brief 递归收集父类及更高层父类的类型 ID。
-    /// @param hierarchy 写入的类型 ID 列表。
-    template<typename Tuple, std::size_t Index = 0>
-    static void collectParents(std::vector<uint64_t>& hierarchy)
+    /// @brief 先转为直接父类，再继续到本次订阅类型。
+    template<typename Parent, typename... Rest, typename Current>
+    static const void* adjustParent(const Current* event)
     {
-        if constexpr ( Index < std::tuple_size_v<Tuple> ) {
-            using ParentType = std::tuple_element_t<Index, Tuple>;
-            // 直接父类先入队，然后深度优先展开它自己的父类链。
-            hierarchy.push_back(detail::getStaticTypeId<ParentType>());
+        return adjustEvent<Parent, Rest...>(static_cast<const Parent*>(event));
+    }
 
-            if constexpr ( std::tuple_size_v<
-                               typename EventTraits<ParentType>::Parents> >
-                           0 ) {
-                collectParents<typename EventTraits<ParentType>::Parents>(
-                    hierarchy);
-            }
+    /// @brief 按声明顺序展开直接父类，空元组结束当前路径。
+    template<typename Root, typename... Path, typename... Parents>
+    static void collectParents(std::vector<DispatchRoute>& routes,
+                               std::tuple<Parents...>*)
+    {
+        (appendRoute<Parents, Root, Path..., Parents>(routes), ...);
+    }
 
-            collectParents<Tuple, Index + 1>(hierarchy);
-        }
+    /// @brief 添加一个类型首次出现的路径，保留原深度优先顺序。
+    template<typename Current, typename Root, typename... Path>
+    static void appendRoute(std::vector<DispatchRoute>& routes)
+    {
+        const auto typeId = detail::getStaticTypeId<Current>();
+        if ( std::ranges::any_of(routes, [typeId](const auto& route) {
+                 return route.typeId == typeId;
+             }) )
+            return;
+
+        // 一个祖先类型只投递一次，非虚菱形时使用声明顺序中的第一个子对象。
+        routes.push_back({ typeId, [](const void* event) {
+                              return adjustEvent<Root, Path...>(
+                                  static_cast<const Root*>(event));
+                          } });
+        // 仅以指针推导父类元组类型，不构造事件对象。
+        using Parents = typename EventTraits<Current>::Parents;
+        collectParents<Root, Path...>(routes, static_cast<Parents*>(nullptr));
+    }
+
+    /// @brief 首次发布时构造只读路由，后续直接借用缓存。
+    template<typename EventType>
+    static const std::vector<DispatchRoute>& dispatchRoutes()
+    {
+        static const auto routes = [] {
+            std::vector<DispatchRoute> result;
+            appendRoute<EventType, EventType>(result);
+            return result;
+        }();
+        return routes;
     }
 
     /// @brief 私有事件总线状态。

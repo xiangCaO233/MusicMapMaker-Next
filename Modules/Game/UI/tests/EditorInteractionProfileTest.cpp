@@ -5,6 +5,7 @@
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "event/ui/iwindow/UIWindowMouseEvent.h"
 #include "log/colorful-log.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/SideBarUI.h"
@@ -632,6 +633,36 @@ bool testMenuHotkeysWithoutMenuBar(Profile& profile)
     return ok;
 }
 }  // namespace
+/// @brief 验证窗口输入事件分别传递精确对象和正确的父类子对象。
+static bool testWindowEventBaseDispatch()
+{
+    using namespace MMM::Event;
+    EventBus               bus;
+    UIWindowMouseMoveEvent event{};
+    event.pos             = { 17.0f, 43.0f };
+    const auto* ui        = static_cast<const UIEvent*>(&event);
+    const auto* mouse     = static_cast<const ImGuiMouseMoveEvent*>(&event);
+    const auto* firstBase = static_cast<const BaseEvent*>(ui);
+    bool        ok        = true;
+    int         order     = 0;
+    // 具体事件先收到，随后按注册关系深度优先分发。
+    bus.subscribe<UIWindowMouseMoveEvent>([&](const auto& received) {
+        ok &= &received == &event && ++order == 1;
+    });
+    bus.subscribe<UIEvent>(
+        [&](const auto& received) { ok &= &received == ui && ++order == 2; });
+    // UIEvent 和 InputEvent 都包含 BaseEvent，统一使用最先到达的路径。
+    bus.subscribe<BaseEvent>([&](const auto& received) {
+        ok &= &received == firstBase && ++order == 3;
+    });
+    bus.subscribe<ImGuiMouseMoveEvent>([&](const auto& received) {
+        ok &= &received == mouse && received.pos.x == 17.0f && ++order == 4;
+    });
+    // 使用真实窗口鼠标事件，保证测试覆盖具有不同地址的第二基类。
+    bus.publish(event);
+    return require(ok && order == 4, "window mouse event base dispatch");
+}
+
 /// @brief 验证应用级方案、真实输入映射、动作权限、生命周期和配置兼容。
 /// @details 本用例由独立 CTest 进程运行，测试方案不会进入用户的生产注册表。
 /// 配置目录由 mmm_register_test_case 隔离，不读写真实用户的键位设置。
@@ -934,5 +965,6 @@ int main(int argc, char** argv)
     ok &= checkAcceleratedScroll();
     ok &= testMenuHotkeysWithoutMenuBar(*observer);
     ok &= testMobileInputPolicy();
+    ok &= testWindowEventBaseDispatch();
     return ok ? 0 : 1;
 }
