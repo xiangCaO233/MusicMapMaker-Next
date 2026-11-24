@@ -653,7 +653,9 @@
 
 ### P2 · R22 · ICE 的 AVX 要求泄漏到公开头和非 x86 构建
 
-- [ ] 非 Apple/Android 的非 MSVC 构建无条件加 -mavx2。Linux x86_64 用 GCC 16 默认目标编译只 include 公共头并调用 operator+= 的独立消费者，实际报 target specific option mismatch。按架构选择实现，覆盖默认参数消费者和 Linux ARM64 配置。
+- [x] 非 Apple/Android 的非 MSVC 构建无条件加 -mavx2。Linux x86_64 用 GCC 16 默认目标编译只 include 公共头并调用 operator+= 的独立消费者，实际报 target specific option mismatch。按架构选择实现，覆盖默认参数消费者和 Linux ARM64 配置。
+
+  已验证。ICE Linux RelWithDebInfo 独立全量构建与 3 项 CTest 通过。默认 GCC 16 x86 独立消费者通过，原版复现目标选项不匹配。公开 AudioBuffer 消费程序在无 AVX 的 QEMU Nehalem 环境通过，Linux AArch64 的 ICE 静态目标编译通过，AArch64 公共接口 PCM 用例在 QEMU 通过。仓库缺少原生 Linux ARM64 预编译依赖，完整应用链接未覆盖；既有 SDL3 预编译本身含 AVX 指令。 主仓 Linux 全量构建和 6 项音频回归通过。ICE 来源 [IonCachyEngine #10](https://github.com/xiangCaO233/IonCachyEngine/pull/10)，指针指向合并提交 `2892c06a51ad874c644f0775b6d9b527f5990002`。默认构建采用仓库内的预编译 ICE，源码修复待指定环境刷新预编译包后才由默认构建使用。
 
 [3rdpty/sources/IonCachyEngine/cmake/configure-project.cmake:9](../3rdpty/sources/IonCachyEngine/cmake/configure-project.cmake#L9) [3rdpty/sources/IonCachyEngine/include/ice/manage/AudioBuffer.hpp:462](../3rdpty/sources/IonCachyEngine/include/ice/manage/AudioBuffer.hpp#L462) [3rdpty/sources/IonCachyEngine/include/ice/manage/AudioBuffer.hpp:491](../3rdpty/sources/IonCachyEngine/include/ice/manage/AudioBuffer.hpp#L491)
 
