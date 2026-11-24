@@ -30,6 +30,7 @@
 #include "log/colorful-log.h"
 #include "logic/AnnotationTableSnapshot.h"
 #include "logic/BeatmapSession.h"
+#include "logic/BeatmapSettingsSnapshot.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ProjectController.h"
 #include "logic/ProjectResourceService.h"
@@ -1441,6 +1442,20 @@ bool EditorEngine::isTemporaryProjectOpen() const
     return ProjectController::instance().isCurrentProjectTemporary();
 }
 
+/// @brief 在拒绝写入临时项目时发出统一提示。
+/// @warning 低频编辑命令调用；项目实例访问必须与替换或关闭串行化。
+bool EditorEngine::rejectTemporaryProjectEdit() const
+{
+    const auto info = currentTemporaryProjectInfo();
+    if ( !info.m_isTemporary ) return false;
+    // 提示需要源包和缓存两项身份，供界面解释只读原因及引导保存为正式目录。
+    Event::TemporaryProjectEditBlockedEvent event;
+    event.m_sourcePackagePath = Config::pathToUtf8(info.m_sourcePackagePath);
+    event.m_cacheProjectPath  = Config::pathToUtf8(info.m_cacheProjectPath);
+    Event::EventBus::instance().publish(event);
+    return true;
+}
+
 /// @brief 获取当前临时项目的运行时路径信息。
 /// @return 当前临时项目源包与缓存目录；非临时项目时返回默认值。
 /// @note 返回按值快照，调用方不得据此绕过控制器执行缓存目录清理。
@@ -2734,18 +2749,9 @@ void EditorEngine::pushCommand(LogicCommand&&               cmd,
 
     // 临时项目以只读方式查看；具有潜在写能力的命令即使最终可能无操作，
     // 也必须在进入任何控制器或会话队列前拒绝。
-    if ( ProjectController::instance().isCurrentProjectTemporary() &&
-         isTemporaryProjectMutationCommand(cmd) ) {
-        const auto info =
-            ProjectController::instance().currentTemporaryProjectInfo();
-        Event::TemporaryProjectEditBlockedEvent event;
-        // 同时提供源包与缓存路径，UI 能解释只读来源并引导保存到正式目录。
-        event.m_sourcePackagePath =
-            Config::pathToUtf8(info.m_sourcePackagePath);
-        event.m_cacheProjectPath = Config::pathToUtf8(info.m_cacheProjectPath);
-        Event::EventBus::instance().publish(event);
+    if ( isTemporaryProjectOpen() && isTemporaryProjectMutationCommand(cmd) &&
+         rejectTemporaryProjectEdit() )
         return;
-    }
 
     // 新建谱面同时修改项目清单和会话集合，不能只投递到某个活动会话。
     if ( std::holds_alternative<CmdCreateBeatmap>(cmd) ) {
@@ -3248,6 +3254,20 @@ Common::EditorPlaybackState EditorEngine::activePlaybackState() const
 {
     const std::lock_guard lock(impl().m_activeEditorStateMutex);
     return impl().m_activePlaybackState;
+}
+
+/// @brief 获取设置页的同代次轨道数，加载期间撤回全部值。
+/// @warning 设置绘制每帧调用。门槛和计数只在独立状态锁中读取，不访问会话。
+std::optional<ActiveBeatmapSettingsState>
+EditorEngine::activeBeatmapSettingsState() const
+{
+    const auto&           state = impl();
+    const std::lock_guard lock(state.m_activeEditorStateMutex);
+    // 紧邻读取代次和计数，避免切换标签时用上一份快照操作另一张谱面的轨道。
+    if ( !state.m_activeTrackLayout.hasBeatmap ) return std::nullopt;
+    return ActiveBeatmapSettingsState{ state.m_activePlaybackState.generation,
+                                       state.m_activeTrackLayout.draftTracks,
+                                       state.m_activeTrackLayout.bgmTracks };
 }
 
 /// @brief 将活动会话状态发布给桌面和移动播放控件。
@@ -5062,6 +5082,8 @@ void EditorEngine::loop()
             // 空会话是唯一固定短睡路径，只降低空转 CPU，不等待任何业务状态。
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
+        // 项目和活动会话状态已更新，只交接设置所需的小份值，文件探测由后台执行。
+        processBeatmapSettingsRequest();
         // 目录监视器只发布轻量待处理标记；真正扫描留在逻辑线程低频尾部。
         // 静态状态属于唯一 EditorEngine 循环实例，并随线程重启保留最近默认值。
         static auto lastChangeTime   = FrameLimitClock::now();

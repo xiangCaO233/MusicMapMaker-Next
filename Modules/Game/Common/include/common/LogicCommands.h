@@ -383,11 +383,15 @@ struct CmdUpdateTrackCount {
 /// @brief 更新持久化 BGM 轨道数量指令。
 struct CmdUpdateBgmTrackCount {
     int32_t bgmTrackCount;  ///< 目标持久化 BGM 轨道数量。
+    /// @brief 设置页命令绑定的载图实例；其它命令调用方沿用默认路由。
+    std::optional<std::weak_ptr<const ::MMM::BeatMap>> settingsSource{};
 };
 
 /// @brief 更新当前谱面独占草稿区的持久化轨道数量。
 struct CmdUpdateDraftTrackCount {
     int32_t draftTrackCount;  ///< 目标持久化草稿轨道数量。
+    /// @brief 设置页命令绑定的载图实例；其它命令调用方沿用默认路由。
+    std::optional<std::weak_ptr<const ::MMM::BeatMap>> settingsSource{};
 };
 
 /**
@@ -552,7 +556,8 @@ struct CmdClearNoteColorOverrides {
 };
 
 /// @brief 清除当前谱面全部正式音符及折线子段的自定义颜色。
-struct CmdClearAllNoteColorOverrides {};
+struct CmdClearAllNoteColorOverrides {
+};
 
 /**
  * @brief 撤销指令
@@ -575,7 +580,8 @@ struct CmdRedo {
 /**
  * @brief 复制指令
  */
-struct CmdCopy {};
+struct CmdCopy {
+};
 
 /**
  * @brief 粘贴指令
@@ -594,7 +600,8 @@ struct CmdPaste {
 /**
  * @brief 剪切指令
  */
-struct CmdCut {};
+struct CmdCut {
+};
 
 /**
  * @brief 删除选中物件指令
@@ -618,12 +625,14 @@ struct CmdRemoveComposeLessonNote {
 /**
  * @brief 镜像选中物件指令
  */
-struct CmdMirrorSelected {};
+struct CmdMirrorSelected {
+};
 
 /**
  * @brief 对齐选中物件至常用分拍指令
  */
-struct CmdAlignSelectedToCommonBeats {};
+struct CmdAlignSelectedToCommonBeats {
+};
 
 /// @brief 全选命令的轨道区范围。
 enum class SelectAllScope : std::uint8_t {
@@ -1121,10 +1130,17 @@ struct CmdUpdateBeatmapMetadata {
 
     /// @brief 仅修改玩家键数时从消费时模型取基准，保留其它字段和待处理改名。
     std::optional<ToolbarTrackCountEdit> trackCountEdit{};
+
+    /// @brief 设置页的载图身份与产生本次差量的编辑草稿。
+    std::optional<std::weak_ptr<const ::MMM::BeatMap>> settingsSource{};
+    /// @brief 非空时只应用相对该草稿改变的字段，保留消费前的其它编辑。
+    /// @note 只在实际设置编辑时分配，避免把第二份元数据内联到每个逻辑指令槽。
+    std::shared_ptr<const ::MMM::BaseMapMeta> settingsBaseline{};
 };
 
 /// @brief 标记直接修改的扩展谱面元数据，并请求尾随自动保存。
-struct CmdMarkBeatmapMetadataDirty {};
+struct CmdMarkBeatmapMetadataDirty {
+};
 
 /**
  * @brief 导入音频指令

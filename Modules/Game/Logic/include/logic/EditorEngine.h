@@ -53,6 +53,7 @@ namespace MMM::Logic
 {
 
 struct ActiveAnnotationTableRead;
+struct ActiveBeatmapSettingsState;
 struct TimingTableSnapshot;
 
 class BeatmapSession;
@@ -104,6 +105,11 @@ public:
     /// @brief 当前是否打开了临时只读项目。
     /// @return 当前项目为临时项目时返回 true。
     bool isTemporaryProjectOpen() const;
+
+    /// @brief 临时工程拒绝已判定为写入的命令，并发布统一的只读提示。
+    /// @return 当前项目为临时工程时返回 true，调用者须停止执行写入。
+    /// @warning 低频命令入口，调用方须与项目生命周期串行访问。
+    bool rejectTemporaryProjectEdit() const;
 
     /// @brief 获取当前临时项目的运行时路径信息。
     /// @return 当前临时项目源包与缓存目录；非临时项目时返回默认值。
@@ -480,6 +486,11 @@ public:
     /// @brief 读取同一活动目标的播放状态、键数与代次。
     /// @warning 移动工具栏每帧读取。短锁只复制标量，不等会话更新或音频准备。
     Common::EditorPlaybackState activePlaybackState() const;
+
+    /// @brief 同时获取代次和轨道数量，使步进交互独立于文件任务完成时间。
+    /// @warning 设置页每帧调用；只在独立发布槽内复制标量。
+    std::optional<ActiveBeatmapSettingsState>
+    activeBeatmapSettingsState() const;
 
     /// @brief 判断当前活跃 Session 是否存在已选谱面物件。
     /// @return 玩家物件或自动采样至少有一个被选中时返回 true。

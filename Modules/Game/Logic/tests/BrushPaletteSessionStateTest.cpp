@@ -5,11 +5,14 @@
 #include "common/EditorTrackLayout.h"
 #include "common/LogicCommands.h"
 #include "config/EditorSettings.h"
+#include "config/Utf8Path.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "logic/BeatmapExportPresentation.h"
 #include "logic/BeatmapSession.h"
+#include "logic/BeatmapSettingsSnapshot.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectController.h"
 #include "logic/TimingTableSnapshot.h"
 #include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/SampleComponent.h"
@@ -27,6 +30,8 @@
 #include "mmm/metadata/MapMetadata.h"
 #include "mmm/metadata/NoteMetadata.h"
 #include "mmm/note/Note.h"
+#include "mmm/project/Project.h"
+#include "runtime/AppThreadPool.h"
 
 #include <algorithm>
 #include <array>
@@ -34,6 +39,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -911,6 +918,7 @@ bool testToolbarTrackLayoutPublication()
     // 逻辑线程尚未启动，直接设置测试模型不会造成跨线程读写。
     firstSession->getContextMutable().draftTrackCount = 11;
     engine.setActiveSessionIndex(first);
+    const auto firstGeneration = engine.activePlaybackState().generation;
 
     // 排队中的模型修改不能被旧 UI 副本覆盖。先把改标题载荷准备好，
     // 交给同一个生产者顺序入队，模拟元数据窗口与工具栏共享 UI 线程。
@@ -925,6 +933,8 @@ bool testToolbarTrackLayoutPublication()
     // 先持锁再创建线程，确保读和两次输入都确实发生在受测的临界区间。
     auto reader = std::async(std::launch::async, [&] {
         const auto layout = engine.activeTrackLayout();
+        // 设置步进器与工具栏读同一发布槽，两者都必须绕过这里持有的会话锁。
+        const auto settings = Logic::activeBeatmapSettingsState();
         // 夹具已经持有会话句柄，直接走它的正常队列提交前置元数据；
         // 两个工具栏事件仍从公开引擎入口路由，用同一线程保留先后顺序。
         firstSession->pushCommand(
@@ -933,14 +943,14 @@ bool testToolbarTrackLayoutPublication()
             engine.pushCommand(Logic::CmdUpdateBeatmapMetadata{
                 .trackCountEdit = Logic::ToolbarTrackCountEdit{ 1, true } });
         }
-        return layout;
+        return std::pair{ layout, settings };
     });
     // 等待 future 而不是采样会话锁位；若读或入队任何一处发生等待，都会超时。
     const bool returned =
         reader.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
     holdSessionLock.unlock();
     // future 完成说明并发调用已结束，以下布局副本无需再与读线程同步。
-    const auto readWhileLocked = reader.get();
+    const auto [readWhileLocked, settingsWhileLocked] = reader.get();
     // 用非零的积累状态作阳性对照，恒返回空布局不能通过。
     const auto expectedFirst = Common::EditorTrackLayout{ true, 5, 11, 2 };
 
@@ -999,7 +1009,12 @@ bool testToolbarTrackLayoutPublication()
 
     // 分阶段报告，以便区分长锁回归、相对步长丢失与索引重排后的失效处理。
     // 失败阶段各自独立计算，避免单个失败吞掉其他场景的结果。
-    const bool usableWhileLocked = returned && readWhileLocked == expectedFirst;
+    // 比较设置页所见代次及两组轨道数，不能只让半组状态可读就判为通过。
+    const bool usableWhileLocked =
+        returned && readWhileLocked == expectedFirst && settingsWhileLocked &&
+        settingsWhileLocked->generation == firstGeneration &&
+        settingsWhileLocked->draftTracks == 11 &&
+        settingsWhileLocked->bgmTracks == 2;
     // 比较整组而不是单个计数，三个来自不同会话的值不能在同一轮混合。
     const bool switchedCleanly =
         pending == Common::EditorTrackLayout{} &&
@@ -1394,14 +1409,209 @@ bool testBeatmapExportPresentation()
     return valid;
 }
 
+/// @brief 验证设置读取在会话锁占用时立即提交，且文件与模型身份独立保活。
+/// @param outputRoot CTest 传入的构建输出目录，文件探测只访问其独立子目录。
+/// @return
+/// 候选按请求枚举、打开会话被替换时旧设置不生效、已有字段修改被保留时返回
+/// true。
+/// @note 逻辑线程由用例显式推进；真实文件线程负责路径检查和资源遍历。
+/// 夹具创建空媒体文件，枚举只看类型和路径，不需要外部解码器或用户项目。
+/// 标题与作者使用不同输入，防止全量改写在同字段上被覆盖顺序掩盖。
+/// 在捕捉快照和提交之间切换只读状态，验证以消费时项目能力为准。
+/// 换谱保留旧模型引用及相同路径，确保测试覆盖真实的身份拒绝。
+/// 两个文件结果都经真实线程池完成，测试线程只手动推进逻辑捕获。
+/// 文件夹位于 CTest 传入的输出目录，完成后撤销借用状态并删除夹具目录。
+/// 轨道与标题两个过期写入都要被拦下，便于覆盖各自独立的队列分支。
+/// 已扫描列表和普通快照分开断言，识别文件扫描误入定期刷新路径。
+/// 等待文件结果前先撤掉测试锁，避免因夹具锁而掩盖文件阶段的正常进度。
+/// 只读模式下修改实际可写的字段，保证断言确实来自项目门禁。
+bool testBeatmapSettingsSnapshot(const std::filesystem::path& outputRoot)
+{
+    using namespace MMM;
+    using namespace std::chrono_literals;
+    auto& engine  = Logic::EditorEngine::instance();
+    auto& project = Logic::ProjectController::instance();
+    // 文件夹名只用于测试隔离，进程单例的真实当前工程由控制器建立。
+    // 每次运行都用独立目录，失败残留不会被下一次扫描当作新的候选。
+    // CTest 传入构建输出根，文件不会写入源码或资源目录。
+    const auto root =
+        outputRoot /
+        ("beatmap-settings-" +
+         std::to_string(
+             std::chrono::steady_clock::now().time_since_epoch().count()));
+    // 不清理任何已有工程目录；成功创建的根只在本用例末尾删除。
+    std::error_code error;
+    std::filesystem::create_directories(root / "nested", error);
+    if ( error ) return false;
+    // 大写图片、嵌套视频和无关扩展名同时存在，验证两类候选只枚举一次且互不混入。
+    // 大写扩展名让仅支持小写比较的实现产生可观察失败。
+    std::ofstream(root / "cover.PNG").put('i');
+    // 视频放到次级目录，顶层遍历无法碰巧通过候选断言。
+    std::ofstream(root / "nested" / "bg.MP4").put('v');
+    std::ofstream(root / "ignore.txt").put('x');
+    // 由真实控制器装载工程上下文，显式推进逻辑循环可隔离外部渲染节拍。
+    // 文件池仍正常运行，确保回归确实跨越逻辑捕获和后台计算两段。
+    const auto opened = project.openProject(root);
+    auto&      pool   = Runtime::AppThreadPool::instance();
+    // 此用例只初始化文件阶段依赖的池，无需启动主线程或渲染器。
+    // 测试套件运行本用例之前没有主应用的启动逻辑，因此显式初始化共享文件池。
+    pool.init();
+    auto map                     = std::make_shared<BeatMap>();
+    map->m_baseMapMetadata.title = "original";
+    // 重载前会冲刷尾随保存。提供同一条可写 .mmm 路径，避免把保存失败
+    // 当成旧设置成功拦截，也不会在仓库根目录留下无名测试文件。
+    map->m_baseMapMetadata.map_path    = root / "same-chart.mmm";
+    map->m_baseMapMetadata.cover_path  = "cover.PNG";
+    map->m_baseMapMetadata.track_count = 4;
+    map->sync();
+    const auto index   = engine.createSession(map, "Settings source", false);
+    const auto session = engine.getActiveSession();
+    // createSession 仅排载入命令；必须先实际消费，不能直接构造伪造的返回结果。
+    session->update(0, engine.getEditorConfig(), true);
+
+    // 模拟逻辑持有会话锁。界面应仍能提交请求，由下一次逻辑推进捕获。
+    std::unique_lock held(engine.getSessionMutex());
+    auto             enqueue = std::async(
+        std::launch::async, [] { return Logic::requestBeatmapSettings(true); });
+    const bool enqueuedWithoutSessionLock =
+        enqueue.wait_for(1s) == std::future_status::ready;
+    // 定时等待只检测提交是否被挡；释放夹具锁后再等待实际响应，
+    // 即使回归失败也能退出，不会等待一个被测试自己占用的锁。
+    held.unlock();
+    // 等待分两段，返回 future 只代表 UI 已提交，文件结果此时仍未产生。
+    auto read = enqueue.get();
+    Logic::processBeatmapSettingsRequest();
+    // 目录收集需要经过实际的文件池，未完成时不可能读出两个候选。
+    const auto scanned = read.get();
+    auto       refresh = Logic::requestBeatmapSettings(false);
+    Logic::processBeatmapSettingsRequest();
+    const auto normal = refresh.get();
+    // 校验相对路径不仅确认扩展名，还防止后台错误拼接项目根或压平子目录。
+    // 普通读取要保持 scanned=false，使 UI 可以保留已有资源弹层缓存。
+    // 后台保留原生路径分隔符，用路径分量比较 Windows 和 POSIX 的视频结果。
+    const bool fileResults =
+        scanned && normal && scanned->scanned && scanned->projectRoot == root &&
+        scanned->paths[2].exists && scanned->paths[2].display == "cover.PNG" &&
+        scanned->images == std::vector<std::string>{ "cover.PNG" } &&
+        scanned->videos.size() == 1 &&
+        Config::utf8ToPath(scanned->videos.front()) ==
+            std::filesystem::path("nested") / "bg.MP4" &&
+        !normal->scanned && normal->images.empty() && normal->videos.empty();
+
+    bool editsPreserved   = false;
+    bool staleEditIgnored = false;
+    bool readOnlyRejected = false;
+    if ( normal && project.currentProject() ) {
+        // 在捕获之后才切成只读，确保写入门禁以消费时工程为准，而非旧快照标记。
+        // 临时标志复用控制器的真实读取口径，不需要压缩测试工程文件。
+        auto& currentProject                = *project.currentProject();
+        currentProject.m_isTemporaryProject = true;
+        auto blockedEdit                    = normal->metadata;
+        blockedEdit.title                   = "rejected while read-only";
+        Logic::submitBeatmapSettingsCommand(
+            *normal,
+            Logic::CmdUpdateBeatmapMetadata{
+                .baseMeta = blockedEdit,
+                .settingsBaseline =
+                    std::make_shared<const BaseMapMeta>(normal->metadata) });
+        session->update(0, engine.getEditorConfig(), true);
+        // 此时仍是同一个谱面控制块，旧身份保护不能代替临时工程写入检查。
+        readOnlyRejected =
+            session->getContext().currentBeatmap->m_baseMapMetadata.title ==
+            "original";
+        // 恢复工程能力后，后续合法设置与重载仍应成功，拒绝行为不应污染队列。
+        currentProject.m_isTemporaryProject = false;
+
+        // 在设置草稿捕获之后先排队外部改名，再从旧草稿修改标题。
+        // 消费时仅应用标题差量，已经发生的作者修改不得被完整元数据覆盖。
+        auto external   = normal->metadata;
+        external.author = "external-edit";
+        session->pushCommand(
+            Logic::CmdUpdateBeatmapMetadata{ .baseMeta = external });
+        auto edit  = normal->metadata;
+        edit.title = "settings-edit";
+        Logic::submitBeatmapSettingsCommand(
+            *normal,
+            Logic::CmdUpdateBeatmapMetadata{
+                .baseMeta = edit,
+                .settingsBaseline =
+                    std::make_shared<const BaseMapMeta>(normal->metadata) });
+        session->update(0, engine.getEditorConfig(), true);
+        // 两条命令按入队顺序消费，与用户在两个界面先后编辑的行为一致。
+        const auto& live =
+            session->getContext().currentBeatmap->m_baseMapMetadata;
+        editsPreserved =
+            live.title == "settings-edit" && live.author == "external-edit";
+
+        // 重载保持会话和谱面路径不变，必须靠模型身份丢弃旧命令；保留源引用
+        // 让提交阶段无法借助 weak_ptr 过期提前返回，确实走到消费阶段检查。
+        const auto oldMap      = normal->beatmap.lock();
+        auto       replacement = std::make_shared<BeatMap>();
+        // 两份谱面刻意重用完全相同的绝对路径，使路径判断无法代替实例校验。
+        replacement->m_baseMapMetadata.map_path    = root / "same-chart.mmm";
+        replacement->m_baseMapMetadata.track_count = 4;
+        replacement->m_baseMapMetadata.title       = "replacement";
+        // 新谱面没有项目数据差异，重载仍须清除旧快照的写入资格。
+        replacement->sync();
+        // 载图必须排在旧设置之前，而快照的弱引用仍然有效。
+        // 若消费侧只检查会话索引或路径，两次旧编辑都会误写新载图。
+        session->pushCommand(Logic::CmdLoadBeatmap{ replacement });
+        Logic::submitBeatmapSettingsCommand(
+            *normal,
+            Logic::CmdUpdateBeatmapMetadata{
+                .baseMeta = edit,
+                .settingsBaseline =
+                    std::make_shared<const BaseMapMeta>(normal->metadata) });
+        Logic::submitBeatmapSettingsCommand(*normal,
+                                            Logic::CmdUpdateBgmTrackCount{ 7 });
+        session->update(0, engine.getEditorConfig(), true);
+        // 先验证确实完成重载，随后验证标题及 BGM 数量都保持新目标的值。
+        staleEditIgnored =
+            oldMap && session->getContext().currentBeatmap != oldMap &&
+            session->getContext().currentBeatmap->m_baseMapMetadata.title ==
+                "replacement" &&
+            session->getContext().bgmTrackCount != 7;
+    }
+    // 释放项目和会话后继续读取已完成的数据，旧快照未借用模型内部字符串。
+    engine.closeSession(index, false);
+    // 关闭项目同时停止目录监视，避免清理夹具文件时产生无关刷新。
+    project.closeProject();
+    // 此时从两个 future 都取得了结果。退出文件池用于还原进程共享状态。
+    pool.shutdown();
+    // 只删除当前测试创建的根，路径不来自输入文件或项目配置。
+    std::filesystem::remove_all(root, error);
+    // 关闭之后只检查不可变值，不依赖旧会话或文件还在磁盘上。
+    // 短路条件保护最后一项快照读取；文件阶段失败时 scanned 可能为空。
+    const bool valid = opened.m_opened && enqueuedWithoutSessionLock &&
+                       fileResults && editsPreserved && staleEditIgnored &&
+                       readOnlyRejected &&
+                       scanned->metadata.title == "original";
+    // 失败日志区分文件枚举、写入合并、身份、只读和请求锁五个独立故障点。
+    if ( !valid )
+        XERROR(
+            "Beatmap settings snapshot mismatch: files={}, edits={}, stale={}, "
+            "unlocked={}, readOnly={}",
+            fileResults,
+            editsPreserved,
+            staleEditIgnored,
+            enqueuedWithoutSessionLock,
+            readOnlyRejected);
+    return valid;
+}
+
 }  // namespace
 
-/// @brief 运行画笔调色盘跨会话恢复测试。
+/// @brief 运行编辑器会话状态与设置快照测试。
+/// @param argc 测试注册入口传入的参数数量。
+/// @param argv 第一项参数为本用例专用的文件输出目录。
 /// @return 全部测试通过时返回 0。
 /// @note 按场景短路执行；首个失败会阻止后续测试运行。
 /// @note 单例共享仅限当前测试进程，结果不说明应用重启后的恢复行为。
-int main()
+int main(int argc, char** argv)
 {
+    // 文件夹由测试注册显式指定，避免没有参数时落到源码目录。
+    if ( argc != 2 ) return 1;
+    const auto outputRoot = MMM::Config::utf8ToPath(argv[1]);
     // 先验证跨会话共享状态，再验证目标路由隔离，最后执行配置并发读取回归。
     return testClearAllNoteColors() &&
                    testSkinSelectionSurvivesPaletteRefresh() &&
@@ -1416,6 +1626,7 @@ int main()
                    testTimingTablePublication() &&
                    testExitConfirmationMapName() &&
                    testBeatmapExportPresentation() &&
+                   testBeatmapSettingsSnapshot(outputRoot) &&
                    testCameraConfigSnapshot() &&
                    testConcurrentEditorConfigSnapshots()
                ? 0
