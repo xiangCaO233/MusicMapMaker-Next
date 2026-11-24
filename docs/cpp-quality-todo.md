@@ -730,6 +730,14 @@
 - `Modules/Audio/tests/AudioOriginAlignmentServiceTest.cpp`，60 行注释、137 行代码，30.46%。
 - `Modules/Game/Graphic/src/imguivk/VKOffScreenRenderer.cpp`，162 行注释、377 行代码，30.06%。
 
+## 2026-11-24 第二轮复查追加待办
+
+### P1 · R31 · 配置字段类型错误阻断启动
+
+- [x] 合法 JSON 中的错误字段类型会在转换配置时终止进程。配置加载应按字段恢复默认值并保留其他合法设置。
+
+  已验证。Linux RelWithDebInfo 全量构建及 14 项配置回归通过。坏分拍与容器字段回到默认值，合法作者与缩放值仍从同一文件恢复。
+
 ## 验收边界
 
 原始清扫以静态分析为主。首批四项均已勾选。最终 Linux 主工程全量构建、9 项相关 CTest、独立 ICE 源码构建及 1 项 ICE CTest 全部通过。实际谱面的播放帧时间、GPU 等待及各目标平台运行结果需按对应待办验收。ICE 声道修复以独立源码构建验证，主项目默认配置使用仓库提供的预编译引擎，发布产物需由既定 Runner 另行生成。

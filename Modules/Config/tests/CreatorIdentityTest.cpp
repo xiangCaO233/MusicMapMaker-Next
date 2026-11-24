@@ -1,6 +1,7 @@
 #include "config/CreatorIdentity.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
+#include "config/VisualConfig.h"
 
 #include "log/colorful-log.h"
 
@@ -145,6 +146,51 @@ namespace
     // 通过磁盘字段检查后，测试不再依赖 AppConfig 单例的当前编辑器设置。
     return true;
 }
+/// @brief 验证字段类型损坏时应用仍能加载同文件中的合法设置。
+/// @return 显式文件加载成功且各字段分别采用合法值或业务默认值。
+/// @note 使用语法合法的文件，确保测试触发字段转换而不是语法错误回退。
+/// @note 直接调用 AppConfig 以覆盖启动使用的磁盘读取路径。
+/// @note 配置单例在测试进程内独立，测试以显式路径跳过配置迁移写回。
+[[nodiscard]] bool testMalformedConfigFields()
+{
+    // 每个进程创建独立文件，不会读取测试用户目录中的真实配置。
+    const auto path =
+        std::filesystem::temp_directory_path() /
+        ("mmm-malformed-config-" +
+         std::to_string(
+             std::chrono::steady_clock::now().time_since_epoch().count()) +
+         ".json");
+    {
+        // 覆盖启动复现字段、嵌套数值、固定数组、动态数组和字符串键映射。
+        // 同时提供合法的 Creator 与缩放值，用来检出回退整份配置的错误实现。
+        // 文件流在加载前析构，确保读取端看到完整 JSON。
+        std::ofstream file(path);
+        file << R"({"settings":{"beatDivisor":"x","defaultCreator":"Mapper",
+                   "syncConfig":{"integralFactor":false},
+                   "disabledPluginIds":["good",false],
+                   "sfxConfig":{"permanentSfxVolumes":{"kit":"loud"}}},
+                   "visual":{"timelineZoom":2.0,
+                   "background":{"spectrum":{"leftBarColor":[1,"bad"]}}},
+                   "recentProjects":[42]})";
+        if ( !file ) return false;
+    }
+    // 显式文件走与启动一致的反序列化，且不会自动覆盖原文件。
+    auto&           config = MMM::Config::AppConfig::instance();
+    const bool      loaded = config.load(path);
+    std::error_code error;
+    // 加载结束后立即清理夹具，后续断言仅依靠应用已发布的设置。
+    std::filesystem::remove(path, error);
+    const auto& settings = config.getEditorSettings();
+    // 同一对象内混合合法和不合法的字段。分拍回退，作者保留。
+    // 用包含错误元素的容器验证检查实际深入到各元素。
+    // 通过视觉缩放验证另一个根级配置也被完整恢复。
+    return loaded && settings.beatDivisor == 4 &&
+           settings.defaultCreator == "Mapper" &&
+           settings.syncConfig.integralFactor == 0.1f &&
+           settings.disabledPluginIds.empty() &&
+           settings.sfxConfig.permanentSfxVolumes.empty() &&
+           config.getVisualConfig().timelineZoom == 2.0f;
+}
 }  // namespace
 
 /// @brief 运行默认 Creator 配置与身份约束测试。
@@ -156,7 +202,8 @@ int main()
     return testCreatorNormalization() && testCreatorConfigRoundTrip() &&
                    testCollaborationStableIdentity() &&
                    // 文件持久化放在最后，基础失败不会留下临时文件。
-                   testCollaborationStableIdentityPersistence()
+                   testCollaborationStableIdentityPersistence() &&
+                   testMalformedConfigFields()
                ? 0
                : 1;
 }
