@@ -23,6 +23,18 @@ namespace MMM::Audio
 
 class KeySoundControlBank;
 
+/// @brief 为同步导出提供可定位的 PCM；实现可以进行文件操作。
+class OfflineTimelinePcm
+{
+public:
+    /// @brief 在导出器完成混音后释放存储的借用或所有权。
+    virtual ~OfflineTimelinePcm() = default;
+    /// @brief 读取指定区间到预分配缓冲，失败或越界返回零。
+    /// @warning 仅允许同步导出线程调用，实时音频回调不得调用。
+    virtual std::size_t read(ice::AudioBuffer& buffer, std::size_t startFrame,
+                             std::size_t frameCount) const noexcept = 0;
+};
+
 /// @brief 音乐时间线上的暂停事件；等待时不推进音乐位置。
 struct TimelineStopEvent {
     /// @brief 冻结的音乐时间位置，单位为内部采样帧。
@@ -85,6 +97,15 @@ public:
     PreparedTimelineAudio(std::vector<std::vector<float>>  channels,
                           std::shared_ptr<ice::AudioTrack> sourceOwner);
 
+    /// @brief 构造仅能由同步导出读取的固定长度 PCM。
+    PreparedTimelineAudio(std::shared_ptr<const OfflineTimelinePcm> offlinePcm,
+                          std::size_t                               frameCount);
+
+    /// @brief 读取同步导出用的 PCM 并保留实时资源的内存读取行为。
+    /// @warning 可能进行文件操作，只能由同步编码器调用。
+    std::size_t readOffline(ice::AudioBuffer& buffer, std::size_t startFrame,
+                            std::size_t frameCount) const noexcept;
+
     /// @brief 获取 PCM 帧数。
     [[nodiscard]] std::size_t numFrames() const noexcept;
 
@@ -117,6 +138,8 @@ private:
     std::vector<std::vector<float>> m_ownedChannels;
     /// @brief 指向原始缓存或自有 PCM 的稳定声道视图。
     std::vector<std::span<const float>> m_channelViews;
+    /// @brief 同步导出所用暂存区；实时读取从不解引用此对象。
+    std::shared_ptr<const OfflineTimelinePcm> m_offlinePcm;
     /// @brief 所有有效声道共同拥有的帧数。
     std::size_t m_frameCount{ 0U };
 };
@@ -159,11 +182,13 @@ public:
     ///        自动包含所有片段的实际结束位置。
     /// @param maximumProcessFrames 回调内单次缓存读取的最大帧数。
     /// @param keySoundControls 生命周期覆盖本节点的运行时 Key 音控制库。
+    /// @param offlineMix 只供同步编码器开启，允许片段读取暂存文件。
     AudioTimelineMixerNode(
         std::vector<PreparedTimelineClip> clips,
         AudioTimelineFrame                requestedTimelineEndFrame,
         std::size_t                       maximumProcessFrames,
-        const KeySoundControlBank*        keySoundControls = nullptr);
+        const KeySoundControlBank*        keySoundControls = nullptr,
+        bool                              offlineMix       = false);
     /// @brief 回收控制线程延迟释放的调度状态。
     ~AudioTimelineMixerNode() override;
 
@@ -425,6 +450,9 @@ private:
     /// @warning AudioManager 持有者生命周期必须覆盖本节点；音频回调
     /// 每个活跃片段每 block 解引用，禁止替换为共享所有权。
     const KeySoundControlBank* m_keySoundControls{ nullptr };
+
+    /// @brief 创建时固定的同步导出模式，实时实例始终关闭。
+    const bool m_offlineMix;
 
     /// @brief 当前只由音频线程访问的调度状态。
     ScheduleState* m_scheduleState{ nullptr };

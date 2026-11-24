@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace ice
 {
@@ -41,5 +43,20 @@ class PreparedTimelineAudio;
 [[nodiscard]] std::shared_ptr<const PreparedTimelineAudio>
 prepareAudioTimelineResource(const std::shared_ptr<ice::AudioTrack>& track,
                              const AudioTrackConfig&                 config);
+
+/// @brief 判断资源配置是否会改变原始 PCM。
+/// @return 中性参数和无效 EQ 预设均可直接复用原声。
+[[nodiscard]] bool audioTimelineResourceNeedsProcessing(
+    const AudioTrackConfig& config) noexcept;
+
+/// @brief 原位处理同步导出的一组等长声道，不持有原音轨。
+/// @param channels 只包含当前处理配置的输入；处理失败后不再使用。
+/// @param config 资源 EQ、变速和变调参数。
+/// @param pcmBudgetBytes 输入和变速输出平面的合计字节上限。
+/// @return 预计长度或实际输出超过预算时返回 false。
+/// @warning 只用于同步导出，可能处理完整资源。
+[[nodiscard]] bool processExportTimelineResource(
+    std::vector<std::vector<float>>& channels, const AudioTrackConfig& config,
+    std::size_t pcmBudgetBytes);
 
 }  // namespace MMM::Audio

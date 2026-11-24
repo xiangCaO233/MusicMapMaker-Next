@@ -312,13 +312,13 @@
   - Linux RelWithDebInfo 全量构建及 3 项资源相关回归通过，覆盖块内取消、暂存清理、重试与原有路径约束。独立进程探针中，160 MiB 条目解压前后 SHA-256 相同，峰值 RSS 由 169.4 降至 20.6 MiB。单条或累计超预算一字节均在创建输出目录前拒绝。
   - 注释／代码：`AssetSyncService.cpp` 434/1012、`AssetZipExtraction.cpp` 103/240、`AssetPathSafety.h` 21/43、`AssetSyncServiceTest.cpp` 381/887、`Modules/Network/CMakeLists.txt` 25/56，均达到 30%。
 
-- [ ] **FMT-05（P3）离线音频时间线在无 DSP 情况下也强制所有资源完整驻留**
+- [x] **FMT-05（P3）离线音频时间线在无 DSP 情况下也强制所有资源完整驻留**
 
-  - 位置：`Modules/Audio/src/AudioTimelineExportService.cpp:158-190`、`:194-245`；`AudioTimelineResourceProcessor.cpp:318-347`。
-  - 调用链：IMD 包导出（`Modules/Game/Logic/src/logic/ImdPackageExportService.cpp:405`）或首拍原点对齐（`AudioOriginAlignmentService.cpp:61-62`）→ `exportMixedAudio` → 每个不同文件创建 `CachingStrategy::CACHY` 音轨 → 每个不同处理配置产生 Prepared PCM → 混音编码。
-  - 当前行为：全部原 PCM 保存在 tracksByPath，全部非中性处理 PCM 又保存在 preparedByConfig；DSP 输出还保留原 track 所有权（processor :347）。中性配置确实复用原缓存，不应误报为必然复制两份，但原点对齐这种单资源原速/无 EQ 操作仍全量解码驻留。多个配置以及 0.25 倍速度可能显著放大内存。
-  - 整改：先定义离线总 PCM 预算与失败信息；对不需要 EQ/stretch 的路径探索流式资源（`AudioTimelineMixerNode.cpp:159-164` 已有 STREAMING 包装），处理资源可考虑有界磁盘暂存或分阶段释放，不能破坏实时混音缓存生命周期。
-  - 验收：分别测中性、EQ、变速、多资源多配置的峰值 RSS 和输出 PCM 正确性；首拍裁头/补静音长度保持；避免只是把完整缓存从一个 map 移到另一个对象。
+  - IMD 混音和首拍原点对齐通过同步解码按块写入分声道暂存文件。原声按文件路径去重，EQ 和变速／变调结果按处理配置去重；混音仍按独立事件调度。实时音频回调只读取原有内存缓存。
+  - 导出暂存的原始和处理后 PCM 总计上限为 4 GiB。需要 DSP 时，一次只装入一个配置，输入与变速输出的平面数组合计上限为 256 MiB。超限或暂存 IO 失败时返回诊断；编码及混音成功后才在同一文件系统发布目标文件。
+  - Linux Clang 22 RelWithDebInfo 全量构建、10 项相关 CTest 通过。回归回读裁头、补静音和覆盖旧输出的 PCM，并检查 EQ 输入以及变速输入加输出的预算边界。
+  - 两份 120 秒、48 kHz 立体声夹具的旧版／新版对照中，中性、EQ、0.5 倍速和多资源多配置的输出帧数及 PCM SHA-256 全部一致。进程峰值 RSS 分别由 60704、103452、198340、150044 KiB 降至 15372、54720、150452、53828 KiB。
+  - 注释／代码行数分别为 `AudioTimelineExportService.cpp` 177/412、`AudioTimelineMixerNode.cpp` 432/1012、`AudioTimelineMixerNode.h` 327/219、`AudioTimelineResourceProcessor.cpp` 121/271、`AudioTimelineResourceProcessor.h` 24/28、`AudioOriginAlignmentServiceTest.cpp` 58/137、`AudioTimelineResourceProcessorTest.cpp` 78/169。各文件达到 30%。
 
 - [x] **FMT-06（P3）协作文档限额检查发生在完整 CBOR 编码之后，并无条件先复制正文**
 

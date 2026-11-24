@@ -78,8 +78,8 @@ namespace
     AudioTimelineFrame position, AudioTimelineFrame boundary) noexcept
 {
     if ( position >= boundary ) return 0;
-    const auto     distance  = static_cast<std::uint64_t>(boundary) -
-                               static_cast<std::uint64_t>(position);
+    const auto distance = static_cast<std::uint64_t>(boundary) -
+                          static_cast<std::uint64_t>(position);
     constexpr auto MAX_FRAME = static_cast<std::uint64_t>(
         std::numeric_limits<AudioTimelineFrame>::max());
     return static_cast<AudioTimelineFrame>(std::min(distance, MAX_FRAME));
@@ -233,6 +233,25 @@ PreparedTimelineAudio::PreparedTimelineAudio(
     }
 }
 
+/// @brief 记录同步导出 PCM 的长度及暂存生命周期。
+PreparedTimelineAudio::PreparedTimelineAudio(
+    std::shared_ptr<const OfflineTimelinePcm> offlinePcm,
+    std::size_t                               frameCount)
+    : m_offlinePcm(std::move(offlinePcm)), m_frameCount(frameCount)
+{
+}
+
+/// @brief 仅同步导出可以按片段位置从磁盘读回 PCM。
+/// @warning 同步编码器独占读取，可能等待文件系统。
+std::size_t PreparedTimelineAudio::readOffline(
+    ice::AudioBuffer& buffer, std::size_t startFrame,
+    std::size_t frameCount) const noexcept
+{
+    // 导出仍可消费驻留 PCM，按相同声道映射读取内存资源。
+    return m_offlinePcm ? m_offlinePcm->read(buffer, startFrame, frameCount)
+                        : read(buffer, startFrame, frameCount);
+}
+
 /// @brief 返回所有有效声道共有的帧数。
 /// @return 构造时固定的资源长度。
 std::size_t PreparedTimelineAudio::numFrames() const noexcept
@@ -326,8 +345,8 @@ AudioTimelineMixerNode::AudioTimelineMixerNode(
     std::vector<PreparedTimelineClip> clips,
     AudioTimelineFrame                requestedTimelineEndFrame,
     std::size_t                       maximumProcessFrames,
-    const KeySoundControlBank*        keySoundControls)
-    : m_keySoundControls(keySoundControls)
+    const KeySoundControlBank* keySoundControls, bool offlineMix)
+    : m_keySoundControls(keySoundControls), m_offlineMix(offlineMix)
 {
     // 发布协议依赖这些原子类型不会退化成内部互斥锁。
     static_assert(std::atomic<ScheduleState*>::is_always_lock_free);
@@ -1444,11 +1463,16 @@ void AudioTimelineMixerNode::mixSegment(ice::AudioBuffer& output,
         // 每个 span 复用同一 scratch；先清零以覆盖流式短读和缺失声道尾部。
         schedule.sourceScratch.clear();
         const auto requestedFrames = static_cast<std::size_t>(span.frameCount);
-        const auto readFrames      = std::min<std::size_t>(
-            clip.audio->read(schedule.sourceScratch,
-                             static_cast<std::size_t>(span.sourceStartFrame),
-                             requestedFrames),
-            requestedFrames);
+        const auto sourceStart =
+            static_cast<std::size_t>(span.sourceStartFrame);
+        // 同步编码器允许访问磁盘，实时节点仍只使用无阻塞读取入口。
+        const auto copiedFrames =
+            m_offlineMix
+                ? clip.audio->readOffline(
+                      schedule.sourceScratch, sourceStart, requestedFrames)
+                : clip.audio->read(
+                      schedule.sourceScratch, sourceStart, requestedFrames);
+        const auto readFrames = std::min(copiedFrames, requestedFrames);
         // span.outputStartFrame 相对本段，外层偏移把它映射到整个设备 block。
         const auto destinationStart =
             outputStartFrame + static_cast<std::size_t>(span.outputStartFrame);

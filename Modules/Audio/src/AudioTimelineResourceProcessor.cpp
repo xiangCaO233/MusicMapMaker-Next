@@ -74,6 +74,14 @@ constexpr std::size_t OFFLINE_PROCESS_BLOCK_FRAMES = 32768U;
                                 : 0.0;
 }
 
+/// @brief 应用同一中性容差，避免播放准备与导出走不同的变速链。
+/// @param speed 已规范化的播放倍率。
+/// @param pitch 已规范化的半音偏移。
+[[nodiscard]] bool needsTimeTransform(double speed, double pitch) noexcept
+{
+    return std::abs(speed - 1.0) > 1.0e-6 || std::abs(pitch) > 1.0e-6;
+}
+
 /// @brief 获取项目 EQ 预设对应的中心频率。
 /// @param preset 0 表示禁用，1 为十段，2 为十五段。
 /// @return 静态频率表的只读视图；未知预设返回空视图。
@@ -156,27 +164,30 @@ void applyResourceEqualizer(std::vector<std::vector<float>>& channels,
  * @param output 按声道累计的最终 PCM。
  * @param retrieveChannels 复用的临时声道缓冲区。
  * @param retrievePointers 指向临时声道缓冲区的 C API 指针数组。
+ * @param maximumOutputFrames 每个输出声道允许的最大帧数。
+ * @return 超过预算或取回接口未推进时返回 false。
  *
  * available 可能在一次 retrieve 后仍为正，因此循环直到内部输出排空。
  */
-void drainRubberBand(RubberBand::RubberBandStretcher& stretcher,
-                     std::vector<std::vector<float>>& output,
-                     std::vector<std::vector<float>>& retrieveChannels,
-                     std::vector<float*>&             retrievePointers)
+[[nodiscard]] bool drainRubberBand(
+    RubberBand::RubberBandStretcher& stretcher,
+    std::vector<std::vector<float>>& output,
+    std::vector<std::vector<float>>& retrieveChannels,
+    std::vector<float*>& retrievePointers, std::size_t maximumOutputFrames)
 {
     // 每轮重新读取 available，因为 retrieve 数量可能小于先前报告值。
     for ( int available = stretcher.available(); available > 0;
           available     = stretcher.available() ) {
-        const auto frames = static_cast<std::size_t>(available);
-        // 所有声道使用相同帧容量，保持平面 PCM 长度一致。
-        for ( std::size_t channel = 0U; channel < retrieveChannels.size();
-              ++channel ) {
-            retrieveChannels[channel].resize(frames);
-            retrievePointers[channel] = retrieveChannels[channel].data();
-        }
-        // retrievePointers 仅在本轮 resize 完成后获取，避免扩容使地址失效。
+        // 先校验已生成的全部帧数，至少与当前仍可写入的输出预算一致。
+        if ( static_cast<std::size_t>(available) >
+             maximumOutputFrames - output.front().size() )
+            return false;
+        // 取回块固定容量。即使最终 drain 有许多尾帧也不会扩大处理缓冲。
+        const auto        frames = std::min(static_cast<std::size_t>(available),
+                                     OFFLINE_PROCESS_BLOCK_FRAMES);
         const std::size_t retrieved =
             stretcher.retrieve(retrievePointers.data(), frames);
+        if ( retrieved == 0U || retrieved > frames ) return false;
         // 只追加实际取回的前缀，不假设 available 全部一次返回。
         for ( std::size_t channel = 0U; channel < output.size(); ++channel ) {
             output[channel].insert(output[channel].end(),
@@ -185,6 +196,7 @@ void drainRubberBand(RubberBand::RubberBandStretcher& stretcher,
                                        static_cast<std::ptrdiff_t>(retrieved));
         }
     }
+    return true;
 }
 
 /**
@@ -192,14 +204,16 @@ void drainRubberBand(RubberBand::RubberBandStretcher& stretcher,
  * @param source 等长的平面只读声道 PCM。
  * @param playbackSpeed 播放倍率，已在调用侧规范化。
  * @param pitchSemitones 音高偏移半音数，已在调用侧规范化。
- * @return 处理后的自有平面 PCM；空输入返回空结果。
+ * @param maximumOutputFrames 有限时限制输出平面分配和实际生成的帧数。
+ * @return 处理后的自有平面 PCM；空输入或超过预算返回空结果。
  *
  * timeRatio 是输出时长相对输入时长，因此等于 speed 的倒数；pitchScale
  * 使用十二平均律指数换算。处理固定禁用内部线程，避免与项目线程池争用。
  */
 [[nodiscard]] std::vector<std::vector<float>> stretchResourceOffline(
     const std::vector<std::vector<float>>& source, double playbackSpeed,
-    double pitchSemitones)
+    double      pitchSemitones,
+    std::size_t maximumOutputFrames = std::numeric_limits<std::size_t>::max())
 {
     // 第一声道为空代表资源没有可处理帧；所有声道由准备层保证等长。
     if ( source.empty() || source.front().empty() ) return {};
@@ -208,6 +222,22 @@ void drainRubberBand(RubberBand::RubberBandStretcher& stretcher,
     // 2 倍播放速度产生约一半帧数；升降调独立使用 pitchScale。
     const double timeRatio  = 1.0 / playbackSpeed;
     const double pitchScale = std::pow(2.0, pitchSemitones / 12.0);
+    // long double 降低巨大资源乘除时的中间精度损失，并在窄化前检查上界。
+    const auto expectedFramesLongDouble =
+        static_cast<long double>(sourceFrames) *
+        static_cast<long double>(timeRatio);
+    const auto maximumSize =
+        static_cast<long double>(std::numeric_limits<std::size_t>::max());
+    // reserve 仅是容量提示；真实输出长度仍以 Rubber Band retrieve 为准。
+    const std::size_t expectedFrames =
+        expectedFramesLongDouble >= maximumSize
+            ? std::numeric_limits<std::size_t>::max()
+            : static_cast<std::size_t>(
+                  std::ceil(std::max(expectedFramesLongDouble, 0.0L)));
+    const bool boundedOutput =
+        maximumOutputFrames != std::numeric_limits<std::size_t>::max();
+    // 在构造分析器前拦截不可容纳的配置，避免先消耗整遍分析的时间和空间。
+    if ( expectedFrames > maximumOutputFrames ) return {};
     // 离线高质量模式允许两遍分析，ChannelsTogether 保持多声道相位关系。
     const auto options =
         RubberBand::RubberBandStretcher::OptionProcessOffline |
@@ -240,25 +270,17 @@ void drainRubberBand(RubberBand::RubberBandStretcher& stretcher,
         offset += frameCount;
     }
 
-    // long double 降低巨大资源乘除时的中间精度损失，并在窄化前检查上界。
-    const auto expectedFramesLongDouble =
-        static_cast<long double>(sourceFrames) *
-        static_cast<long double>(timeRatio);
-    const auto maximumSize =
-        static_cast<long double>(std::numeric_limits<std::size_t>::max());
-    // reserve 仅是容量提示；真实输出长度仍以 Rubber Band retrieve 为准。
-    const std::size_t expectedFrames =
-        expectedFramesLongDouble >= maximumSize
-            ? std::numeric_limits<std::size_t>::max()
-            : static_cast<std::size_t>(
-                  std::ceil(std::max(expectedFramesLongDouble, 0.0L)));
     std::vector<std::vector<float>> output(channelCount);
     for ( auto& channel : output ) {
-        channel.reserve(expectedFrames);
+        // 离线导出一次保留预算内的地址空间，避免增长时共存新旧两份 PCM。
+        channel.reserve(boundedOutput ? maximumOutputFrames : expectedFrames);
     }
-    // 临时取回缓冲跨所有 process 块复用，避免每次重新建立声道容器。
-    std::vector<std::vector<float>> retrieveChannels(channelCount);
-    std::vector<float*>             retrievePointers(channelCount);
+    // 固定所有平面和指针地址，尾部样本只通过重复取回推进。
+    std::vector<std::vector<float>> retrieveChannels(
+        channelCount, std::vector<float>(OFFLINE_PROCESS_BLOCK_FRAMES));
+    std::vector<float*> retrievePointers(channelCount);
+    for ( std::size_t channel = 0; channel < channelCount; ++channel )
+        retrievePointers[channel] = retrieveChannels[channel].data();
 
     // process 第二遍产生输出，每块后立即排空以限制内部积压。
     for ( std::size_t offset = 0U; offset < sourceFrames; ) {
@@ -269,11 +291,21 @@ void drainRubberBand(RubberBand::RubberBandStretcher& stretcher,
         }
         const bool finalBlock = offset + frameCount == sourceFrames;
         stretcher.process(inputPointers.data(), frameCount, finalBlock);
-        drainRubberBand(stretcher, output, retrieveChannels, retrievePointers);
+        if ( !drainRubberBand(stretcher,
+                              output,
+                              retrieveChannels,
+                              retrievePointers,
+                              maximumOutputFrames) )
+            return {};
         offset += frameCount;
     }
     // finalBlock 后仍可能延迟生成尾部帧，循环外再排空一次。
-    drainRubberBand(stretcher, output, retrieveChannels, retrievePointers);
+    if ( !drainRubberBand(stretcher,
+                          output,
+                          retrieveChannels,
+                          retrievePointers,
+                          maximumOutputFrames) )
+        return {};
     return output;
 }
 
@@ -315,6 +347,51 @@ std::string makeAudioResourceProcessingCacheKey(std::string_view filePath,
     return key;
 }
 
+/// @brief 共享播放与导出的中性配置判定，避免两条路径处理不同的 PCM。
+/// @param config 按项目格式读取的资源配置，仍可能包含非有限值。
+/// @return EQ 有有效预设、或规范化后的时间/音高比例离开中性容差时返回 true。
+/// @note 与缓存键不同，只比较实际进入处理链的规范化参数。
+bool audioTimelineResourceNeedsProcessing(
+    const AudioTrackConfig& config) noexcept
+{
+    return (config.eqEnabled &&
+            !equalizerFrequencies(config.eqPreset).empty()) ||
+           needsTimeTransform(normalizedResourceSpeed(config.playbackSpeed),
+                              normalizedResourcePitch(config.playbackPitch));
+}
+
+/// @brief 使用同一套过滤器及变速器处理同步导出的单个 PCM 配置。
+/// @param channels 导出器已读取的完整 PCM，各声道帧数一致且互不重叠。
+/// @param config 资源级配置；增益与静音由事件层控制。
+/// @param pcmBudgetBytes 输入与变速输出同时存在时所占声道存储的硬限制。
+/// @return 可完整处理并保留非空结果时返回 true。
+/// @warning 只由同步导出处置独占声道数组，不能用于回调。
+///
+/// 仅开启 EQ 时直接复用输入存储；变速要在两个数组同时存在期间
+/// 额外校验连续输出的预算。失败不会将此配置加入可供混音读取的片段索引。
+bool processExportTimelineResource(std::vector<std::vector<float>>& channels,
+                                   const AudioTrackConfig&          config,
+                                   std::size_t pcmBudgetBytes)
+{
+    if ( channels.empty() || channels.front().empty() ) return false;
+    // 先除后比，避免异常长度乘以声道数或样本大小导致溢出。
+    const auto frameBudget  = pcmBudgetBytes / sizeof(float) / channels.size();
+    const auto sourceFrames = channels.front().size();
+    if ( sourceFrames > frameBudget ) return false;
+
+    const double speed = normalizedResourceSpeed(config.playbackSpeed);
+    const double pitch = normalizedResourcePitch(config.playbackPitch);
+    // EQ 原地执行；只有变速变调要为同时存在的输入与输出分别留出预算。
+    applyResourceEqualizer(channels, config);
+    if ( !needsTimeTransform(speed, pitch) ) return true;
+    auto stretched = stretchResourceOffline(
+        channels, speed, pitch, frameBudget - sourceFrames);
+    if ( stretched.empty() || stretched.front().empty() ) return false;
+    // 替换后立即释放原输入；原始片段如需复用可从工作区重新读出。
+    channels = std::move(stretched);
+    return true;
+}
+
 std::shared_ptr<const PreparedTimelineAudio> prepareAudioTimelineResource(
     const std::shared_ptr<ice::AudioTrack>& track,
     const AudioTrackConfig&                 config)
@@ -323,16 +400,8 @@ std::shared_ptr<const PreparedTimelineAudio> prepareAudioTimelineResource(
     const auto source = PreparedTimelineAudio::fromTrack(track);
     if ( !source ) return {};
 
-    // 所有外部配置先规范化，后续 DSP 不再处理 NaN、Inf 或越界值。
-    const double speed = normalizedResourceSpeed(config.playbackSpeed);
-    const double pitch = normalizedResourcePitch(config.playbackPitch);
-    // 开启 EQ 但预设未知等同于无需处理，不复制完整 PCM。
-    const bool needsEqualizer =
-        config.eqEnabled && !equalizerFrequencies(config.eqPreset).empty();
-    const bool needsStretch =
-        std::abs(speed - 1.0) > 1.0e-6 || std::abs(pitch) > 1.0e-6;
     // 中性配置直接共享原缓存，避免一次无意义的全资源复制。
-    if ( !needsEqualizer && !needsStretch ) return source;
+    if ( !audioTimelineResourceNeedsProcessing(config) ) return source;
 
     // 离线处理需要整个不可变 PCM；流式页不能作为稳定声道视图使用。
     // AudioManager 在加载阶段已为这些资源选择完整缓存，外部误用则显式失败。
@@ -340,9 +409,11 @@ std::shared_ptr<const PreparedTimelineAudio> prepareAudioTimelineResource(
     // 先 EQ 再变速变调，保持资源处理链的固定顺序和缓存可复现性。
     auto channels = copyPreparedChannels(*source);
     applyResourceEqualizer(channels, config);
-    if ( needsStretch ) {
+    // 处理函数只接受规范化参数，历史配置中的非有限值不能进入 DSP。
+    const double speed = normalizedResourceSpeed(config.playbackSpeed);
+    const double pitch = normalizedResourcePitch(config.playbackPitch);
+    if ( needsTimeTransform(speed, pitch) )
         channels = stretchResourceOffline(channels, speed, pitch);
-    }
     // 保留原 AudioTrack 所有权，使资源身份与处理后的 PCM 生命周期一致。
     return PreparedTimelineAudio::fromOwnedChannels(std::move(channels), track);
 }
