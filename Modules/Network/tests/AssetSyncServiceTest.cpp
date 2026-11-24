@@ -1484,6 +1484,112 @@ int testConcurrentDownloads(bool fullPackage)
                     : "parallel incremental download cancellation is isolated");
 }
 
+/// @brief 只阻止版本标记的替换，覆盖冷启动、增量和无文件差异的三条完成路径。
+/// @param fullPackage 首轮是否由完整包建立安装目录。
+/// @return 任一状态、计数或实际磁盘字节不符时计一次失败。
+/// @details 使用同名非空目录阻止替换，普通用户和特权进程都可复现。
+/// 正文已安装时还要保留它，下次只修复标记即可恢复版本快路径。
+/// @note 状态、进度和磁盘读回分别断言，避免只看到文件存在就判定同步成功。
+/// 夹具使用 file URL，不取用用户配置目录或联网版本。
+int testVersionMarkerFailure(bool fullPackage)
+{
+    std::error_code error;
+    const auto      temporary = std::filesystem::temp_directory_path(error);
+    if ( error ) return 1;
+    const MMM::Config::ScopedTemporaryDirectory fixture(temporary,
+                                                        "mmm-asset-test-");
+    if ( fixture.error() ) return 1;
+
+    // 同一份正文同时作为 ZIP 成员和增量源，验证两条安装路径只在版本步骤失败。
+    // 源文件在安装根之外，后面的比对必须读取真实安装路径。
+    const auto download = fixture.path() / "download.txt";
+    const auto manifest = fixture.path() / "manifest.json";
+    const auto assets   = fixture.path() / "assets";
+    // 直接使用正式版本标记名，制造只影响元数据的目标冲突。
+    // 非空目录不会被普通文件重命名覆盖，权限不依赖执行测试的用户。
+    const auto        marker   = assets / ".mmm-assets-version";
+    const std::string contents = "verified bytes";
+    if ( !writeTextFile(download, contents) ) return 1;
+    // 冷启动先不存在 assets；直到解压回调才引入版本路径障碍。
+    std::filesystem::path archive;
+    if ( fullPackage ) {
+        // 冷启动只准备归档与清单，资源根在进入解压进度之前须不存在。
+        // ZIP 不包含版本标记，让客户端独立执行写入流程。
+        archive = fixture.path() / "fixture.zip";
+        if ( !writeZipFile(archive, { { "assets/payload.txt", contents } }) )
+            return 1;
+        // 增量则先建立标记障碍，这一步也使根目录存在，确保分派到逐文件更新。
+    } else if ( !writeTextFile(marker / "sentinel", "keep") ) {
+        return 1;
+    }
+    // 从实际文件计算包和正文摘要，避免因远端输入不完整而在标记测试前失败。
+    if ( !writeSingleFileManifest(manifest, download, "payload.txt", archive) )
+        return 1;
+
+    AssetSyncOptions options;
+    options.assetsRootPath = assets;
+    options.manifestUrl    = fileUrlFor(manifest);
+    // 记录障碍创建结果，防止夹具意外未能阻断正式路径。
+    // 所有观察字段只从同步的进度回调更新，不跨线程共享。
+    bool canBlockMarker      = !fullPackage;
+    bool finished            = false;
+    bool checked             = false;
+    options.progressCallback = [&](const AssetSyncProgress& progress) {
+        // 已经进入解压阶段，建立目录障碍不能再使本轮改走增量分支。
+        if ( progress.stage == AssetSyncProgressStage::kExtractingPackage )
+            canBlockMarker = writeTextFile(marker / "sentinel", "keep");
+        if ( progress.stage == AssetSyncProgressStage::kFinished )
+            finished = true;
+        if ( progress.stage == AssetSyncProgressStage::kCheckingFiles )
+            checked = true;
+    };
+    // 首次调用必须安装正文并失败于写版本；输出计数证明安装阶段已经完成。
+    const auto failed = AssetSyncService::sync(options);
+    // 验证返回类型不同于普通的网络降级，且成功进度没有被发送。
+    // 检查目标路径文本还可以区分标记错误与正文 I/O 错误。
+    auto failures = expectTrue(
+        canBlockMarker && !finished &&
+            failed.status == AssetSyncStatus::kVersionWriteFailed &&
+            failed.errorMessage.find(".mmm-assets-version") !=
+                std::string::npos &&
+            failed.remoteVersion == "asset-test" &&
+            failed.updatedFileCount == 1 &&
+            readTextFile(assets / "payload.txt") == contents &&
+            // 障碍内的文件不可丢失，避免错误的递归替换跨越正式标记边界。
+            readTextFile(marker / "sentinel") == "keep",
+        fullPackage ? "full install reports version commit failure"
+                    : "incremental install reports version commit failure");
+
+    // 正文已安装且摘要相同，单独刷新标记失败仍须报告降级。
+    // 清空上轮观察，后续检查证明标记失败没有意外建立快路径。
+    checked = false;
+    // 释放障碍前再次同步，此时只需写版本，仍应单独报告元数据失败。
+    // 计数为零可排除因正文又被重新写入而触发了其他失败。
+    const auto withoutFileUpdates = AssetSyncService::sync(options);
+    failures += expectTrue(
+        checked && !finished &&
+            withoutFileUpdates.status == AssetSyncStatus::kVersionWriteFailed &&
+            withoutFileUpdates.updatedFileCount == 0,
+        "precise verification reports marker failure without downloads");
+    // 只移除本用例建立的障碍。新的标记须持久化，启动快路径才能跳过校验。
+    // 这里只删除测试自己建立的非空目录，不改变已经成功安装的正文。
+    std::filesystem::remove_all(marker, error);
+    if ( error ) return failures + 1;
+    // 恢复时不能重复下载相同正文，直接读回标记可验证确实完成了原子写入。
+    const auto recovered = AssetSyncService::sync(options);
+    failures +=
+        expectTrue(finished && recovered.status == AssetSyncStatus::kReady &&
+                       recovered.updatedFileCount == 0 &&
+                       readTextFile(marker) == "asset-test\n",
+                   "retry saves version without redownloading verified assets");
+    checked = false;
+    // 继续以同一个版本和清单启动一次；只有上一轮已持久化才能跳过文件校验。
+    const auto fast = AssetSyncService::sync(options);
+    failures += expectTrue(fast.status == AssetSyncStatus::kReady && !checked,
+                           "saved marker enables the next startup fast path");
+    return failures;
+}
+
 #if defined(__linux__)
 /// @brief 完整包和增量必须同样拒绝已存在的目录链接，外部旧字节不能改变。
 /// @return 任一入口接受链接或修改根外文件时累计一次失败。
@@ -1664,6 +1770,9 @@ int main(int argc, char** argv)
     fail += testSyncReportsPreciseCheckProgress();
     fail += testConcurrentDownloads(true);
     fail += testConcurrentDownloads(false);
+    // 两个子用例都包含精确检查与恢复过程，确保共有完成路径不会漏报。
+    fail += testVersionMarkerFailure(true);
+    fail += testVersionMarkerFailure(false);
 #if defined(__linux__)
     // 这两项分别需要真实目录链接和独立暂存卷，放在跨平台的并行下载测试之后。
     fail += testRedirectedAssetDestination();
