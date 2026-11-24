@@ -4,6 +4,7 @@
 #include "config/Utf8Path.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectController.h"
 #include "logic/VisualResourceRenameService.h"
 #include "mmm/project/Project.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -29,15 +30,16 @@ namespace MMM::UI
 /// 名称输入保留扩展名，最终格式保护与重名检测由共享事务校验。
 /// 开始新请求会清除上次改名错误，但不会清除资源导入的其他错误。
 /// buffer 在向导整个生命周期内稳定，ImGui 不借用栈上临时名称。
-/// @warning 用户点击入口，锁内只复制身份与文件名，不执行磁盘事务。
+/// @warning 用户点击入口，只复制快照身份和文件名。
 void NewBeatmapWizard::requestResourceRename(ResourceTarget target)
 {
-    auto&           engine = Logic::EditorEngine::instance();
-    std::lock_guard lock(engine.getSessionMutex());
-    const auto*     project = engine.getCurrentProject();
+    const auto project = Logic::ProjectController::instance().uiSnapshot();
+    // 初次确认框建立只读身份，不借用原工程的所有权。
     // 未创建谱面也能拥有正式项目，因此不要求存在活动会话。
     // 入口失败不打开模态框，确认函数仍会复核防止上下文后来变化。
-    if ( !project || project->m_isTemporaryProject ) return;
+    if ( !project || project->m_generation != m_projectGeneration ||
+         project->m_isTemporaryProject )
+        return;
     const auto& selected = target == ResourceTarget::Audio ? m_selectedAudioPath
                            : target == ResourceTarget::Cover
                                ? m_selectedCoverImgPath
@@ -51,10 +53,11 @@ void NewBeatmapWizard::requestResourceRename(ResourceTarget target)
             TR("ui.settings.beatmap.rename_name_too_long").toString();
         return;
     }
-    m_renameTarget      = target;
-    m_renameProjectRoot = project->m_projectRoot;
-    m_renameSourcePath  = selected;
-    m_renameAudioId     = m_selectedAudioTrackId;
+    m_renameTarget            = target;
+    m_renameProjectRoot       = project->m_projectRoot;
+    m_renameProjectGeneration = project->m_generation;
+    m_renameSourcePath        = selected;
+    m_renameAudioId           = m_selectedAudioTrackId;
     // 先补 NUL 再复制，旧长文件名不能泄漏到较短的新输入后面。
     m_renameNameBuffer.fill('\0');
     std::memcpy(m_renameNameBuffer.data(), name.data(), name.size());
@@ -140,14 +143,18 @@ bool NewBeatmapWizard::renameSelectedResource()
 {
     auto&           engine = Logic::EditorEngine::instance();
     std::lock_guard lock(engine.getSessionMutex());
-    auto*           project = engine.getCurrentProject();
-    const auto&     selected =
+    const auto snapshot = Logic::ProjectController::instance().uiSnapshot();
+    // 确认使用当前资源表解析实际文件，持锁期间项目切换不能移走它。
+    auto*       project = engine.getCurrentProject();
+    const auto& selected =
         // 用途与原始选择一同冻结，后续确认不受导入用途状态影响。
         m_renameTarget == ResourceTarget::Audio   ? m_selectedAudioPath
         : m_renameTarget == ResourceTarget::Cover ? m_selectedCoverImgPath
                                                   : m_selectedCoverPath;
     // 向导不依赖活动谱面，但必须仍属于打开确认框时的正式项目和资源选择。
-    if ( !project || project->m_isTemporaryProject ||
+    if ( !project || !snapshot ||
+         snapshot->m_generation != m_renameProjectGeneration ||
+         project->m_isTemporaryProject ||
          project->m_projectRoot != m_renameProjectRoot ||
          selected != m_renameSourcePath || selected.empty() ||
          (m_renameTarget == ResourceTarget::Audio &&

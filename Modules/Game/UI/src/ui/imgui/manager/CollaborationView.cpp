@@ -1718,8 +1718,7 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
     if ( m_room->isHost() ) {
         // 项目级覆盖优先于软件设置，提醒必须依据会话真正使用的配置。
         // 全局备份即使开启，项目覆盖为关闭时也仍应提醒房主。
-        const auto* project =
-            Logic::EditorEngine::instance().getCurrentProject();
+        const auto  project = Logic::ProjectController::instance().uiSnapshot();
         const auto& softwareBackup =
             Config::AppConfig::instance().getEditorSettings().autoBackup;
         const bool projectOverride =

@@ -1099,6 +1099,9 @@ struct CmdCreateBeatmap {
 
     /// @brief 新建谱面时预置写入的 Timing 列表，时间戳单位为毫秒。
     std::vector<::MMM::Timing> initialTimings;
+
+    /// @brief 向导绑定的工程代次；其他创建入口可沿用当前工程语义。
+    std::optional<std::uint64_t> projectGeneration;
 };
 
 /// @brief 工具栏对玩家区轨道数的单字段编辑。

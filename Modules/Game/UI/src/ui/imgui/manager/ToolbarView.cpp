@@ -17,6 +17,7 @@
 #include "config/visual/NoteTexturePosition.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectController.h"
 #include "logic/session/PlaybackController.h"
 #include "mmm/project/Project.h"
 #include "ui/ICanvasView.h"
@@ -1012,7 +1013,7 @@ void ToolbarView::update(UIManager* sourceManager)
             const auto*  viewport = ImGui::GetMainViewport();
             const ImVec2 size(horizontal ? previous->Size.x : totalFixedW,
                               horizontal ? rowHeight : previous->Size.y);
-            ImVec2       position = previous->Pos;
+            ImVec2 position = previous->Pos;
             // 整个浮窗需留在可操作区域，不能仅保证标题栏的一小部分可见。
             // 极小视口仍从起始边定位，避免上下限倒置传给 clamp。
             for ( int axis = 0; axis < 2; ++axis )
@@ -1434,8 +1435,8 @@ void ToolbarView::update(UIManager* sourceManager)
                 const ImVec2 swatchMin  = {
                     minPos.x + (btnSize - swatchSize) * 0.5f,
                     minPos.y + (showToolLabels
-                                    ? std::floor(5.0f * dpiScale)
-                                    : (btnHeight - swatchSize) * 0.5f),
+                                     ? std::floor(5.0f * dpiScale)
+                                     : (btnHeight - swatchSize) * 0.5f),
                 };
                 const ImVec2 swatchMax = { swatchMin.x + swatchSize,
                                            swatchMin.y + swatchSize };
@@ -3593,7 +3594,7 @@ bool ToolbarView::loadPaletteSchemeByName(const std::string& schemeName)
 void ToolbarView::applyProjectPalettePreference()
 {
     auto&       engine   = Logic::EditorEngine::instance();
-    const auto* project  = engine.getCurrentProject();
+    const auto  project  = Logic::ProjectController::instance().uiSnapshot();
     const auto& settings = Config::AppConfig::instance().getEditorSettings();
 
     // 默认无项目状态明确选择皮肤来源和稳定内置方案 ID。
@@ -4294,14 +4295,15 @@ void ToolbarView::deletePaletteScheme(std::size_t schemeIndex)
             Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
     }
 
-    auto& engine  = Logic::EditorEngine::instance();
-    auto* project = engine.getCurrentProject();
-    // 当前项目显式方案缺失时清空字段，语义恢复为继承软件默认。
-    bool projectChanged = false;
+    auto&      controller = Logic::ProjectController::instance();
+    const auto project    = controller.uiSnapshot();
+    // 删除当前项目引用的方案时，逻辑线程只清除这个工程的调色设置。
     if ( !deletedNameStillExists && project &&
          project->m_settings.m_colorPaletteSchemeName == deletedName ) {
-        project->m_settings.m_colorPaletteSchemeName.clear();
-        projectChanged = true;
+        controller.queueUiSettingsEdit({
+            .m_generation             = project->m_generation,
+            .m_colorPaletteSchemeName = std::string{},
+        });
     }
 
     if ( paletteConfig.schemes.empty() ) {
@@ -4320,10 +4322,6 @@ void ToolbarView::deletePaletteScheme(std::size_t schemeIndex)
     // 临时回到安全皮肤默认，下一帧按修复后的项目偏好重新应用。
     loadSkinDefaultPalette();
     app.save();
-    if ( projectChanged ) {
-        // 未修改项目字段时避免不必要的项目保存。
-        engine.saveProject();
-    }
 }
 
 /// @brief 安全复制方案名到固定 ImGui 输入缓冲。

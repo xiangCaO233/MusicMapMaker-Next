@@ -5,6 +5,7 @@
 #include "logic/ProjectDirectoryWatcher.h"
 #include "logic/ProjectResourceTypes.h"
 #include "logic/ProjectTypes.h"
+#include "logic/ProjectUiState.h"
 #include "mmm/project/Project.h"
 
 #include <atomic>
@@ -274,6 +275,23 @@ public:
         const CmdRemoveAudioResource&             cmd,
         const std::vector<BeatmapAudioReference>& openBeatmapReferences = {});
 
+    /// @brief 读取用于 UI 的不可变活动项目视图。
+    /// @warning 界面可见时每帧读取；一次 acquire 保证并发关闭后仍能绘制旧页，
+    /// 不等待会话锁也不访问可变 Project。仅借用同一帧内的结果引用。
+    [[nodiscard]] std::shared_ptr<const ProjectUiState> uiSnapshot() const;
+
+    /// @brief 合并同一工程的设置改动，供逻辑线程处理。
+    /// @note 合并以字段为单位；新工程的改动会代替尚未处理的旧工程请求。
+    void queueUiSettingsEdit(ProjectUiSettingsEdit edit);
+
+    /// @brief 将已排队的设置变更应用于仍然有效的工程。
+    /// @return 已修改配置的工程。调用方必须在会话锁内同步运行策略和保存。
+    [[nodiscard]] const Project* applyPendingUiSettingsEdit();
+
+    /// @brief 逻辑循环检查是否有设置写入待处理。
+    /// @warning 每轮 relaxed 读取脏位；UI 写入，真正数据由设置请求锁同步。
+    [[nodiscard]] bool hasPendingUiSettingsEdit() const;
+
     /// @brief 从当前项目谱面列表中删除谱面。
     /// @param cmd 删除谱面命令。
     /// @return 当前项目是否发生变化。
@@ -288,6 +306,23 @@ private:
     /// @param closeOnly 是否只关闭当前项目而不打开新项目。
     void publishProjectSwitchNeedsCanvasClose(
         const std::filesystem::path& projectPathToOpen, bool closeOnly) const;
+
+    /// @brief 在工程接管、保存或撤回后发布设置和向导读取模型。
+    /// @pre 调用方与项目字段修改及所有权切换串行访问。
+    void publishUiSnapshot();
+
+    /// @brief 当前工程身份，由会话锁保护；切换和正式目录接管时递增。
+    std::uint64_t m_projectGeneration{};
+    /// @brief 工程所有者 release 发布，UI 可见页每帧 acquire 读取。
+    /// @warning 不可变结果跨越工程关闭，不能使用不会延长寿命的裸指针代替。
+    std::atomic<std::shared_ptr<const ProjectUiState>> m_uiSnapshot;
+    /// @brief 短锁，仅保护待处理设置，不覆盖业务逻辑与磁盘保存。
+    std::mutex m_uiSettingsMutex;
+    /// @brief 同一代次未提交的配置字段。
+    std::optional<ProjectUiSettingsEdit> m_pendingUiSettingsEdit;
+    /// @brief UI 发布请求、逻辑线程每轮查看；槽本体由短锁保护。
+    /// @warning relaxed 只作为空闲提示。获取互斥锁之后才访问待处理配置。
+    std::atomic<bool> m_hasPendingUiSettingsEdit{ false };
 
     /// @brief 当前项目直接持有，热路径查询不经过私有状态间接访问。
     std::unique_ptr<Project> m_currentProject;

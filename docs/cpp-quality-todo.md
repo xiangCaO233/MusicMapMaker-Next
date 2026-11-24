@@ -501,7 +501,9 @@
 
 ### P1 · R03 · UI 借用可由逻辑线程释放的工程对象
 
-- [ ] 向导在绘制期间遍历音源，工程设置页还直接修改配置。关闭工程时逻辑线程移走并销毁唯一所有者。两条调用链缺少跨线程寿命保证，可能访问失效内存或写错工程。用带工程代次的只读快照及写命令，交错切换、关闭和编辑，检查寿命及写入归属。
+- [x] 向导在绘制期间遍历音源，工程设置页还直接修改配置。关闭工程时逻辑线程移走并销毁唯一所有者。两条调用链缺少跨线程寿命保证，可能访问失效内存或写错工程。用带工程代次的只读快照及写命令，交错切换、关闭和编辑，检查寿命及写入归属。
+
+  已验证。Linux Clang 22 RelWithDebInfo 全量构建和 6 项回归通过。覆盖同目录重开后旧代次拒绝、快照跨关闭保活、不同设置字段合并，以及向导导入和改名。
 
 [Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:1470](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L1470) [Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:1577](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L1577) [Modules/Game/UI/src/ui/imgui/manager/SettingsView_ProjectTab.cpp:67](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_ProjectTab.cpp#L67) [Modules/Game/UI/src/ui/imgui/manager/SettingsView_ProjectTab.cpp:563](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_ProjectTab.cpp#L563) [Modules/Game/Logic/src/logic/ProjectController.cpp:2206](../Modules/Game/Logic/src/logic/ProjectController.cpp#L2206) [Modules/Game/Logic/src/logic/EditorEngine.cpp:2196](../Modules/Game/Logic/src/logic/EditorEngine.cpp#L2196)
 

@@ -10,6 +10,7 @@
 #include "event/project/ProjectEvents.h"
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "log/colorful-log.h"
+#include "logic/EditorEngine.h"
 #include "mmm/project/PackageFileTypes.h"
 
 #include <archive.h>
@@ -108,7 +109,7 @@ std::string sanitizeTemporaryFolderName(std::string name)
     // 保留的 ASCII 集合不含路径分隔符，因此不会由包名引入额外目录层级。
     for ( char& ch : name ) {
         const unsigned char byte = static_cast<unsigned char>(ch);
-        const bool ok = (byte >= 'a' && byte <= 'z') ||
+        const bool          ok   = (byte >= 'a' && byte <= 'z') ||
                         (byte >= 'A' && byte <= 'Z') ||
                         (byte >= '0' && byte <= '9') || ch == '-' || ch == '_';
         if ( !ok ) ch = '_';
@@ -1258,6 +1259,112 @@ const Project* ProjectController::currentProject() const
     return m_currentProject.get();
 }
 
+/// @brief 读取项目 UI 快照，供设置绘制和新建向导稳定读取。
+/// @return 当前已发布的不可变项目视图，关闭完成后为 nullptr。
+/// @details 工程接管和存储逻辑写入发布槽，UI 持有结果直到绘制完成；
+/// 原工程及时释放，旧帧的设置写入由代次检查拒绝。
+/// @warning 每个可见帧最多取得一次共享所有权；普通 UI 不等待业务锁。
+std::shared_ptr<const ProjectUiState> ProjectController::uiSnapshot() const
+{
+    // 关闭只替换发布槽；正在使用这个不可变版本的控件仍持有原始值。
+    return m_uiSnapshot.load(std::memory_order_acquire);
+}
+
+/// @brief 用已接管的项目值构建独立读模型；无项目时撤下快照。
+/// @pre 调用方串行化工程所有权、资源表与设置变更。
+/// @details 每次保存都从实际内存状态读取，保证重新命名后的资源 ID、
+/// 画布新增入口及项目配置在一个结果中同时可见。发布前不对读者暴露可变对象。
+/// @warning 项目接管、关闭或保存低频路径；持有会话锁时只复制所需字段。
+void ProjectController::publishUiSnapshot()
+{
+    std::shared_ptr<ProjectUiState> state;
+    if ( m_currentProject ) {
+        const auto& project = *m_currentProject;
+        // 使用独立结果承载显示值，不能用项目指针的地址代替稳定身份。
+        state = std::make_shared<ProjectUiState>();
+        // 代次随投影一起发布，不从可复用的堆地址或目录名推导身份。
+        state->m_generation         = m_projectGeneration;
+        state->m_projectRoot        = project.m_projectRoot;
+        state->m_isTemporaryProject = project.m_isTemporaryProject;
+        state->m_title              = project.m_metadata.m_title;
+        state->m_artist             = project.m_metadata.m_artist;
+        state->m_mapper             = project.m_metadata.m_mapper;
+        state->m_settings = { project.m_settings.m_colorPaletteSchemeName,
+                              project.m_settings.m_autoBackupOverride };
+        // 只复制向导需要的标识与路径，避开草稿轨节点和音频效果配置。
+        for ( const auto& audio : project.m_audioResources )
+            if ( audio.m_type == AudioTrackType::Main )
+                state->m_audioResources.push_back({ audio.m_id, audio.m_path });
+        // 向导只提示重名，不参与打开、重命名或持久化文件入口。
+        // 保持原表的精确显示名称，别名路径与文件大小写规则在此无关。
+        state->m_beatmapNames.reserve(project.m_beatmaps.size());
+        for ( const auto& beatmap : project.m_beatmaps )
+            state->m_beatmapNames.push_back(beatmap.m_name);
+    }
+    // nullptr 与已完成的投影走同一发布边界，界面无需另读工程存在标志。
+    m_uiSnapshot.store(std::move(state), std::memory_order_release);
+}
+
+/// @brief 合并同代次的字段修改；更晚到达的同字段值优先。
+/// @param edit UI 在完成操作后提交的设置差量。
+/// @details 外层 optional 标记字段参与修改，内层空备份覆盖表示恢复继承。
+/// 请求锁只保护槽与脏位，不等待当前工程关闭，不执行保存。
+/// @warning 仅用户修改服从请求锁，页面静置不进入。
+void ProjectController::queueUiSettingsEdit(ProjectUiSettingsEdit edit)
+{
+    std::lock_guard lock(m_uiSettingsMutex);
+    // 陈旧的绘制结果不能覆盖刚在新工程提交的设置。
+    if ( m_pendingUiSettingsEdit &&
+         m_pendingUiSettingsEdit->m_generation > edit.m_generation )
+        return;
+    if ( !m_pendingUiSettingsEdit ||
+         m_pendingUiSettingsEdit->m_generation != edit.m_generation ) {
+        m_pendingUiSettingsEdit = std::move(edit);
+    } else {
+        // 同帧的另一控件可能只修改备份；合并时保留未被覆盖的调色板字段。
+        if ( edit.m_colorPaletteSchemeName )
+            m_pendingUiSettingsEdit->m_colorPaletteSchemeName =
+                std::move(edit.m_colorPaletteSchemeName);
+        if ( edit.m_autoBackupOverride )
+            m_pendingUiSettingsEdit->m_autoBackupOverride =
+                edit.m_autoBackupOverride;
+    }
+    // 设置槽已在短锁内填好，布尔值只提示下轮是否需取锁。
+    m_hasPendingUiSettingsEdit.store(true, std::memory_order_relaxed);
+}
+
+/// @brief 检查是否有配置改动等待逻辑线程处理。
+bool ProjectController::hasPendingUiSettingsEdit() const
+{
+    return m_hasPendingUiSettingsEdit.load(std::memory_order_relaxed);
+}
+
+/// @brief 在已串行化的业务阶段应用设置，拒绝跨工程周期的旧帧请求。
+/// @return 已修改的工程，空槽、只读或代次无效时返回 nullptr。
+/// @pre 逻辑线程已持有会话锁，调用返回后同锁同步备份运行状态以及保存。
+/// @details 先从槽中移出请求再读取工程字段，允许 UI 同时排入下一份草稿。
+const Project* ProjectController::applyPendingUiSettingsEdit()
+{
+    std::optional<ProjectUiSettingsEdit> edit;
+    {
+        std::lock_guard lock(m_uiSettingsMutex);
+        edit.swap(m_pendingUiSettingsEdit);
+        m_hasPendingUiSettingsEdit.store(false, std::memory_order_relaxed);
+    }
+    // 根目录相同也可能是另一次打开；临时只读工程无权写入。
+    if ( !edit || !m_currentProject || m_currentProject->m_isTemporaryProject ||
+         edit->m_generation != m_projectGeneration )
+        return nullptr;
+    // 字段级提交避免替换项目其他设置及工作区现场。
+    auto& settings = m_currentProject->m_settings;
+    if ( edit->m_colorPaletteSchemeName )
+        settings.m_colorPaletteSchemeName =
+            std::move(*edit->m_colorPaletteSchemeName);
+    if ( edit->m_autoBackupOverride )
+        settings.m_autoBackupOverride = *edit->m_autoBackupOverride;
+    return m_currentProject.get();
+}
+
 /// @brief 请求打开项目，必要时等待 UI 完成旧画布关闭。
 /// @param projectPath 要打开的项目目录或谱面文件路径。
 /// @param origin 本次入口来源，随延迟请求保留给演练等结果消费者。
@@ -1983,7 +2090,13 @@ ProjectController::OpenProjectResult ProjectController::openProject(
     }
 
     // 候选状态完整后才交接所有权并启动监听；临时缓存路径不写入最近项目。
-    m_currentProject = std::move(newProject);
+    {
+        // 生命周期交接与仍需要即时结果的向导确认入口串行化；目录准备和监听都在锁外。
+        std::lock_guard lock(EditorEngine::instance().getSessionMutex());
+        m_currentProject = std::move(newProject);
+        ++m_projectGeneration;
+        publishUiSnapshot();
+    }
     // 交接后旧的 currentProject 观察地址不再有效，上层不能跨打开流程缓存它。
     m_projectDirectoryWatcher.start(actualProjectPath);
     // 监听器启停不作为 m_opened 的独立验收条件；结果表示项目已接管到控制器。
@@ -2170,6 +2283,9 @@ ProjectController::saveTemporaryProjectTo(
     // 原地更新保留 Project
     // 对象地址；监听根与最近项目记录在持久化成功后一起切换。
     *m_currentProject = savedProject;
+    // 另存转正会更换资源解析根，旧向导的写请求不能落到正式工程。
+    ++m_projectGeneration;
+    publishUiSnapshot();
     // Project
     // 地址不变不代表其内部容器元素地址不变，观察资源的调用方需要重新取得。
     m_projectDirectoryWatcher.start(saveRoot);
@@ -2194,16 +2310,17 @@ ProjectController::saveTemporaryProjectTo(
 ProjectController::CloseProjectResult ProjectController::closeProject()
 {
     /// @brief 本次关闭项目的返回结果。
-    CloseProjectResult result;
-    if ( !m_currentProject ) {
-        return result;
+    CloseProjectResult    result;
+    std::filesystem::path projectPath;
+    {
+        // 只串行化所有权转移，不持锁停止监听或派发关闭事件。
+        std::lock_guard lock(EditorEngine::instance().getSessionMutex());
+        if ( !m_currentProject ) return result;
+        result.m_projectTitle = m_currentProject->m_metadata.m_title;
+        projectPath           = m_currentProject->m_projectRoot;
+        result.m_project      = std::move(m_currentProject);
+        publishUiSnapshot();
     }
-
-    result.m_projectTitle = m_currentProject->m_metadata.m_title;
-    /// @brief 被关闭项目的根目录路径快照。
-    std::filesystem::path projectPath = m_currentProject->m_projectRoot;
-    // 将所有权交给返回结果，后续保存或释放由调用方协调，不在关闭事件前直接销毁。
-    result.m_project = std::move(m_currentProject);
     // unique_ptr 转移不拷贝项目资源，返回结果成为后续释放项目的所有者。
     result.m_closed = true;
     // 先从控制器脱离再通知外部，关闭事件处理者查询 currentProject 将得到空值。
@@ -2276,6 +2393,8 @@ DirectorySyncResult ProjectController::scanProjectDirectory()
 bool ProjectController::saveProject()
 {
     if ( !m_currentProject ) return false;
+    // UI 按内存实际内容刷新；磁盘保存失败不能让选择器继续使用旧资源 ID。
+    publishUiSnapshot();
     // 保存必须有项目上下文，不能因没有待写内容就发布成功事件。
 
     const auto manifest =

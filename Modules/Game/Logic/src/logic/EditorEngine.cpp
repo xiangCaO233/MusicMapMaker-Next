@@ -2271,6 +2271,14 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
     std::lock_guard<std::recursive_mutex> lock(
         impl().m_sessionRegistry.mutex());
 
+    auto& controller = ProjectController::instance();
+    if ( cmd.projectGeneration ) {
+        const auto current = controller.uiSnapshot();
+        if ( !current || current->m_generation != *cmd.projectGeneration )
+            return;
+    }
+    if ( rejectTemporaryProjectEdit() ) return;
+
     /// @brief 项目命令服务的新建谱面处理结果。
     auto result = ProjectController::instance().createBeatmap(cmd);
     if ( !result.m_created || !result.m_beatmap ) {
@@ -2747,17 +2755,17 @@ void EditorEngine::pushCommand(LogicCommand&&               cmd,
         return;
     }
 
+    // 新建谱面入口在生命周期锁内校验工程代次与只读状态。
+    if ( std::holds_alternative<CmdCreateBeatmap>(cmd) ) {
+        handleCreateBeatmap(std::get<CmdCreateBeatmap>(cmd));
+        return;
+    }
+
     // 临时项目以只读方式查看；具有潜在写能力的命令即使最终可能无操作，
     // 也必须在进入任何控制器或会话队列前拒绝。
     if ( isTemporaryProjectOpen() && isTemporaryProjectMutationCommand(cmd) &&
          rejectTemporaryProjectEdit() )
         return;
-
-    // 新建谱面同时修改项目清单和会话集合，不能只投递到某个活动会话。
-    if ( std::holds_alternative<CmdCreateBeatmap>(cmd) ) {
-        handleCreateBeatmap(std::get<CmdCreateBeatmap>(cmd));
-        return;
-    }
 
     // 音频资源命令按各自事务入口处理；这些入口负责引用校验、运行时登记、
     // 会话派生状态失效和项目保存，不能退化为普通 Session 命令。
@@ -4817,6 +4825,17 @@ void EditorEngine::loop()
                              std::memory_order_relaxed);
             impl().m_logicUpdateCount = 0;
             impl().m_lastUpsTime      = currentTime;
+        }
+
+        if ( projectController.hasPendingUiSettingsEdit() ) {
+            // 已经排队的设置先应用于仍然打开的工程，确保同轮关闭能保存它们。
+            std::lock_guard lock(impl().m_sessionRegistry.mutex());
+            if ( const auto* edited =
+                     projectController.applyPendingUiSettingsEdit() ) {
+                setProjectAutoBackupOverride(
+                    edited->m_settings.m_autoBackupOverride);
+                saveProject();
+            }
         }
 
         // 项目切换在会话轮询锁外执行，避免文件 IO 与 EventBus

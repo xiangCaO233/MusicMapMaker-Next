@@ -705,7 +705,9 @@ int main(int argc, char** argv)
     // 所有来源文件都已写出；后续数量断言会同时检查有效和无效绑定。
     // 行为检查返回值是本进程唯一成功标准，文件写出成功不能替代功能通过。
     // 关闭项目在返回之前执行，确保资源生命周期也经过生产清理路径。
-    const bool passed = MMM::UI::BpmBeatmapImportTestAccess::run(root);
+    // 保存测试注入的资源，向导与生产一致地从发布快照读取。
+    const bool passed = controller.saveProject() &&
+                        MMM::UI::BpmBeatmapImportTestAccess::run(root);
     // 显式关闭隔离项目，使会话清理完成后才结束测试进程。
     // 夹具保留在构建输出下供失败诊断，不向源码资源目录复制。
     controller.closeProject();
