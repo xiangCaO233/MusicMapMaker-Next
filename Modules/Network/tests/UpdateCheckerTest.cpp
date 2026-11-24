@@ -6,6 +6,7 @@
  */
 
 #include "network/UpdateChecker.h"
+#include "UpdateSuccessMarker.h"
 #include "config/ExecutablePath.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
@@ -470,69 +471,56 @@ static int testCurrentExecutablePath()
     return 0;
 }
 
-/// @brief 验证更新成功标记文件的创建、删除和缺失检测边界。
-/// @return 文件系统操作或缺失标记判断失败的断言数量。
-/// @note 测试文件位于系统临时目录，不写入源码树和个人配置目录。
-/// @warning 必须通过隔离配置环境运行，禁止使用个人配置根目录。
+/// @brief 用两个同名应用包验证更新标记只由目标安装消费。
+/// @details 不接触运行机器的临时标记，Linux 也能运行同一磁盘协议。
 static int testUpdateSuccessMarker()
 {
-    // 三个阶段分别累计，确保清理失败也能反映在最终退出码中。
-    int pass = 0, fail = 0;
-
-    // 使用固定测试文件名模拟 Updater 写入的成功标记。
-    // 路径限定在系统临时目录，避免污染实际应用更新目录。
-    std::filesystem::path markerPath =
-        std::filesystem::temp_directory_path() / ".mm_update_success_test";
-    {
-        // 局部流在存在性检查前析构，确保内容和目录项已经提交。
-        std::ofstream marker(markerPath);
-        // 内容本身不参与协议，仅需产生一个非空普通文件。
-        marker << "test";
+    namespace fs = std::filesystem;
+    using MMM::Update::consumeMacUpdateMarker;
+    using MMM::Update::macUpdateMarkerPath;
+    const auto      root = fs::current_path() / "test_output" / "update-marker";
+    const auto      appA = root / "stable" / "MusicMapMaker-Next.app";
+    const auto      appB = root / "preview" / "MusicMapMaker-Next.app";
+    const auto      exeA = appA / "Contents/MacOS/MusicMapMaker-Next";
+    const auto      exeB = appB / "Contents/MacOS/MusicMapMaker-Next";
+    const auto      temp = root / "markers";
+    std::error_code error;
+    for ( const auto& directory :
+          { exeA.parent_path(), exeB.parent_path(), temp } ) {
+        fs::create_directories(directory, error);
+        if ( error ) return 1;
     }
-
-    // 使用 error_code 重载避免文件系统错误通过异常离开测试。
-    std::error_code markerPathError;
-    // 同时要求 exists 为 true 且查询过程没有底层错误。
-    bool exists = std::filesystem::exists(markerPath, markerPathError) &&
-                  !markerPathError;
-    if ( exists ) {
-        pass++;
-    } else {
-        fail++;
-        XERROR("[marker] Failed to create test marker file");
-    }
-
-    // 模拟启动流程消费标记后的删除动作，同样使用非抛出重载。
-    std::error_code removeError;
-    std::filesystem::remove(markerPath, removeError);
-    // 最终存在性检查是清理判据，兼容目标已不存在时 remove 返回 false。
-    // 清除上一次 exists 的状态，防止旧错误影响删除后验证。
-    markerPathError.clear();
-    // 标记不存在且查询成功才视为清理完成。
-    bool gone = !std::filesystem::exists(markerPath, markerPathError) &&
-                !markerPathError;
-    if ( gone ) {
-        pass++;
-    } else {
-        fail++;
-        XERROR("[marker] Failed to delete test marker file");
-    }
-
-    // 删除测试标记后，正式入口也必须报告当前启动没有更新成功标记。
-    // 测试环境通过隔离 MMM_CONFIG_ROOT 避免读取用户的真实应用标记。
-    bool found = UpdateChecker::checkStartupUpdateMarker();
-    if ( !found ) {
-        pass++;
-    } else {
-        fail++;
-        XERROR(
-            "[marker] checkStartupUpdateMarker should return false when no "
-            "marker exists");
-    }
-
-    // 汇总创建、删除和正式缺失检测三个阶段。
-    XINFO("updateSuccessMarker: {}/{} passed", pass, pass + fail);
-    return fail;
+    std::ofstream(exeA).put('a');
+    std::ofstream(exeB).put('b');
+    const auto write = [](const fs::path& marker, const fs::path& app) {
+        // 标记与生产写入一样保存包的原生路径，目标目录已由夹具建立。
+        std::ofstream stream(marker, std::ios::binary);
+        const auto    bytes = app.string();
+        return static_cast<bool>(
+            stream.write(reinterpret_cast<const char*>(bytes.data()),
+                         static_cast<std::streamsize>(bytes.size())));
+    };
+    const auto markerA = macUpdateMarkerPath(appA, temp);
+    const auto markerB = macUpdateMarkerPath(appB, temp);
+    const auto legacy  = temp / "MusicMapMaker-Next.mm_update_success";
+    fs::remove(legacy, error);
+    if ( markerA.empty() || markerB.empty() || markerA == markerB ) return 1;
+    // 两个更新可以同时存在。先打开 B 必须只取走 B 的消息。
+    if ( !write(markerA, appA) || !write(markerB, appB) ||
+         !consumeMacUpdateMarker(exeB, temp) || !fs::exists(markerA) ||
+         !consumeMacUpdateMarker(exeA, temp) ||
+         consumeMacUpdateMarker(exeA, temp) )
+        return 1;
+    // 相同文件名并不足以证明安装身份。旧协议也必须遵守这一约束。
+    if ( !write(legacy, appA) || consumeMacUpdateMarker(exeB, temp) ||
+         !fs::exists(legacy) || !consumeMacUpdateMarker(exeA, temp) )
+        return 1;
+    // 独立文件仍验证正文，确保名称碰撞或错误内容不会消费别的安装标记。
+    const bool wrongContentRejected = write(markerA, appB) &&
+                                      !consumeMacUpdateMarker(exeA, temp) &&
+                                      fs::exists(markerA);
+    fs::remove(markerA, error);
+    return wrongContentRejected ? 0 : 1;
 }
 
 #if defined(__linux__) && !defined(__ANDROID__)

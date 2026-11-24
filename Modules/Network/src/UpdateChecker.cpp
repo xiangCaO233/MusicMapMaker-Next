@@ -1,4 +1,5 @@
 #include "network/UpdateChecker.h"
+#include "UpdateSuccessMarker.h"
 #include "config/ExecutablePath.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
@@ -233,28 +234,6 @@ std::filesystem::path applicationBundlePath(
     return {};
 }
 #endif
-
-/// @brief 获取更新成功标记路径。
-/// @details
-/// 更新器在替换完成后写入该标记，下一次主程序启动读取并删除。macOS bundle
-/// 本身会被整体替换且安装目录可能不可写，因此标记放系统临时目录；其他平台
-/// 放在可执行文件旁，天然区分不同安装副本。
-/// @param executablePath 当前主程序路径。
-/// @return 标记文件路径；临时目录不可用时返回空路径。
-std::filesystem::path updateSuccessMarkerPath(
-    const std::filesystem::path& executablePath)
-{
-#if defined(__APPLE__)
-    // 查询失败时返回空路径，调用方不会对未解析目标执行 exists/remove。
-    std::error_code tempError;
-    const auto      tempPath = std::filesystem::temp_directory_path(tempError);
-    if ( tempError ) return {};
-    return tempPath / "MusicMapMaker-Next.mm_update_success";
-#else
-    // Windows 与 Linux 更新器和主程序共享安装目录内的固定隐藏标记。
-    return executablePath.parent_path() / ".mm_update_success";
-#endif
-}
 
 /// @brief 从 JSON 对象读取字符串字段。
 /// @details
@@ -693,31 +672,25 @@ bool UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath,
     return true;
 }
 
-/// @brief 检查并消费上一次更新成功标记。
-/// @details
-/// 启动时根据当前程序路径计算平台对应标记位置；文件存在即尝试删除，并向调用方
-/// 报告本次启动由成功更新产生。不存在、路径解析失败或文件系统查询失败均返回
-/// false。删除错误不会改变“标记曾存在”的结果，避免只读安装环境重复隐藏成功提示。
-/// @return 启动时发现更新成功标记时返回 true。
+/// @brief 检查并消费属于当前安装的更新成功标记。
 bool UpdateChecker::checkStartupUpdateMarker()
 {
-    // 不知道当前安装位置时无法安全推导标记路径。
-    std::string exePath = currentExecutablePath();
-    if ( exePath.empty() ) return false;
-
-    const std::filesystem::path markerPath =
-        updateSuccessMarkerPath(Config::utf8ToPath(exePath));
-    if ( markerPath.empty() ) return false;
-
-    std::error_code markerError;
-    // exists 的查询错误与不存在都不应报告成功更新。
-    if ( !std::filesystem::exists(markerPath, markerError) || markerError ) {
-        return false;
-    }
-
-    std::filesystem::remove(markerPath, markerError);
-    // 标记存在事实已成立；清理失败留给后续启动再次观察。
+    const auto executable = currentExecutablePath();
+    if ( executable.empty() ) return false;
+    const auto      path = Config::utf8ToPath(executable);
+    std::error_code error;
+#if defined(__APPLE__)
+    // macOS 应用包可能处于只读位置，按包身份解析临时目录内的独立标记。
+    const auto temporary = std::filesystem::temp_directory_path(error);
+    return !error && MMM::Update::consumeMacUpdateMarker(path, temporary);
+#else
+    // 单文件安装仍使用目标旁边的原有隐藏标记。
+    const auto marker = path.parent_path() / ".mm_update_success";
+    if ( !std::filesystem::exists(marker, error) || error ) return false;
+    std::filesystem::remove(marker, error);
+    // 维持桌面旧标记语义，读取成功时即报告本次由更新产生。
     return true;
+#endif
 }
 
 /// @brief 在应用线程池异步查询远端版本清单。
