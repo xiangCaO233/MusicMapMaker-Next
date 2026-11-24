@@ -1,3 +1,4 @@
+#include "../src/ui/imgui/menu/actions/tools/BpmMeasurementToolView_Domains.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
 #include "config/skin/translation/Translation.h"
@@ -308,7 +309,8 @@ struct BpmMeasurementHistoryTestAccess {
         tool.m_beatLengthSeconds     = 0.4;
         tool.finishMeasurementHistoryGesture();
         // 只提交最终一条历史，避免每个中间值都占用撤销深度。
-        if ( tool.m_measurementUndoHistory.size() != 1 ) return false;
+        if ( tool.m_history->m_measurementUndoHistory.size() != 1 )
+            return false;
         tool.undoMeasurementFromShortcut();
         // 撤销只恢复 BPM 数据，不把后续视野、倍速和显示偏好改回去。
         if ( !close(tool.m_bpm, 120.0) || !close(tool.m_viewCenter, 8.0) ||
@@ -343,7 +345,7 @@ struct BpmMeasurementHistoryTestAccess {
         tool.clearMeasurementHistory();
         // 音轨切换后旧段落历史与未提交手势都不能再生效。
         return !tool.canUndoMeasurement() && !tool.canRedoMeasurement() &&
-               !tool.m_measurementGestureBefore;
+               !tool.m_history->m_measurementGestureBefore;
     }
 
     /// @brief 验证偏离网格、浮点在线位置、跨 BPM 边界与触控板小数刻度。
@@ -425,10 +427,10 @@ struct BpmMeasurementHistoryTestAccess {
         io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
         // 时间范围独立于试听加载状态，章节删除不应要求先播放音频。
         // 三个章节使用不同时间与名称，使移动下标后的错误目标可被识别。
-        tool.m_duration      = 60;
-        tool.m_audioChapters = { { 1, "first" },
-                                 { 2, "second" },
-                                 { 3, "third" } };
+        tool.m_duration                 = 60;
+        tool.m_markers->m_audioChapters = { { 1, "first" },
+                                            { 2, "second" },
+                                            { 3, "third" } };
         // 固定宿主尺寸保证三行均可见，位置从实际子窗口获取而非固定屏幕坐标。
         const auto draw = [&] {
             ImGui::NewFrame();
@@ -476,13 +478,14 @@ struct BpmMeasurementHistoryTestAccess {
             draw();
             io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
             draw();
-            passed &= tool.m_audioChapters.size() ==
+            passed &= tool.m_markers->m_audioChapters.size() ==
                       static_cast<std::size_t>(remaining - 1);
             // 数量不符时先停止点击，避免后续输入改变失败现场或越过空列表。
             if ( !passed ) break;
             // 首行连续删除应依次留下第二、第三章，时间字段作为稳定身份。
             if ( remaining > 1 )
-                passed &= tool.m_audioChapters.front().seconds == 5 - remaining;
+                passed &= tool.m_markers->m_audioChapters.front().seconds ==
+                          5 - remaining;
             draw();
         }
         // 空列表再绘制一帧，确保后续 Step 和窗口栈仍有效。
@@ -693,7 +696,7 @@ struct BpmMeasurementHistoryTestAccess {
             std::abs(tool.m_timingSegments[1].timestampSeconds - 12.21) < 1e-4;
         event(Up, .232f);
         passed &= tool.canUndoMeasurement() &&
-                  tool.m_measurementUndoHistory.size() == 1;
+                  tool.m_history->m_measurementUndoHistory.size() == 1;
         // 一次撤销应回到整笔拖动前，不能需要逐帧撤销才能恢复 120。
         // 再重做回到最后的合法 BPM，证明结束边沿没有丢失最后一帧。
         tool.undoMeasurementFromShortcut();
@@ -701,14 +704,14 @@ struct BpmMeasurementHistoryTestAccess {
         tool.redoMeasurementFromShortcut();
         passed &= std::abs(tool.m_bpm - 100) < 1e-3;
         // 静止轻点不制造空历史，系统 Cancel 也不能把取消坐标写到首拍。
-        const auto count = tool.m_measurementUndoHistory.size();
+        const auto count = tool.m_history->m_measurementUndoHistory.size();
         event(Down, .22f);
         event(Up, .22f);
-        passed &= tool.m_measurementUndoHistory.size() == count;
+        passed &= tool.m_history->m_measurementUndoHistory.size() == count;
         event(Down, .22f);
         Graphic::cancelMobileTouch();
         frame();
-        passed &= tool.m_measurementUndoHistory.size() == count &&
+        passed &= tool.m_history->m_measurementUndoHistory.size() == count &&
                   !tool.m_isBeatMarkerDragging;
         tool.m_followSubsequentSegments = false;
         // 不保留本用例的捕获和取消代际，后续桌面测试可从新 Down 开始。
@@ -818,7 +821,7 @@ struct BpmMeasurementHistoryTestAccess {
         // 手势期间可以反复改变值，提交只取最终有效状态。
         // 拍位恢复不能用取整掩盖精度误差，所有时间都检查双精度尾差。
         tool.finishMeasurementHistoryGesture();
-        passed &= tool.m_measurementUndoHistory.size() == 1;
+        passed &= tool.m_history->m_measurementUndoHistory.size() == 1;
         // 复用原工具快捷键入口，证明联动没有另起独立撤销栈。
         // 显示与编辑偏好不在历史内，撤销只能恢复测量内容。
         tool.undoMeasurementFromShortcut();
@@ -977,7 +980,7 @@ struct BpmMeasurementHistoryTestAccess {
         bool passed = close(tool.m_bpm, 100) &&
                       close(tool.m_timingSegments[1].timestampSeconds, 12.21) &&
                       close(tool.m_timingSegments[2].timestampSeconds, 15.41) &&
-                      tool.m_measurementUndoHistory.size() == 1;
+                      tool.m_history->m_measurementUndoHistory.size() == 1;
         tool.undoMeasurementFromShortcut();
         passed &= close(tool.m_timingSegments[1].timestampSeconds, 10.175);
         // 红线拖动需要越过下一段旧位置：联动时旧边界不再限制起点。

@@ -46,11 +46,13 @@
 
   已验证。将跟随与时钟状态、提交修订及有界日志移到 Peer 私有实现，保留公开配置与统计的值语义。 本地真实 WebRTC 的 follow 与 resource 探针通过。Linux RelWithDebInfo 全量构建及 13 项相关 CTest 通过。同一 Ninja 构建的活动对象依赖数如下。CollaborationPeer.h 14,CollaborationPlaybackSync.h 9,ICollaborationTransport.h 7,CollaborationPeer_Impl.h 2。
 
-- [ ] **R67 · P0 · BPM 测量窗口把后台作业、历史与标记文件操作带给消费者**
+- [x] **R67 · P0 · BPM 测量窗口把后台作业、历史与标记文件操作带给消费者**
 
   15 个对象依赖；向导和撤销菜单只需窗口能力，但包含分析纹理块、撤销栈、标记 I/O 与 worker/future 私有状态。R39 已修复 UI 等待。 先抽拥有取消/停止/收件的分析作业类，再抽测量历史和标记文件操作。公开 Timing 回调保持签名；纹理上传留在原 UI/GPU 线程。覆盖快速换源、关闭等待、撤销手势合并、导入标记和失效结果丢弃。
 
   [BpmMeasurementToolView.h L188](../Modules/Game/UI/include/ui/imgui/menu/actions/tools/BpmMeasurementToolView.h#L188)、[NewBeatmapWizard.cpp L699](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L699)
+
+  已验证。后台分析、手势历史和标记 I/O 由三个私有组件管理。快速切换只保留新请求，析构前等待旧任务，频谱资源仍在 UI 线程交付。Linux RelWithDebInfo 全量构建与 8 项 CTest 通过。Ninja 中私有域头仅 7 个消费者，BpmAutoDetector 从 16 降到 8，AudioMarkerService 从 24 降到 17。
 
 - [ ] **R68 · P0 · TimelineCanvas 混合表格交互、时间点手势和快照装饰**
 

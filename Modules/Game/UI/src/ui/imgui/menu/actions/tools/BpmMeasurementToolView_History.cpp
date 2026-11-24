@@ -1,3 +1,4 @@
+#include "BpmMeasurementToolView_Domains.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 
 #include <algorithm>
@@ -41,8 +42,10 @@ BpmMeasurementToolView::captureMeasurementHistorySnapshot() const
 void BpmMeasurementToolView::beginMeasurementHistoryGesture()
 {
     // 撤销恢复和已有手势不能重入捕获，保留最早的用户编辑状态。
-    if ( m_restoringMeasurementHistory || m_measurementGestureBefore ) return;
-    m_measurementGestureBefore = captureMeasurementHistorySnapshot();
+    if ( m_history->m_restoringMeasurementHistory ||
+         m_history->m_measurementGestureBefore )
+        return;
+    m_history->m_measurementGestureBefore = captureMeasurementHistorySnapshot();
 }
 
 /// @brief 只有 BPM 增加、删除、数值或时间调整才生成撤销记录。
@@ -50,12 +53,15 @@ void BpmMeasurementToolView::beginMeasurementHistoryGesture()
 /// @note 导航、播放、倍速、显示宽度和分拍数都不构成测量数据修改。
 void BpmMeasurementToolView::finishMeasurementHistoryGesture()
 {
-    if ( m_restoringMeasurementHistory || !m_measurementGestureBefore ) return;
-    MeasurementHistoryEntry entry;
-    entry.before = std::move(*m_measurementGestureBefore);
+    if ( m_history->m_restoringMeasurementHistory ||
+         !m_history->m_measurementGestureBefore )
+        return;
+    // 两个端点由同一次手势生成。提交后清除重做分支，避免恢复到另一条编辑历史。
+    MeasurementHistory::MeasurementHistoryEntry entry;
+    entry.before = std::move(*m_history->m_measurementGestureBefore);
     entry.after  = captureMeasurementHistorySnapshot();
     // 提前消费事务，空操作或音轨切换早退后不能遗留半次编辑。
-    m_measurementGestureBefore.reset();
+    m_history->m_measurementGestureBefore.reset();
     if ( entry.before.audioTrackId != entry.after.audioTrackId ) return;
     const auto sameSegments = [](const auto& lhs, const auto& rhs) {
         // 段落顺序已经归一化，逐项检查位置与 BPM，避免同位置点击生成空记录。
@@ -76,22 +82,24 @@ void BpmMeasurementToolView::finishMeasurementHistoryGesture()
         entry.before.firstBeatTime != entry.after.firstBeatTime;
     // 导航或无变化手势必须保留 redo，不能因为看了别处就失去可重做的 BPM。
     if ( !changed ) return;
-    m_measurementRedoHistory.clear();
-    if ( m_measurementUndoHistory.size() == MAX_MEASUREMENT_HISTORY ) {
+    m_history->m_measurementRedoHistory.clear();
+    if ( m_history->m_measurementUndoHistory.size() ==
+         MAX_MEASUREMENT_HISTORY ) {
         // 超出固定深度时仅丢弃最旧记录，不改变当前测量状态。
-        m_measurementUndoHistory.erase(m_measurementUndoHistory.begin());
+        m_history->m_measurementUndoHistory.erase(
+            m_history->m_measurementUndoHistory.begin());
     }
     // 条目不含播放或导航参数，后续恢复不会产生额外音频传输命令。
-    m_measurementUndoHistory.push_back(std::move(entry));
+    m_history->m_measurementUndoHistory.push_back(std::move(entry));
 }
 
 /// @brief 切换音轨时清空 BPM 历史与尚未结束的编辑手势。
 /// @warning 低频身份切换路径，不恢复旧音轨或触碰当前播放。
 void BpmMeasurementToolView::clearMeasurementHistory()
 {
-    m_measurementGestureBefore.reset();
-    m_measurementUndoHistory.clear();
-    m_measurementRedoHistory.clear();
+    m_history->m_measurementGestureBefore.reset();
+    m_history->m_measurementUndoHistory.clear();
+    m_history->m_measurementRedoHistory.clear();
     // 音轨身份变化后，上一轨的候选越界提示已经失效。
     m_followEditRejected = false;
 }
@@ -105,14 +113,14 @@ void BpmMeasurementToolView::restoreMeasurementHistorySnapshot(
     // 失效音轨历史不能跨歌曲生效；视野导航始终属于用户当前上下文。
     if ( snapshot.audioTrackId != m_selectedAudioTrackId ) return;
     // 恢复期间只更改测量字段，不保存或覆盖显示偏好。
-    m_restoringMeasurementHistory = true;
-    m_timingSegments              = snapshot.timingSegments;
-    m_bpm                         = snapshot.bpm;
-    m_beatLengthSeconds           = snapshot.beatLengthSeconds;
-    m_firstBeatTime               = snapshot.firstBeatTime;
+    m_history->m_restoringMeasurementHistory = true;
+    m_timingSegments                         = snapshot.timingSegments;
+    m_bpm                                    = snapshot.bpm;
+    m_beatLengthSeconds                      = snapshot.beatLengthSeconds;
+    m_firstBeatTime                          = snapshot.firstBeatTime;
     // BPM 改变后重建节拍调度基线，不把播放头跳回编辑前的位置。
     resetMetronomeScheduler(m_viewCenter);
-    m_restoringMeasurementHistory = false;
+    m_history->m_restoringMeasurementHistory = false;
     // 撤销或重做恢复完整有效模型，不继续显示此前候选的拒绝原因。
     m_followEditRejected = false;
 }
@@ -122,7 +130,7 @@ void BpmMeasurementToolView::restoreMeasurementHistorySnapshot(
 /// @warning UI 快捷键低频查询；只检查容器大小，不复制条目。
 bool BpmMeasurementToolView::canUndoMeasurement() const
 {
-    return !m_measurementUndoHistory.empty();
+    return !m_history->m_measurementUndoHistory.empty();
 }
 
 /// @brief 查询是否存在当前音轨可重做的测量操作。
@@ -130,7 +138,7 @@ bool BpmMeasurementToolView::canUndoMeasurement() const
 /// @warning UI 快捷键低频查询；只检查容器大小，不复制条目。
 bool BpmMeasurementToolView::canRedoMeasurement() const
 {
-    return !m_measurementRedoHistory.empty();
+    return !m_history->m_measurementRedoHistory.empty();
 }
 
 /// @brief 撤销一次已提交的 BPM 工具输入操作。
@@ -139,12 +147,12 @@ bool BpmMeasurementToolView::canRedoMeasurement() const
 /// 多次撤销重做始终使用冻结的 BPM 数据，播放头和视野不参与还原。
 void BpmMeasurementToolView::undoMeasurementFromShortcut()
 {
-    if ( m_measurementUndoHistory.empty() ) return;
-    auto entry = std::move(m_measurementUndoHistory.back());
+    if ( m_history->m_measurementUndoHistory.empty() ) return;
+    auto entry = std::move(m_history->m_measurementUndoHistory.back());
     // 先弹出再恢复，恢复过程不会访问同一尾项。
-    m_measurementUndoHistory.pop_back();
+    m_history->m_measurementUndoHistory.pop_back();
     restoreMeasurementHistorySnapshot(entry.before);
-    m_measurementRedoHistory.push_back(std::move(entry));
+    m_history->m_measurementRedoHistory.push_back(std::move(entry));
 }
 
 /// @brief 重做一次已撤销的 BPM 工具输入操作。
@@ -152,13 +160,13 @@ void BpmMeasurementToolView::undoMeasurementFromShortcut()
 /// @note 使用冻结的 after 快照，不重新执行鼠标输入或重新计算 BPM。
 void BpmMeasurementToolView::redoMeasurementFromShortcut()
 {
-    if ( m_measurementRedoHistory.empty() ) return;
-    auto entry = std::move(m_measurementRedoHistory.back());
+    if ( m_history->m_measurementRedoHistory.empty() ) return;
+    auto entry = std::move(m_history->m_measurementRedoHistory.back());
     // 与撤销对称移动同一条目，保留多步顺序和副作用标识。
-    m_measurementRedoHistory.pop_back();
+    m_history->m_measurementRedoHistory.pop_back();
     restoreMeasurementHistorySnapshot(entry.after);
     // 条目不含播放或导航参数，后续恢复不会产生额外音频传输命令。
-    m_measurementUndoHistory.push_back(std::move(entry));
+    m_history->m_measurementUndoHistory.push_back(std::move(entry));
 }
 
 /// @brief 在视图中心插入继承当前位置 BPM 的新段落。

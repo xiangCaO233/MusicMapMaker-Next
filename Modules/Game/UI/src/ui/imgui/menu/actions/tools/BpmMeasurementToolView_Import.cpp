@@ -1,3 +1,4 @@
+#include "BpmMeasurementToolView_Domains.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 
 #include "config/AppConfig.h"
@@ -242,11 +243,12 @@ bool BpmMeasurementToolView::hasAnalysisPendingForImport() const
     // 新请求仍可能恢复内嵌标记，导入需要同时检查 UI 请求槽与 future。
     // 工作线程先写结果槽再发布完成标志，单独读取 running 会漏掉交付间隙。
     // 读取槽与生产者使用同一把锁，不消费或丢弃其原有分析结果。
-    std::lock_guard lock(m_pendingResultMutex);
-    return m_analysisRequest.has_value() || m_analysisFuture.valid() ||
-           m_analysisRunning.load(std::memory_order_relaxed) ||
-           m_analysisFinished.load(std::memory_order_acquire) ||
-           m_pendingResult.has_value();
+    std::lock_guard lock(m_job->m_pendingResultMutex);
+    return m_job->m_analysisRequest.has_value() ||
+           m_job->m_analysisFuture.valid() ||
+           m_job->m_analysisRunning.load(std::memory_order_relaxed) ||
+           m_job->m_analysisFinished.load(std::memory_order_acquire) ||
+           m_job->m_pendingResult.has_value();
 }
 
 /// @brief 按当前项目入口顺序建立一次关联谱面列表，然后请求打开模态。
