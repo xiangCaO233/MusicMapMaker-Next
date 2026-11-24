@@ -1,4 +1,7 @@
 #include "logic/SessionRegistry.h"
+#include "logic/BeatmapSession.h"
+#include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <charconv>
 #include <string_view>
@@ -385,6 +388,7 @@ void SessionRegistry::publishSnapshotUnsafe()
     snapshot->activeIndex = activeIndex();
     snapshot->sessions.reserve(m_entries.size());
     uiSnapshot->entries.reserve(m_entries.size());
+    uiSnapshot->templateOptions.reserve(m_entries.size());
     for ( int32_t index = 0; index < static_cast<int32_t>(m_entries.size());
           ++index ) {
         const auto& entry = m_entries[static_cast<size_t>(index)];
@@ -395,6 +399,17 @@ void SessionRegistry::publishSnapshotUnsafe()
                                         entry.isLogoPlaceholder,
                                         entry.restoreDockFromWorkspace });
         if ( entry.session ) {
+            // 只投影已完成载入的谱面。快照从不延长源谱面的生命周期。
+            const auto& chart = entry.session->getContext().currentBeatmap;
+            if ( chart && !entry.isLogoPlaceholder ) {
+                const auto& meta = chart->m_baseMapMetadata;
+                uiSnapshot->templateOptions.push_back(
+                    { entry.cameraId,
+                      entry.displayName.empty() ? meta.name : entry.displayName,
+                      meta.name,
+                      meta.map_path,
+                      chart });
+            }
             snapshot->sessions.push_back({ index,
                                            entry.cameraId,
                                            entry.session,

@@ -867,3 +867,11 @@ mmm_register_test_case(
   "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/skin.lua"
   "${CMAKE_SOURCE_DIR}/assets/translations"
   "${CMAKE_BINARY_DIR}/test_output")
+
+# 新谱面向导用例使用真实逻辑发布模型及文件工作池，ImGui 只进行 CPU 侧布局。 测试在构建输出写入每轮独占的夹具目录，不访问项目工作区或运行图形设备。
+mmm_add_test_executable(UI NewBeatmapWizardReadModelTest
+                        tests/NewBeatmapWizardReadModelTest.cpp)
+target_link_libraries(NewBeatmapWizardReadModelTest PRIVATE UI)
+mmm_register_test_case(
+  NAME NewBeatmapWizardReadModelTest COMMAND NewBeatmapWizardReadModelTest
+  "${CMAKE_BINARY_DIR}/test_output/NewBeatmapWizardReadModelTest")

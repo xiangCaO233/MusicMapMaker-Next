@@ -7,9 +7,12 @@
 #include "mmm/timing/Timing.h"
 #include "ui/IUIView.h"
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -18,6 +21,12 @@ namespace MMM::Event
 enum class BeatmapCreateInteractionStage : std::uint8_t;
 struct GLFWDropEvent;
 }  // namespace MMM::Event
+
+namespace MMM::Logic
+{
+struct ProjectUiState;
+struct SessionTemplateOption;
+}  // namespace MMM::Logic
 
 namespace MMM::UI
 {
@@ -56,6 +65,8 @@ private:
     friend struct NewBeatmapWizardResourceRenameTestAccess;
     /// @brief 允许验证测量导出预填值及已有创建草稿的边界。
     friend struct BpmBeatmapImportTestAccess;
+    /// @brief 资源列表及模板非阻塞回归访问。
+    friend struct NewBeatmapWizardReadModelTestAccess;
     /// @brief 导入后需要自动选中的资源用途。
     enum class ResourceTarget {
         Audio,      ///< 主音轨。
@@ -127,26 +138,33 @@ private:
         OpenTemplate  ///< 从已打开谱面作为模板创建。
     };
 
-    /// @brief 可作为模板的已打开谱面条目。
-    struct OpenTemplateOption {
-        /// @brief Session 在引擎注册表中的索引。
-        int32_t sessionIndex{ -1 };
-
-        /// @brief 模板来源画布 ID。
-        std::string cameraId;
-
-        /// @brief 模板来源画布显示名称。
-        std::string displayName;
-
-        /// @brief 模板谱面的内部名称。
-        std::string internalName;
-
-        /// @brief 模板谱面的项目内路径。
-        std::filesystem::path mapPath;
-
-        /// @brief 模板谱面对象。
-        std::shared_ptr<MMM::BeatMap> beatmap;
+    /// @brief 一项已验证的视觉资源候选，绘制只读相对路径与媒体类型。
+    struct VisualResource {
+        /// @brief 可直接写入谱面元数据的工程相对路径。
+        std::string path;
+        /// @brief 视频只在背景列表展示，图片同时用于两类控件。
+        bool video{};
     };
+
+    /// @brief 背景线程返回的完整资源列表，身份用于丢弃陈旧结果。
+    struct VisualResources {
+        /// @brief 区分同路径重新打开后的工程。
+        std::uint64_t projectGeneration{};
+        /// @brief 提交时会话外的目录失效序号。
+        std::uint64_t revision{};
+        /// @brief 每次遍历仅收集一份图片与视频。
+        std::vector<VisualResource> entries;
+    };
+
+    /// @brief 文件线程扫描指定工程，相对路径与类型一次构建。
+    static VisualResources scanVisualResources(std::filesystem::path root,
+                                               std::uint64_t projectGeneration,
+                                               std::uint64_t revision);
+
+    /// @brief 下拉框复用当前工程目录清单；未就绪时返回空观察指针。
+    /// @warning UI 下拉热路径；只轮询 future，任务不可访问当前对象或会话锁。
+    const VisualResources* readVisualResources(
+        const Logic::ProjectUiState& project);
 
     /// @brief 重置向导字段到默认值。
     void reset();
@@ -159,15 +177,15 @@ private:
     /// @param templateOptions 当前已打开且可作为模板的谱面列表。
     /// @param sourceManager 提供演练突出目标注册。
     void renderTemplateSourceControls(
-        const std::vector<OpenTemplateOption>& templateOptions,
-        UIManager*                             sourceManager);
+        const std::vector<Logic::SessionTemplateOption>& templateOptions,
+        UIManager*                                       sourceManager);
 
     /// @brief 绘制已打开谱面的模板选择弹窗。
     /// @param templateOptions 当前已打开且可作为模板的谱面列表。
     /// @param sourceManager 提供模板选择成功后的演练状态更新。
     void renderTemplatePickerPopup(
-        const std::vector<OpenTemplateOption>& templateOptions,
-        UIManager*                             sourceManager);
+        const std::vector<Logic::SessionTemplateOption>& templateOptions,
+        UIManager*                                       sourceManager);
 
     /// @brief 绘制模板内容复制选项弹窗。
     /// @param sourceManager 提供选项确认后的演练状态更新。
@@ -177,26 +195,19 @@ private:
     /// @param sourceManager 提供突出引导目标注册。
     void renderDuplicateNameWarningPopup(UIManager* sourceManager);
 
-    /// @brief 收集已打开且可作为模板的谱面列表。
-    /// @return 可选模板谱面列表。
-    std::vector<OpenTemplateOption> collectOpenTemplateOptions() const;
-
-    /// @brief 查找当前选中的模板条目。
-    /// @param templateOptions 当前可选模板谱面列表。
-    /// @return 找到时返回模板条目指针；否则返回 nullptr。
-    const OpenTemplateOption* findSelectedTemplate(
-        const std::vector<OpenTemplateOption>& templateOptions) const;
-
     /// @brief 选择指定模板谱面并应用资源默认值。
     /// @param option 用户选中的模板条目。
-    void selectTemplate(const OpenTemplateOption& option);
+    [[nodiscard]] bool selectTemplate(
+        const Logic::SessionTemplateOption& option);
 
     /// @brief 将模板谱面的资源与节奏基础值应用为新谱面默认值。
-    /// @param beatmap 模板谱面。
-    void applyTemplateResourceDefaults(const MMM::BeatMap& beatmap);
+    /// @param meta 选择时在会话锁内复制的元数据。
+    void applyTemplateResourceDefaults(const MMM::BaseMapMeta& meta);
 
     /// @brief 在创建前将选中模板的 ECS 脏数据同步回 BeatMap。
-    void syncSelectedTemplateBeatmap();
+    /// @return 同步后的同一载图实例；取消或已重载时返回空。
+    /// @pre 调用方持有会话锁直至完成创建命令。
+    [[nodiscard]] std::shared_ptr<MMM::BeatMap> syncSelectedTemplateBeatmap();
 
     /// @brief 根据项目资源列表解析音频路径对应的音轨 ID。
     /// @param path 待匹配的项目内音频路径。
@@ -262,7 +273,21 @@ private:
     std::string m_templateDisplayName;
 
     /// @brief 选中的模板谱面对象。
-    std::shared_ptr<MMM::BeatMap> m_templateBeatmap;
+    std::weak_ptr<MMM::BeatMap> m_templateBeatmap;
+
+    /// @brief 目录保存与刷新事件只更改这个独立序号，回调不保存向导地址。
+    /// @warning 热路径以 relaxed 读取：事件发布者只通知目录缓存失效，
+    /// 不传递其他数据，实际列表由 future 交付。
+    std::shared_ptr<std::atomic<std::uint64_t>> m_visualResourceRevision =
+        std::make_shared<std::atomic<std::uint64_t>>(0);
+    /// @brief 项目文件监测提交的失效订阅。
+    std::uint64_t m_visualDirectorySubscription{};
+    /// @brief 工程保存也可使列表失效，覆盖程序内改名事务。
+    std::uint64_t m_visualSaveSubscription{};
+    /// @brief 同时只允许一个扫描，不因多个下拉框或项目切换积压任务。
+    std::future<VisualResources> m_visualResourcesJob;
+    /// @brief UI 独占的已完成列表，可跨静置帧复用。
+    std::optional<VisualResources> m_visualResources;
 
     /// @brief 模板数据复制选项。
     Logic::BeatmapTemplateCreateOptions m_templateOptions;
