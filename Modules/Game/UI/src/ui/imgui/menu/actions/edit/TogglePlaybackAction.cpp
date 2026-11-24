@@ -1,4 +1,5 @@
 #include "common/EditorGestureState.h"
+#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
 #include "ui/IEditorApplicationService.h"

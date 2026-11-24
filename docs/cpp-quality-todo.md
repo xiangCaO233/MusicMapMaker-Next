@@ -669,7 +669,9 @@
 
 ### P3 · R24 · 菜单声明传播完整逻辑命令头
 
-- [ ] 头中只借用 LogicCommand，完整变体又引入配置和谱面定义。本机 Ninja 活动对象里 MenuUtil.h 为 28 个、LogicCommands.h 为 129 个。改用既有前置声明头并直接包含 MalodyMode 所需声明；以变更前后实际对象交集验收，28 并非保证能减少的重编数。
+- [x] 头中只借用 LogicCommand，完整变体又引入配置和谱面定义。本机 Ninja 活动对象里 MenuUtil.h 为 28 个、LogicCommands.h 为 129 个。改用既有前置声明头并直接包含 MalodyMode 所需声明；以变更前后实际对象交集验收，28 并非保证能减少的重编数。
+
+  已验证。Linux RelWithDebInfo 全量构建和 5 项菜单、快捷键及导出相关 CTest 通过。实际构造命令的实现文件显式包含完整命令头。已用 Ninja 活跃对象复查依赖。完整 LogicCommands.h 依赖对象从 130 个降至 124 个，MenuUtil.h 与它的活跃对象交集从 28 个降至 22 个。
 
 [Modules/Game/UI/include/ui/imgui/menu/utils/MenuUtil.h:3](../Modules/Game/UI/include/ui/imgui/menu/utils/MenuUtil.h#L3) [Modules/Game/UI/include/ui/imgui/menu/utils/MenuUtil.h:23](../Modules/Game/UI/include/ui/imgui/menu/utils/MenuUtil.h#L23) [Modules/Game/Common/include/common/LogicCommandFwd.h:9](../Modules/Game/Common/include/common/LogicCommandFwd.h#L9)
 
