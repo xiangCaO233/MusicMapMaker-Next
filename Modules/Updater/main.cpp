@@ -17,6 +17,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -448,6 +449,58 @@ std::filesystem::path normalizeMacApplicationTarget(
 
 #    else
 
+/// @brief 在 Linux 安装已验证的更新文件，仅用 rename 发布正式目标。
+/// @param downloadedFile 已完成校验的普通文件。
+/// @param targetPath 下一次启动使用的正式可执行路径。
+/// @return 失败时保留旧目标和下载文件；成功后才清理下载源。
+std::error_code installLinuxExecutable(
+    const std::filesystem::path& downloadedFile,
+    const std::filesystem::path& targetPath)
+{
+    namespace fs = std::filesystem;
+    constexpr auto executable =
+        fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec;
+    std::error_code error;
+    const auto      source = fs::symlink_status(downloadedFile, error);
+    if ( error ) return error;
+    if ( !fs::is_regular_file(source) )
+        return std::make_error_code(std::errc::invalid_argument);
+
+    // 已备齐执行位的同卷文件可以直接提交。仅跨文件系统才需要复制退路；
+    // 权限不足或目标类型冲突等错误不能降级为覆盖写入。
+    if ( (source.permissions() & executable) == executable ) {
+        fs::rename(downloadedFile, targetPath, error);
+        if ( error != std::errc::cross_device_link ) return error;
+    }
+
+    // 临时目录与正式目标位于同一文件系统。目录独占给本次更新使用，
+    // 避免并发更新覆盖对方的暂存文件，也不需要预先删除既有路径。
+    auto stagingName =
+        (targetPath.parent_path() / ".mmm-update-XXXXXX").native();
+    if ( !mkdtemp(stagingName.data()) )
+        return { errno, std::generic_category() };
+    const fs::path stagingDirectory(stagingName);
+    const auto     staged = stagingDirectory / "executable";
+
+    // 复制和权限设置全部完成后才提交；即使磁盘写满或进程在复制中退出，
+    // 写入过的字节也只留在暂存目录。下载源仍可重试，并保留原权限。
+    fs::copy_file(downloadedFile, staged, error);
+    if ( !error )
+        fs::permissions(staged, executable, fs::perm_options::add, error);
+    if ( !error ) fs::rename(staged, targetPath, error);
+
+    // 清理限定在本次创建的文件和空目录内，保留导致失败的原始错误码。
+    std::error_code cleanupError;
+    fs::remove(staged, cleanupError);
+    fs::remove(stagingDirectory, cleanupError);
+    // 手工调用可能为两个参数传入同一路径。提交后的身份相同则不删除，
+    // 否则源路径会连同刚安装的目标一起被移除。
+    if ( !error && !fs::equivalent(downloadedFile, targetPath, cleanupError) &&
+         !cleanupError )
+        fs::remove(downloadedFile, cleanupError);
+    return error;
+}
+
 /// @brief 启动更新后的 Linux 可执行文件。
 /// @param targetPath 可执行文件路径。
 /// @return 成功创建启动进程时返回 true。
@@ -533,7 +586,7 @@ long parseParentPid(std::string_view text)
 /// @return 更新并启动成功时返回 0，否则返回非零值。
 ///
 /// 主流程假设下载文件已经由主程序完成完整性校验。Windows 通过备份后复制
-/// 支持回滚，Linux 优先原子 rename、跨文件系统时退回复制，macOS 交给完整
+/// 支持回滚，Linux 仅通过原子 rename 发布已备齐权限的文件，macOS 交给完整
 /// bundle 安装事务。替换完成后写成功标记并启动新版本。
 ///
 /// 退出码约定：
@@ -640,34 +693,12 @@ int main(int argc, char* argv[])
         return 1;
     }
 #else
-    // 同一文件系统优先 rename，通常是原子且无需复制文件内容。
-    std::filesystem::rename(downloadedFile, targetPath, replaceError);
-    if ( replaceError ) {
-        // rename 失败可能来自跨文件系统，清除错误后尝试覆盖复制。
-        replaceError.clear();
-        std::filesystem::copy_file(
-            downloadedFile,
-            targetPath,
-            std::filesystem::copy_options::overwrite_existing,
-            replaceError);
-        if ( !replaceError ) {
-            // 复制成功后下载源不再需要，删除失败不影响已安装文件。
-            std::error_code removeDownloadError;
-            std::filesystem::remove(downloadedFile, removeDownloadError);
-        }
-    }
+    replaceError = installLinuxExecutable(downloadedFile, targetPath);
     if ( replaceError ) {
         writeStderr("Failed to replace executable: " + replaceError.message() +
                     "\n");
         return 1;
     }
-    // 确保复制路径也拥有各类用户执行位；权限错误沿用 replaceError 诊断通道。
-    std::filesystem::permissions(targetPath,
-                                 std::filesystem::perms::owner_exec |
-                                     std::filesystem::perms::group_exec |
-                                     std::filesystem::perms::others_exec,
-                                 std::filesystem::perm_options::add,
-                                 replaceError);
 #endif
 
     // 替换成功后先写标记，新进程启动即可读取完整更新结果。

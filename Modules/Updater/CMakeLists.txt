@@ -23,3 +23,20 @@ if(WIN32)
   # shell32 提供 ShellExecute，ws2_32 保持 Windows 独立目标的平台链接约定。
   target_link_libraries(MusicMapMaker-Updater PRIVATE shell32 ws2_32)
 endif()
+
+# Linux 集成测试向独立更新器注入短写并检查真实文件替换行为。 故障注入依赖 POSIX 资源限制，夹具可用时从 /dev/shm 提供跨卷下载。
+# Windows 与 macOS 安装各自采用平台事务，不运行 Linux 进程夹具。
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # 解释器只用于故障注入测试，独立更新器和发布产物无需 Python。
+  find_package(Python3 QUIET COMPONENTS Interpreter)
+  if(Python3_Interpreter_FOUND)
+    # 测试使用构建目录记录目标文件；不接触用户安装或源码测试资源。
+    add_test(
+      NAME LinuxUpdaterAtomicReplaceTest
+      COMMAND
+        "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/linux-updater-atomic-replace.py"
+        "$<TARGET_FILE:MusicMapMaker-Updater>"
+        "${CMAKE_BINARY_DIR}/test_output/linux-updater-atomic-replace")
+  endif()
+endif()
