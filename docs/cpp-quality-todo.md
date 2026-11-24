@@ -38,11 +38,13 @@
 
   已验证。拆分房间的目录连接、文档复制、资源收发与视口发布。独立值类型头保留公开配置、条目与进度数据。Linux RelWithDebInfo 全量构建及 15 项相关 CTest 通过。同一 Ninja 构建的活动对象依赖数如下。CollaborationRoom.h 11,CollaborationDirectoryClient.h 5,BeatmapDocumentCodec.h 3,CollaborationResourceSync.h 3,WebRtcTransport.h 3。本地真实 WebRTC 的 follow 与 resource 探针通过。额外的 p2p 探针在拆分前 main 和本分支均于并发添加物件阶段失败。
 
-- [ ] **R66 · P0 · CollaborationPeer 的播放时钟与编辑提交日志共享头布局**
+- [x] **R66 · P0 · CollaborationPeer 的播放时钟与编辑提交日志共享头布局**
 
   14 个对象依赖。播放与跟随已分实现文件，但成员权限、重同步、日志和播放确认的私有布局仍共同传播。 将播放时钟/跟随状态和提交应答/有界日志分别交给私有类，公开统计与配置保留值语义。验证补包、断连重入、跟随切换与播放确认，避免重复为 Room 和 Peer 保存权威状态。
 
   [CollaborationPeer.h L260](../Modules/Network/Collaboration/include/network/collaboration/CollaborationPeer.h#L260)、[CollaborationPeer_Playback.cpp L1](../Modules/Network/Collaboration/src/CollaborationPeer_Playback.cpp#L1)
+
+  已验证。将跟随与时钟状态、提交修订及有界日志移到 Peer 私有实现，保留公开配置与统计的值语义。 本地真实 WebRTC 的 follow 与 resource 探针通过。Linux RelWithDebInfo 全量构建及 13 项相关 CTest 通过。同一 Ninja 构建的活动对象依赖数如下。CollaborationPeer.h 14,CollaborationPlaybackSync.h 9,ICollaborationTransport.h 7,CollaborationPeer_Impl.h 2。
 
 - [ ] **R67 · P0 · BPM 测量窗口把后台作业、历史与标记文件操作带给消费者**
 

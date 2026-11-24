@@ -1,10 +1,7 @@
 #pragma once
 
-#include "network/collaboration/CollaborationPlaybackSync.h"
 #include "network/collaboration/CollaborationProtocol.h"
-#include "network/collaboration/ICollaborationTransport.h"
 
-#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -14,6 +11,8 @@
 
 namespace MMM::Network::Collaboration
 {
+class ICollaborationTransport;
+
 /// @brief 本地操作提交结果。
 enum class SubmitOperationResult : std::uint8_t {
     Accepted,
@@ -277,16 +276,6 @@ private:
     /// @brief 校验探测来源、沿房主路由，并匹配本地尚未完成的探测。
     void handlePlaybackClockProbe(PeerId                    senderId,
                                   const PlaybackClockProbe& probe);
-    /// @brief 当前单一跟随目标的时钟状态，切换目标后不复用旧偏移。
-    PeerId m_playbackClockPeer = 0;
-    /// @brief 本轮请求的发送时刻，用于拒绝伪造或过期回复。
-    double m_playbackClockSent = 0.0;
-    /// @brief 非阻塞探测下次允许发送的时间。
-    double m_nextPlaybackClockProbe = 0.0;
-    /// @brief 最近可用偏移估计；尚未校准时为空。
-    std::optional<PlaybackClockEstimate> m_playbackClockEstimate;
-    /// @brief 有界播放切换队列；仅缓存当前跟随目标，避免所有参与者队列增长。
-    std::deque<ParticipantViewport> m_playbackTransitions;
     /// @brief 把请求加入房主的有界权威队列。
     /// @param request 待处理请求。
     /// @return 入队成功时返回 true。
@@ -382,6 +371,10 @@ private:
     /// @param observedRevision 触发缺口检测的较新版本。
     void requestResync(std::uint64_t observedRevision);
 
+    /// @brief 播放跟随和权威提交缓存的私有实现，构造后地址保持稳定。
+    struct Impl;
+    std::unique_ptr<Impl> m_impl;
+
     /// @brief 身份、房主角色和有界处理参数。
     CollaborationPeerConfig m_config;
     /// @brief 当前 Peer 独占的可靠有序传输端点。
@@ -396,37 +389,10 @@ private:
     AuthorizeEditCallback m_authorizeEditCallback;
     /// @brief 当前身份和传输是否满足状态机前置条件。
     bool m_valid = false;
-    /// @brief 当前客户端下一个本地请求序号。
-    std::uint64_t m_nextClientSequence = 1;
-    /// @brief 当前客户端下一个本地视口状态序号。
-    std::uint64_t m_nextViewportSequence = 1;
-    /// @brief 当前客户端下一条跟随请求序号，与视口序号互相独立。
-    std::uint64_t m_nextFollowRequestSequence = 1;
-    /// @brief 最新待确认跟随请求，零表示没有待处理请求。
-    std::uint64_t m_pendingFollowRequestSequence = 0;
-    /// @brief 最新匹配确认的身份与结果快照，不能被后续离开清理覆盖。
-    std::optional<ParticipantFollowState> m_followConfirmation;
-    /// @brief 最新已发送请求的完整目标身份，供等待期间展示选择且防止槽位复用。
-    std::optional<ParticipantFollowState> m_pendingFollowRequest;
     /// @brief 当前客户端下一条聊天消息序号。
     std::uint64_t m_nextChatSequence = 1;
-    /// @brief 房主要分配的下一个全房间版本。
-    std::uint64_t m_nextRevision = 1;
-    /// @brief 当前客户端已经连续应用的最高版本。
-    std::uint64_t m_appliedRevision = 0;
-    /// @brief 当前补发流程期望追赶到的版本。
-    std::optional<std::uint64_t> m_resyncTargetRevision;
     /// @brief 房主允许参与协作的访客集合。
     std::unordered_set<PeerId> m_participants;
-    /// @brief 房主尚未排序提交的本地和远端请求。
-    std::deque<EditRequest> m_pendingRequests;
-    /// @brief 房主为每个加入会话接受的最高请求序号。
-    std::unordered_map<OperationSessionId, std::uint64_t>
-        m_lastAcceptedSequence;
-    /// @brief 房主保留的有界已提交操作日志。
-    std::deque<CommittedOperation> m_journal;
-    /// @brief 房主记录的各访客最高连续确认版本。
-    std::unordered_map<PeerId, std::uint64_t> m_lastAcknowledgedRevision;
     /// @brief 当前客户端已知的 PeerId 到稳定协作者身份映射。
     std::unordered_map<PeerId, ParticipantIdentity> m_participantIdentities;
     /// @brief 房主发布并由全部客户端镜像的参与者权限表。
@@ -436,16 +402,8 @@ private:
     bool m_defaultPermissionsEnabled{ false };
     /// @brief 房主显式选择的初始权限；禁用时保留，禁止沿用到另一房间。
     CollaborationPermissionMask m_defaultPermissions{ 0U };
-    /// @brief 房主权威跟随图；访客仅保存已确认边，零目标不占表项。
-    std::unordered_map<PeerId, PeerId> m_participantFollowTargets;
-    /// @brief 房主为每名访客保留的请求水位，拒绝重复和倒序请求。
-    std::unordered_map<PeerId, std::uint64_t> m_lastFollowRequestSequence;
-    /// @brief 各参与者最近一次通过序号校验的主画布视口状态。
-    std::unordered_map<PeerId, ParticipantViewport> m_participantViewports;
     /// @brief 各参与者最近一次通过校验的聊天消息序号。
     std::unordered_map<PeerId, std::uint64_t> m_lastChatSequence;
-    /// @brief 房主最近一次可独立恢复的完整谱面快照。
-    std::optional<StateSnapshot> m_stateSnapshot;
     /// @brief 当前 Peer 累计诊断统计。
     CollaborationPeerStats m_stats;
 };
