@@ -613,7 +613,9 @@
 
 ### P2 · R17 · 波形重算在绘制回调同步处理整曲
 
-- [ ] 计算标志在同一次同步调用中设置并清除，长曲处理期间 UI 无法更新进度或响应输入。后台读取、按音轨和参数代次交付结果，回归长曲期间关闭窗口及切换曲目。
+- [x] 计算标志在同一次同步调用中设置并清除，长曲处理期间 UI 无法更新进度或响应输入。后台读取、按音轨和参数代次交付结果，回归长曲期间关闭窗口及切换曲目。
+
+  已验证。Linux RelWithDebInfo 全量构建和 6 项相关 CTest 通过。以 30 秒合成音轨和可控后台屏障验证 UI 可立即轮询、关闭窗口及切轨时丢弃旧请求、拒绝过时代次的结果和安全销毁视图。流式完整解码在后台完成，遇到已开始的解码时取消在解码返回后生效。
 
 [Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp:349](../Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp#L349) [Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp:718](../Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp#L718) [Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp:742](../Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp#L742) [Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp:799](../Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp#L799)
 

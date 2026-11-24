@@ -5,24 +5,20 @@
 #include <memory>
 #include <vector>
 
-namespace ice
-{
-class AudioBuffer;
-}  // namespace ice
-
 namespace MMM::UI
 {
+class WaveformAnalysis;
 
 /// @brief 展示活动音轨双声道波形包络和均衡器预览的 UI 视图。
-/// @details 视图持有降采样后的全局缓存与当前视野切片；音频缓冲由该对象独占，
-/// 均衡器按重算任务的参数快照建立，递推历史只在本次任务内保留。
+/// @details 只在 UI 线程保管当前视野与已接收的包络，后台任务拥有独立的
+/// PCM 缓冲和 EQ 历史。
 class AudioWaveformView : public IUIView
 {
 public:
     /// @brief 创建具名波形视图。
     /// @param name UIManager 注册和查找视图时使用的名称。
     AudioWaveformView(const std::string& name);
-    /// @brief 在实现文件中释放需要完整类型的音频缓冲。
+    /// @brief 请求取消后台任务并释放当前视野。
     ~AudioWaveformView() override;
 
     /// @brief 绘制活动音轨的当前视野波形。
@@ -44,23 +40,8 @@ private:
     /// @param waveformVisualOffset 波形采样内容使用的专用偏移，单位为秒。
     void updateEnvelopes(double visualTime, double duration, double speed,
                          float waveformVisualOffset);
-    /// @brief 低频重建整段音频的固定分辨率包络缓存。
-    /// @warning 可能遍历完整音频，仅允许在音轨或均衡器状态变化后调用。
-    void fullRecalculate();
-
-    /// @brief 独占的均衡器处理结果缓冲。
-    std::unique_ptr<ice::AudioBuffer> m_processBuffer;
-    /// @brief 独占的原始音频采样缓冲。
-    std::unique_ptr<ice::AudioBuffer> m_rawBuffer;
-
-    /// @brief 固定时间分辨率的左声道最小值和最大值缓存。
-    std::vector<float> m_cachedMinL, m_cachedMaxL;
-    /// @brief 固定时间分辨率的右声道最小值和最大值缓存。
-    std::vector<float> m_cachedMinR, m_cachedMaxR;
-    /// @brief 全局包络缓存每秒保存的采样点数。
-    double m_cachePointsPerSecond{ 100.0 };
-    /// @brief 防止同一缓存重计算流程重入的状态标记。
-    bool m_isCalculating{ false };
+    /// @brief 独占任务的观察状态与已接收包络，后台任务不访问该对象。
+    std::unique_ptr<WaveformAnalysis> m_analysis;
 
     /// @brief 当前视野各包络点对应的时间坐标。
     std::vector<double> m_times;

@@ -73,7 +73,8 @@ void AudioManager::createMainTrackEQ(EQPreset preset)
     }
 
     // 路由切换完成后再发布成员，保证成员状态与音频图一致。
-    m_mainEQ       = std::move(newEQ);
+    m_mainEQ = std::move(newEQ);
+    ++m_mainTrackEQRevision;
     m_mainEQPreset = preset;
     XINFO("Main track EQ created with {} bands.", freqs.size());
 }
@@ -98,6 +99,7 @@ void AudioManager::destroyMainTrackEQ()
 
     // 只有路由不再引用 EQ 后才清空管理器成员与预设状态。
     m_mainEQ.reset();
+    ++m_mainTrackEQRevision;
     m_mainEQPreset = EQPreset::None;
     XINFO("Main track EQ destroyed.");
 }
@@ -109,6 +111,8 @@ void AudioManager::setMainTrackEQBandGain(size_t bandIndex, float gainDb)
 {
     if ( m_mainEQ ) {
         m_mainEQ->set_band_gain_db(bandIndex, gainDb);
+        // 每次有效的控制更新都令旧请求失效，即使随后调回原值。
+        ++m_mainTrackEQRevision;
     }
 }
 
@@ -130,6 +134,8 @@ void AudioManager::setMainTrackEQBandQ(size_t bandIndex, float q)
 {
     if ( m_mainEQ ) {
         m_mainEQ->set_band_q_factor(bandIndex, q);
+        // 参数代次由控制侧递增，不参与实时滤波。
+        ++m_mainTrackEQRevision;
     }
 }
 
