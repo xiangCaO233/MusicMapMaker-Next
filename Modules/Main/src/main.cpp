@@ -592,7 +592,14 @@ StartupPreparationResult prepareStartupAssets()
                 Config::pathToUtf8(assetPath) + "\n\n错误详情：" +
                 assetSyncResult.errorMessage;
         } else {
-            // kFinished 之外的非错误终态仍通过后续文件检查验证实际资源。
+            if ( assetSyncResult.status ==
+                 Network::AssetSyncStatus::kVersionWriteFailed ) {
+                // 正文已通过校验，写回失败需可诊断，下次启动可以重新验证。
+                // 继续检查默认皮肤，避免用可选版本标记取代资源可用性判定。
+                XWARN("Asset sync version marker: {}",
+                      assetSyncResult.errorMessage);
+            }
+            // 本地资源仍通过后续皮肤检查验证其可用性。
             // 资源可用后先迁移旧翻译文件，皮肤加载只能读取新目录布局。
             const auto migrationResult =
                 Config::migrateLegacySkinTranslationFiles();

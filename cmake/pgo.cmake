@@ -254,8 +254,14 @@ if(MMM_PGO_USE)
 
   elseif(NOT "${MMM_PGO_SOURCE_URL}" STREQUAL ""
          OR NOT "${MMM_PGO_PROFILE_DIR}" STREQUAL "")
-    # B/C) 自动合并: 调 pgo_merge.py 合并结果固定写入构建目录，避免修改用户提供的原始 profile。
+    # 自动合并只接受本轮独立候选，再替换供编译器消费的稳定路径。 上一轮的 pgo_merged.profdata
+    # 保留可诊断，不能作为本轮是否成功的依据。
     set(_merged "${CMAKE_BINARY_DIR}/pgo_merged.profdata")
+    string(
+      RANDOM
+      LENGTH 24
+      ALPHABET "0123456789abcdef" _pgo_attempt)
+    set(_candidate "${CMAKE_BINARY_DIR}/.pgo-${_pgo_attempt}.profdata")
     set(_script "${CMAKE_CURRENT_SOURCE_DIR}/scripts/pgo_merge.py")
 
     if(NOT EXISTS "${_script}")
@@ -270,43 +276,49 @@ if(MMM_PGO_USE)
       REQUIRED)
     set(_py_cmd ${Python3_EXECUTABLE})
 
-    # 远程 URL 优先于本地目录，保证同时误传两个来源时选择确定。
-
+    # 同时提供两种来源时远端优先，两条路径共用本轮生成和发布判断。
     if(NOT "${MMM_PGO_SOURCE_URL}" STREQUAL "")
-      # 远程源由脚本负责发现 profraw、下载并调用 llvm-profdata 合并。
-      message(
-        STATUS "PGO: Fetching & merging profiles from ${MMM_PGO_SOURCE_URL}")
-      execute_process(
-        COMMAND
-          ${_py_cmd} "${_script}" --source-url "${MMM_PGO_SOURCE_URL}" --output
-          "${_merged}" --profdata "${LLVM_PROFDATA}" --min-files 1
-        RESULT_VARIABLE _ret
-        OUTPUT_VARIABLE _out
-        ERROR_VARIABLE _err)
-    elseif(NOT "${MMM_PGO_PROFILE_DIR}" STREQUAL "")
-      # 本地目录模式直接扫描用户指定位置，不复制或删除原始采样文件。
-      message(STATUS "PGO: Merging profiles from ${MMM_PGO_PROFILE_DIR}")
-      execute_process(
-        COMMAND
-          ${_py_cmd} "${_script}" --input-dir "${MMM_PGO_PROFILE_DIR}" --output
-          "${_merged}" --profdata "${LLVM_PROFDATA}" --min-files 1
-        RESULT_VARIABLE _ret
-        OUTPUT_VARIABLE _out
-        ERROR_VARIABLE _err)
+      # 远端目录和已合并制品由脚本统一验证。
+      set(_source_flag --source-url)
+      set(_source "${MMM_PGO_SOURCE_URL}")
+    else()
+      # 本地目录由脚本按采样门槛筛选，输入路径保持在构建事务之外。
+      set(_source_flag --input-dir)
+      set(_source "${MMM_PGO_PROFILE_DIR}")
     endif()
+    message(STATUS "PGO: Preparing profiles from ${_source}")
+    execute_process(
+      COMMAND ${_py_cmd} "${_script}" "${_source_flag}" "${_source}" --output
+              "${_candidate}" --profdata "${LLVM_PROFDATA}" --min-files 1
+      RESULT_VARIABLE _ret
+      OUTPUT_VARIABLE _out
+      ERROR_VARIABLE _err)
 
     message(STATUS "${_out}")
-    # 只有脚本成功且结果确实存在时，才把路径提升为统一数据源。
-    if(_ret EQUAL 0 AND EXISTS "${_merged}")
-      set(MMM_PGO_DATA "${_merged}")
-      message(STATUS "PGO: Auto-merge OK → ${_merged}")
-    else()
-      if(NOT _ret EQUAL 0)
-        # 保留脚本 stderr 便于定位下载、格式或 llvm-profdata 失败。
-        message("${_err}")
+    # 脚本区分样本不足和 I/O/合并失败。只有本轮唯一文件可进入编译选项。
+    if(NOT "${_ret}" STREQUAL "0" OR NOT EXISTS "${_candidate}")
+      file(REMOVE "${_candidate}")
+      if("${_ret}" STREQUAL "3")
+        message(
+          FATAL_ERROR
+            "PGO: no profile generated for this configure (insufficient samples)"
+        )
       endif()
-      message(FATAL_ERROR "PGO: Auto-merge failed or no profiles found")
+      message(
+        FATAL_ERROR
+          "PGO: no profile generated for this configure (merge failed: ${_ret})
+${_err}")
     endif()
+    # 候选与最终文件同卷；重命名失败时不声明优化数据可用。
+    file(RENAME "${_candidate}" "${_merged}" RESULT _publish_status)
+    if(NOT "${_publish_status}" STREQUAL "0")
+      file(REMOVE "${_candidate}")
+      message(
+        FATAL_ERROR "PGO: could not publish merged profile: ${_publish_status}")
+    endif()
+    # 只在内存中设置消费路径，禁止写入 cache 后覆盖下一轮的自动合并来源。
+    set(MMM_PGO_DATA "${_merged}")
+    message(STATUS "PGO: Auto-merge OK → ${_merged}")
 
   else()
     # 优化模式没有数据源时必须失败，避免发布一个名义 PGO、实际未优化的包。

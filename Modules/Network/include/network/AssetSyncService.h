@@ -71,11 +71,12 @@ struct AssetSyncOptions {
 
 /// @brief 资源同步结果状态。
 enum class AssetSyncStatus : std::uint8_t {
-    kReady,       ///< 本地资源已就绪，无需更新。
-    kDownloaded,  ///< 已下载并解压完整资源包。
-    kUpdated,     ///< 已按清单增量更新资源。
-    kCancelled,   ///< 用户关闭启动界面，资源同步已取消。
-    kError        ///< 同步失败。
+    kReady,              ///< 本地资源已就绪，无需更新。
+    kDownloaded,         ///< 已下载并解压完整资源包。
+    kUpdated,            ///< 已按清单增量更新资源。
+    kCancelled,          ///< 用户关闭启动界面，资源同步已取消。
+    kError,              ///< 资源同步失败。
+    kVersionWriteFailed  ///< 资源可用，但版本标记未落盘，之后可以重试。
 };
 
 /// @brief 资源同步结果。

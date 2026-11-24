@@ -26,15 +26,15 @@ pgo_merge.py — PGO profile 收集、下载、合并脚本
 
 import argparse
 import glob
+import hashlib
 import os
 import re
-import shutil
 import subprocess
-import sys
 import tempfile
 import time
 from datetime import datetime
-from urllib.parse import urljoin, urlparse
+from pathlib import Path
+from urllib.parse import urldefrag, urljoin, urlparse
 from urllib.request import urlopen, urlretrieve
 
 
@@ -119,18 +119,18 @@ def _is_under_root_url(candidate_url, root_url):
     return candidate.path.startswith(root_path)
 
 
-def _cache_filename_for_profile(url, index):
-    """根据远程路径生成缓存文件名，避免递归下载时同名文件覆盖。"""
-    path = urlparse(url).path.strip("/")
-    # 将远程目录层级压平到安全文件名，同时保留足够来源信息。
-    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", path)
-    if not safe_name:
-        # URL 没有可用路径时以稳定序号生成合法 profraw 名称。
-        safe_name = f"profile_{index + 1}.profraw"
-    if len(safe_name) > 180:
-        # 限制文件名长度，长层级仅保留序号与 basename。
-        safe_name = f"{index + 1:05d}_{os.path.basename(path)}"
-    return safe_name
+# CMake 使用独立退出状态区分无可用样本与下载、读取或合并失败。
+EXIT_NO_PROFILES = 3
+
+
+def _cache_filename_for_profile(url):
+    """以完整远端 URL 为缓存身份，路径及查询参数参与摘要。
+
+    固定长度文件名避免扁平化后的别名、同 basename 和长路径碰撞。
+    不使用下载顺序，使持续缓存不会在目录条目重排时复用错误内容。
+    """
+    # 源列表已经去除 URL 片段；它不属于服务器收到的请求。
+    return hashlib.sha256(url.encode("utf-8")).hexdigest() + ".profraw"
 
 
 def _scrape_autoindex(url, root_url=None, visited=None, seen_profiles=None):
@@ -158,8 +158,7 @@ def _scrape_autoindex(url, root_url=None, visited=None, seen_profiles=None):
             html = resp.read().decode("utf-8", errors="replace")
     except Exception as e:
         # 入口或子目录不可读都会使远程数据集不完整，因此立即失败。
-        print(f"  FATAL: Failed to fetch directory listing: {e}")
-        sys.exit(1)
+        raise RuntimeError(f"Failed to fetch directory listing: {e}") from e
 
     # 匹配 <a href="..."> 链接 (处理 nginx/apache autoindex 格式)
     links = re.findall(r'href="([^"]+)"', html, re.IGNORECASE)
@@ -176,7 +175,7 @@ def _scrape_autoindex(url, root_url=None, visited=None, seen_profiles=None):
             # 非 HTTP 导航协议不得交给 urlopen。
             continue
 
-        full_url = urljoin(base_url, link)
+        full_url, _ = urldefrag(urljoin(base_url, link))
         if not _is_under_root_url(full_url, root_url):
             # 拒绝 ../、绝对跨域和同前缀旁路路径。
             continue
@@ -202,7 +201,11 @@ def _scrape_autoindex(url, root_url=None, visited=None, seen_profiles=None):
 
 
 def download_profiles_from_url(source_url, cache_dir):
-    """从远程下载所有 .profraw 文件到缓存目录"""
+    """下载目录样本或单个 profdata，返回已完成缓存的文件路径。
+
+    临时文件不作为可命中缓存。失败下载或空响应不会成为下一轮的样本，
+    每个完整请求最多在结果中占一个位置。
+    """
     parsed = urlparse(source_url)
     # 后缀判断只查看 URL path，不受查询字符串影响。
     path = parsed.path
@@ -226,70 +229,73 @@ def download_profiles_from_url(source_url, cache_dir):
     profraw_urls = _scrape_autoindex(source_url)
 
     if not profraw_urls:
-        # 空远程集合不能生成有效 profdata，明确返回失败。
-        print("  FATAL: No .profraw files found at the URL")
-        sys.exit(1)
+        # 可访问的目录没有采样时与空本地输入共享跳过状态。
+        return [], False
 
     print(f"  Downloading {len(profraw_urls)} profile(s) ...")
     downloaded = []
-    for i, u in enumerate(profraw_urls):
-        # 缓存名包含远程路径，避免不同子目录 basename 相互覆盖。
-        fname = _cache_filename_for_profile(u, i)
-        out = os.path.join(cache_dir, fname)
-        if os.path.exists(out) and os.path.getsize(out) > 0:
-            # 非空缓存直接复用，支持持久 cache_dir 的断点续传。
-            print(f"  [{i+1}/{len(profraw_urls)}] Cached: {fname}")
+    for i, url in enumerate(profraw_urls):
+        name = _cache_filename_for_profile(url)
+        cached = Path(cache_dir) / name
+        if cached.is_file() and cached.stat().st_size > 0:
+            print(f"  [{i+1}/{len(profraw_urls)}] Cached: {name}")
         else:
-            print(f"  [{i+1}/{len(profraw_urls)}] Downloading: {fname}")
+            print(f"  [{i+1}/{len(profraw_urls)}] Downloading: {name}")
             try:
-                # 单文件失败只跳过该项，最终至少需要一个成功下载。
-                urlretrieve(u, out, reporthook=_download_progress)
-                print()
-            except Exception as e:
-                # 保留失败 URL 的上下文并继续收集其他 profile。
-                print(f"    WARNING: download failed: {e}")
+                # 同卷独占暂存使中断的下载永远不会出现在正式缓存路径。
+                with tempfile.TemporaryDirectory(prefix="incoming-", dir=cache_dir) as pending:
+                    partial = Path(pending) / "sample"
+                    urlretrieve(url, partial, reporthook=_download_progress)
+                    print()
+                    if partial.stat().st_size == 0:
+                        raise OSError("empty profile response")
+                    partial.replace(cached)
+            except OSError as error:
+                # 单文件失败只跳过该项，所有传输都失败时另行报告源错误。
+                print(f"    WARNING: download failed: {error}")
                 continue
-        # 只有已存在缓存或成功下载的路径进入合并列表。
-        downloaded.append(out)
+        downloaded.append(str(cached))
 
     if not downloaded:
-        print("  FATAL: No profiles downloaded")
-        sys.exit(1)
-
-    return downloaded, False  # needs merge
+        raise RuntimeError("No profiles downloaded")
+    return downloaded, False
 
 
-# =============================================================================
-#  Merge + main
-# =============================================================================
+def run_profdata(profdata_bin, arguments):
+    """运行配套 LLVM 工具，将错误统一为一次失败而非脚本退出码碰撞。"""
+    # 参数列表直接传给 subprocess；十分钟上限覆盖大型采样池。
+    result = subprocess.run([profdata_bin, *arguments], capture_output=True,
+                            text=True, timeout=600)
+    if result.returncode != 0:
+        # LLVM 即使返回 3 也属于合并失败，不能误报为本脚本的样本不足。
+        raise RuntimeError(f"llvm-profdata {arguments[0]} failed "
+                           f"(rc={result.returncode}): {result.stderr[:500]}")
 
-def merge_profiles(profdata_bin, profiles, output):
-    """调用 llvm-profdata merge"""
-    # 参数列表直接传给 subprocess，路径不会经过 shell 展开。
-    cmd = [profdata_bin, "merge", "-o", output] + profiles
-    print(f"  Merging {len(profiles)} profiles → {output}")
-    print(f"  Command: {' '.join(cmd[:3])} [...]")
 
-    try:
-        # 十分钟上限覆盖大型采样池，同时避免 CI 永久挂起。
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        if result.returncode != 0:
-            # stderr 截断为前 500 字符，避免异常工具输出淹没配置日志。
-            print(f"  MERGE FAILED (rc={result.returncode})")
-            print(f"  stderr: {result.stderr[:500]}")
-            sys.exit(result.returncode)
-    except subprocess.TimeoutExpired:
-        # 超时结果不可用，调用方不得继续发布旧输出。
-        print("  MERGE TIMEOUT")
-        sys.exit(1)
-    except FileNotFoundError:
-        # 明确区分工具缺失与 profile 内容合并失败。
-        print(f"  FATAL: {profdata_bin} not found")
-        sys.exit(1)
+def publish_profile(args, profiles, pre_merged=False):
+    """生成本轮的完整 profile；只有验证成功后才替换调用方的输出。"""
+    if not pre_merged and (not profiles or len(profiles) < args.min_files):
+        print(f"  SKIP: need >= {args.min_files} profiles, only {len(profiles)} available")
+        return EXIT_NO_PROFILES
 
-    # 成功返回后读取最终文件大小，确认工具确实创建输出。
-    size = os.path.getsize(output)
-    print(f"  Merge OK: {output} ({size:,} bytes)")
+    output = Path(args.output).absolute()
+    # LLVM 即使在失败前创建了文件，也只能污染本次暂存目录。
+    # 目录放在输出所在卷，避免最终替换变成不具备原子性的跨卷复制。
+    with tempfile.TemporaryDirectory(prefix=".pgo-output-", dir=output.parent) as pending:
+        profile = Path(pending) / "profile.profdata"
+        if pre_merged:
+            # 将远端单文件也交给当前工具写出索引格式。show 可读取 raw，
+            # 仅凭 show 成功不能保证 Clang 的 profile-use 能消费同一份文件。
+            print("  Validating and indexing downloaded profile")
+            profiles = [profiles]
+        print(f"  Merging {len(profiles)} profiles")
+        run_profdata(args.profdata, ["merge", "-o", str(profile), *profiles])
+        size = profile.stat().st_size
+        if size == 0:
+            raise RuntimeError("llvm-profdata did not produce a nonempty profile")
+        profile.replace(output)
+    print(f"  Profile ready: {output} ({size:,} bytes)")
+    return 0
 
 
 def parse_args():
@@ -314,67 +320,29 @@ def parse_args():
 
 
 def main():
-    # 时间戳只用于日志关联，不进入输出文件命名。
+    """运行指定来源，返回成功、样本不足或错误的不同状态。"""
     args = parse_args()
     print(f"=== PGO Merge [{datetime.now().isoformat()}] ===")
+    try:
+        if args.source_url:
+            print(f"  Source: {args.source_url}")
+            # 远端缓存覆盖下载、样本门槛和合并，任一退出路径都由作用域清理。
+            with tempfile.TemporaryDirectory(prefix="pgo_dl_") as cache_dir:
+                payload, pre_merged = download_profiles_from_url(args.source_url, cache_dir)
+                return publish_profile(args, payload, pre_merged)
 
-    # 仅远程模式创建临时缓存；本地输入目录绝不作为清理目标。
-    cache_dir = None  # track temp dir for cleanup
-
-    # --- Determine source ---
-    if args.source_url:
-        # 远程下载模式
-        print(f"  Source: {args.source_url}")
-        cache_dir = tempfile.mkdtemp(prefix="pgo_dl_")
-        # 返回值可能是单个 profdata 路径或 profraw 路径列表。
-        profiles_or_file, pre_merged = download_profiles_from_url(
-            args.source_url, cache_dir
-        )
-
-        if pre_merged:
-            # 直接下载的 .profdata — 拷贝到输出
-            print(f"  Using pre-merged profile directly")
-            shutil.copy2(profiles_or_file, args.output)
-        else:
-            # 需要合并
-            # 低于门槛属于暂不生成新优化数据，按约定返回成功跳过。
-            if len(profiles_or_file) < args.min_files:
-                print(f"  SKIP: need >= {args.min_files} profiles, "
-                      f"only {len(profiles_or_file)} downloaded")
-                sys.exit(0)
-            merge_profiles(args.profdata, profiles_or_file, args.output)
-
-    elif args.input_dir:
-        # 本地目录模式
-        print(f"  Input:  {args.input_dir}")
-        print(f"  Output: {args.output}")
-
+        # 本地输入归调用方所有，绝不把它交给临时缓存的清理流程。
         if not os.path.isdir(args.input_dir):
-            # 输入路径必须是目录，普通文件不会隐式解释为 profdata。
-            print(f"  FATAL: input-dir not found: {args.input_dir}")
-            sys.exit(1)
-
-        profiles, deleted = find_profiles_local(
-            args.input_dir, args.max_age_days
-        )
+            raise OSError(f"input-dir not found: {args.input_dir}")
+        print(f"  Input: {args.input_dir}")
+        profiles, deleted = find_profiles_local(args.input_dir, args.max_age_days)
         print(f"  Profiles found: {len(profiles)} (expired/deleted: {deleted})")
-
-        if len(profiles) < args.min_files:
-            # 本地门槛语义与远程模式一致，便于 CMake 统一判断返回码。
-            print(f"  SKIP: need >= {args.min_files} profiles, "
-                  f"only {len(profiles)} available")
-            sys.exit(0)
-
-        merge_profiles(args.profdata, profiles, args.output)
-
-    # --- Cleanup ---
-    if cache_dir and os.path.isdir(cache_dir):
-        # 只删除本次 mkdtemp 返回的远程缓存，不触碰用户采样目录。
-        shutil.rmtree(cache_dir, ignore_errors=True)
-
-    print("=== Done ===")
+        return publish_profile(args, profiles)
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+        print(f"  FATAL: {error}")
+        return 1
 
 
 if __name__ == "__main__":
     # 导入时仅暴露可测试函数，不解析命令行或访问网络。
-    main()
+    raise SystemExit(main())

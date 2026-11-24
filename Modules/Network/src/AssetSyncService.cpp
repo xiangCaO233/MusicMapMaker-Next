@@ -23,6 +23,7 @@
 #include <nlohmann/json.hpp>
 #include <string>
 #include <system_error>
+#include <utility>
 
 namespace MMM::Network
 {
@@ -722,18 +723,54 @@ bool installDownloadedAsset(const std::filesystem::path& source,
     return !error;
 }
 
-/// @brief 写入本地资源版本文件。
-/// @details 仅在非空远端版本完成安装后截断写入；尾随换行方便人工查看。
-/// @note 空版本不删除既有标记，避免无法识别的清单覆盖已知本地版本。
-/// @note 调用点保证资源更新已完成，版本文件不是事务日志或下载锁。
-void writeLocalVersionFile(const std::filesystem::path& assetsRootPath,
-                           const std::string&           version)
+/// @brief 原子保存本地资源版本文件；空版本沿用原标记。
+/// @details 版本在正文全部校验成功后提交。写入、关闭或替换失败都保留已有标记。
+/// @param assetsRootPath 已安装的资源根。
+/// @param version 来自完整包或增量清单的版本。
+/// @param errorMessage 失败时接收标记路径和 I/O 诊断。
+/// @return 不需要刷新标记或已成功发布时为真。
+bool writeLocalVersionFile(const std::filesystem::path& assetsRootPath,
+                           const std::string&           version,
+                           std::string&                 errorMessage)
 {
-    if ( version.empty() ) return;
+    if ( version.empty() ) return true;
 
-    const auto    versionPath = assetsRootPath / kLocalVersionFileName;
-    std::ofstream file(versionPath, std::ios::binary | std::ios::trunc);
-    if ( file ) file << version << '\n';
+    std::error_code error;
+    const auto      root = AssetPaths::resolveRoot(assetsRootPath, error);
+    const auto      path = root / kLocalVersionFileName;
+    // 版本标记同样不能跟随安装树内的重定向；失败时不改变任何已有版本。
+    if ( !error && AssetPaths::isUnredirectedDestination(
+                       root, kLocalVersionFileName, error) ) {
+        Config::StagedOutputFile output(path, std::ios::binary);
+        if ( output.stream().is_open() ) {
+            output.stream() << version << '\n';
+            if ( output.commit() ) return true;
+        }
+        // 最先失败的 I/O 步骤由暂存对象保留，已校验的正文不回滚。
+        error = output.error();
+    }
+    errorMessage = "Could not save asset version marker " +
+                   Config::pathToUtf8(assetsRootPath / kLocalVersionFileName) +
+                   ": " + error.message();
+    return false;
+}
+
+/// @brief 资源验证完成后提交版本，再发布成功终态。
+/// @details 版本写回失败保留更新计数并单独返回，启动端可以验证并使用现有资源，
+/// 下次同步则会重新对照清单。失败不发出成功的 Finished 事件。
+AssetSyncResult finishAssetSync(const AssetSyncOptions& options,
+                                AssetSyncResult result, AssetSyncStatus status)
+{
+    if ( !writeLocalVersionFile(options.assetsRootPath,
+                                result.remoteVersion,
+                                result.errorMessage) ) {
+        result.status = AssetSyncStatus::kVersionWriteFailed;
+        return result;
+    }
+    result.status = status;
+    emitProgress(options,
+                 { AssetSyncProgressStage::kFinished, "Assets ready" });
+    return result;
 }
 
 /// @brief 读取本地资源版本文件。
@@ -834,7 +871,7 @@ std::optional<std::vector<AssetFileEntry>> collectOutdatedFilesWithProgress(
 /// - 若有摘要则在解压前验证完整 ZIP。
 /// - 在根目录父级安全解压全部归档条目。
 /// - 删除临时 ZIP 并写入本地版本标记。
-/// - 最后发布 Finished 和 kDownloaded。
+/// - 版本保存成功后发布 Finished 和 kDownloaded，失败则单独报告标记错误。
 /// @par 失败约束
 /// 任何取消、下载、摘要或解压失败都不能写入版本标记；未经摘要验证的 ZIP
 /// 绝不能进入解压器，错误结果保留具体阶段详情。
@@ -960,22 +997,10 @@ AssetSyncResult downloadFullPackage(const AssetSyncOptions& options,
         return result;
     }
 
-    writeLocalVersionFile(options.assetsRootPath, result.remoteVersion);
-    // 版本标记写入后发布 Finished，使下次启动可使用快速版本路径。
-    // 该标记描述完整包版本，与单个 ZIP 条目或暂存文件的存在状态无关。
-    emitProgress(options,
-                 AssetSyncProgress{
-                     AssetSyncProgressStage::kFinished,
-                     "Assets ready",
-                     0,
-                     0,
-                     0,
-                     0,
-                 });
-    result.status = AssetSyncStatus::kDownloaded;
     // 完整包无法知道实际写入数时，使用清单文件数作为可观测更新规模。
     result.updatedFileCount = manifest ? manifest->files.size() : 0;
-    return result;
+    return finishAssetSync(
+        options, std::move(result), AssetSyncStatus::kDownloaded);
 }
 
 /// @brief 先完整解压本地包，再把 assets 树发布到实际资源根。
@@ -1167,18 +1192,8 @@ AssetSyncResult updateFromManifest(const AssetSyncOptions& options,
     // 独占暂存仅服务实际的数据传输。
     if ( outdatedFiles->empty() ) {
         // 全部摘要匹配时刷新版本标记，后续启动可以跳过精确哈希。
-        writeLocalVersionFile(options.assetsRootPath, manifest.version);
-        emitProgress(options,
-                     AssetSyncProgress{
-                         AssetSyncProgressStage::kFinished,
-                         "Assets ready",
-                         0,
-                         0,
-                         0,
-                         0,
-                     });
-        result.status = AssetSyncStatus::kReady;
-        return result;
+        return finishAssetSync(
+            options, std::move(result), AssetSyncStatus::kReady);
     }
 
     XINFO("AssetSync: updating {} changed asset file(s)",
@@ -1276,19 +1291,9 @@ AssetSyncResult updateFromManifest(const AssetSyncOptions& options,
         // 计数仅在摘要验证和最终发布都成功后递增。
     }
 
-    writeLocalVersionFile(options.assetsRootPath, manifest.version);
     // 所有项目成功后才推进版本标记，防止部分更新被误认成完整版本。
-    emitProgress(options,
-                 AssetSyncProgress{
-                     AssetSyncProgressStage::kFinished,
-                     "Assets ready",
-                     0,
-                     0,
-                     0,
-                     0,
-                 });
-    result.status = AssetSyncStatus::kUpdated;
-    return result;
+    return finishAssetSync(
+        options, std::move(result), AssetSyncStatus::kUpdated);
 }
 
 /// @brief 在已有本地资源时远端更新失败，记录警告并继续启动。
@@ -1380,6 +1385,7 @@ std::string AssetSyncService::resolveDownloadUrl(const std::string& baseUrl,
 /// - 版本不同或强制模式进入逐文件校验。
 /// - 增量更新错误保留现有资源并返回 kReady。
 /// - 增量成功原样返回 kReady 或 kUpdated。
+/// - 资源检查完成但版本标记不可写时返回 kVersionWriteFailed，保留诊断和计数。
 /// @par 路径前置条件
 /// 已存在的 assetsRootPath 必须是目录；其他文件类型不能参与降级，也不能被
 /// 下载流程自动覆盖为目录。
