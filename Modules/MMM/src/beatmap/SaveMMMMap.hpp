@@ -1,5 +1,7 @@
 #pragma once
 
+#include "mmm/beatmap/BeatmapOutputFile.h"
+
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
@@ -675,7 +677,8 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
     }
 
     // 完整内存 JSON 构造成功后才打开目标文件，避免中途逻辑失败留下半结构。
-    std::ofstream file(path);
+    Internal::BeatmapOutputFile staged(path);
+    auto&                       file = staged.stream();
     if ( !file.is_open() ) {
         XERROR("Failed to open file for saving mmm map: {}",
                Config::pathToUtf8(path));
@@ -684,7 +687,7 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
 
     // 四空格缩进便于版本控制审阅；JSON 内容语义不依赖空白。
     file << root.dump(4);
-    return true;
+    return staged.commit();
 }
 
 }  // namespace MMM

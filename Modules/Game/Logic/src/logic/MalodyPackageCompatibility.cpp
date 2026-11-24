@@ -3,11 +3,11 @@
 #include "audio/AudioOriginAlignmentService.h"
 #include "config/Utf8Path.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/beatmap/BeatmapOutputFile.h"
 
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <system_error>
@@ -184,13 +184,12 @@ bool writeMalodyExportWithAudio(const BeatMap&               beatMap,
         // 主音轨保留原触发锚点和独立 offset，新增静音承担音乐内容的后移。
         // 此处只改输出文档，源 BeatMap 和项目资源清单始终只读。
     }
-    std::ofstream stream(outputPath);
+    Internal::BeatmapOutputFile staged(outputPath);
+    auto&                       stream = staged.stream();
     // 统一在音频成功之后写 MC；关闭流时也检查错误，覆盖延迟写盘失败。
     // 失败结果不能保留只写了一半却引用新音频的“成功”状态。
-    if ( stream ) stream << document.dump(4);
-    const bool written = stream.good();
-    stream.close();
-    if ( !written || stream.fail() ) {
+    if ( stream.is_open() ) stream << document.dump(4);
+    if ( !staged.commit() ) {
         // MC 失败时回收本次生成的音频，不让失败导出积累孤立资源。
         std::error_code error;
         if ( !generatedAudio.empty() )

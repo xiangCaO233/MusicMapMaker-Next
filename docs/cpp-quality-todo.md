@@ -485,7 +485,9 @@
 
 ### P1 · R01 · 保存写入失败可能清除脏状态
 
-- [ ] 写出器只查打开结果或只在关闭前查流状态。调用方收到成功就推进保存点，原路径可能只剩半份谱面。逐格式注入短写和关闭错误，验证返回失败、保留旧文件及未保存状态；备份也应拒绝残缺结果。
+- [x] 写出器只查打开结果或只在关闭前查流状态。调用方收到成功就推进保存点，原路径可能只剩半份谱面。逐格式注入短写和关闭错误，验证返回失败、保留旧文件及未保存状态；备份也应拒绝残缺结果。
+
+  已验证。Linux Clang 22 RelWithDebInfo 全量构建和 14 项回归通过。对五种格式注入真实短写，保存返回失败且旧谱面逐字节保留。
 
 [Modules/MMM/src/beatmap/SaveMMMMap.hpp:678](../Modules/MMM/src/beatmap/SaveMMMMap.hpp#L678) [Modules/MMM/src/beatmap/SaveRMMap.hpp:506](../Modules/MMM/src/beatmap/SaveRMMap.hpp#L506) [Modules/MMM/src/beatmap/SaveOSUMap.hpp:452](../Modules/MMM/src/beatmap/SaveOSUMap.hpp#L452) [Modules/MMM/src/beatmap/SaveMalodyMap.hpp:1410](../Modules/MMM/src/beatmap/SaveMalodyMap.hpp#L1410) [Modules/MMM/src/beatmap/SaveBmsMap.hpp:655](../Modules/MMM/src/beatmap/SaveBmsMap.hpp#L655) [Modules/Game/Logic/src/logic/session/BeatmapSession_Commands.cpp:4242](../Modules/Game/Logic/src/logic/session/BeatmapSession_Commands.cpp#L4242)
 

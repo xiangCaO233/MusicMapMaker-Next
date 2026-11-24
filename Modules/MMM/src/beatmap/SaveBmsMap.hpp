@@ -1,7 +1,9 @@
 #pragma once
+
 #include "BmsExportTimeline.h"
 #include "BmsFormat.hpp"
 #include "BmsMyO2Export.h"
+#include "mmm/beatmap/BeatmapOutputFile.h"
 #include <array>
 #include <iomanip>
 #include <locale>
@@ -639,7 +641,7 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
              << position.first << rowChannel(position.second) << ':' << data
              << '\n';
     }
-    // 最后一次提交只进行文本写入；good 同时检查打开和写入状态。
+    // 最后一次提交检查文本写入与关闭结果后才替换目标文件。
     // 不声称资源已打包，此入口只写 BMS 及其相对音频引用。
     // 输出流失败通过返回值传播，禁止在无异常构建中引入异常处理。
     // 二进制打开避免平台自动插入换行，结果在各平台一致。
@@ -648,10 +650,11 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         XERROR("MyO2 静音音源无法写入或目标文件与已有资源冲突");
         return false;
     }
-    std::ofstream output(path, std::ios::binary);
+    Internal::BeatmapOutputFile staged(path, std::ios::binary);
+    auto&                       output = staged.stream();
     // 分隔行也是部分旧播放器定位主数据区的入口，不能只输出空行。
     output << header.str() << "\n*---------------------- MAIN DATA FIELD\n"
            << body.str();
-    return output.good();
+    return staged.commit();
 }
 }  // namespace MMM::Bms

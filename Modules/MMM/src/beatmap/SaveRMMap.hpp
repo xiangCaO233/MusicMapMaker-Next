@@ -1,5 +1,7 @@
 #pragma once
 
+#include "mmm/beatmap/BeatmapOutputFile.h"
+
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
@@ -197,8 +199,9 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
     }
 
     // 所有可表达性检查结束后才创建文件，避免失败导出留下半成品。
-    std::ofstream ofs(path, std::ios::binary);
-    if ( !ofs ) {
+    Internal::BeatmapOutputFile staged(path, std::ios::binary);
+    auto&                       ofs = staged.stream();
+    if ( !ofs.is_open() ) {
         XWARN("无法打开文件 [{}] 进行 RM/IMD 写出", Config::pathToUtf8(path));
         return false;
     }
@@ -496,6 +499,8 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
         write_value(rec.note_track);
         write_value(rec.note_parameter);
     }
+
+    if ( !staged.commit() ) return false;
 
     // 日志边界统一转换为 UTF-8，避免平台原生 path 字符类型泄漏到 fmt。
     auto pathToStr = [](const std::filesystem::path& p) {
