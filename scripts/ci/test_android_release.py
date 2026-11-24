@@ -76,6 +76,27 @@ class AndroidReleaseTest(unittest.TestCase):
         self.assertEqual(RELEASE.stage_delivery(root, destination, SOURCE), apk)
         self.assertFalse(destination.with_name(".android-arm64.previous").exists())
 
+    def test_overlapping_source_and_destination(self):
+        """@brief 直接路径及经目录别名进入的重叠目标都必须保留输入和旁路文件。"""
+        candidate = self.m_root / "candidate"
+        candidate.mkdir()
+        root, _ = self.delivery("candidate/input")
+        sibling = candidate / "unrelated"
+        sibling.write_text("keep")
+        # 按真实目录关系拒绝祖先、同一路径和后代，检查拒绝发生在创建事务前。
+        destinations = [candidate, root, root / "output"]
+        # POSIX 可无额外权限创建目录别名，用它覆盖路径文本看似分离的情况。
+        if os.name == "posix":
+            alias = self.m_root / "alias"
+            alias.symlink_to(self.m_root, target_is_directory=True)
+            destinations.append(alias / "candidate")
+        for destination in destinations:
+            with self.subTest(destination=destination), self.assertRaisesRegex(ValueError, "separate"):
+                RELEASE.stage_delivery(root, destination, SOURCE)
+        self.assertEqual(sibling.read_text(), "keep")
+        RELEASE.verify_delivery(root, SOURCE)
+        self.assertFalse((root / "output").exists())
+
     def test_bundled_assets_are_rejected(self):
         """@brief 即使摘要和架构正确，也不能重新把完整资源打入精简 APK。
 

@@ -100,10 +100,13 @@ def stage_delivery(directory, destination, source, version=None):
     """
     apk, record = verify_delivery(directory, source, version)
     target = Path(destination).absolute()
-    # 校验和落地不能复用源目录，否则替换事务会反过来移走唯一的输入包。
-    # 拒绝文件及链接目标，避免事务目录与用户已有路径产生不同的覆盖语义。
+    # 解析两侧目录的真实位置，父目录中的符号链接也可能把两棵树指向同一处。
+    real_source = Path(directory).resolve()
+    real_target = target.resolve()
+    # 目标若包含输入，清理旧目标会删除源包；反向嵌套也会改写输入目录。
     if (target.is_symlink() or (target.exists() and not target.is_dir())
-            or target.resolve() == Path(directory).resolve()):
+            or real_source.is_relative_to(real_target)
+            or real_target.is_relative_to(real_source)):
         raise ValueError("Android destination must be a separate real directory")
     target.parent.mkdir(parents=True, exist_ok=True)
     previous = target.with_name(f".{target.name}.previous")
