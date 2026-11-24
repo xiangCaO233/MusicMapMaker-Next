@@ -19,6 +19,8 @@ add_library(
   src/MobileWorkspaceSettings.cpp
   # 配置快照使用单槽后台写入队列，连续布局编辑不等待磁盘。
   src/ConfigSnapshotWriter.cpp
+  # 同卷、独占暂存供配置、谱面和资产的低频发布路径复用。
+  src/StagedFile.cpp
   src/AudioPresets.cpp
   # 布局预设独立于项目快照，文件读写与结构校验集中在配置层。
   src/LayoutPresets.cpp

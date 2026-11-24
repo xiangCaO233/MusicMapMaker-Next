@@ -1,4 +1,5 @@
 #include "config/LayoutPresets.h"
+#include "config/StagedFile.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -453,8 +454,8 @@ bool exportLayoutPreset(const std::filesystem::path& path,
                         const LayoutPreset& preset, std::string& error)
 {
     error.clear();
-    std::ofstream output(path, std::ios::binary | std::ios::trunc);
-    if ( !output ) {
+    StagedOutputFile output(path, std::ios::binary | std::ios::trunc);
+    if ( !output.stream().is_open() ) {
         error = "无法创建布局预设文件。";
         return false;
     }
@@ -462,11 +463,10 @@ bool exportLayoutPreset(const std::filesystem::path& path,
                                   { "version", 1 },
                                   { "preset", presetJson(preset) } };
     // 单文件携带明确格式标识，不能把客户端整份配置误作方案导入。
-    output << json.dump(2) << '\n';
-    // 关闭也可能失败，不能仅依据打开成功报告导出完成。
-    output.close();
-    if ( !output ) {
-        error = "布局预设文件写入失败。";
+    output.stream() << json.dump(2) << '\n';
+    // 写入失败或目标无法替换时保留上一次导出的布局。
+    if ( !output.commit() ) {
+        error = "布局预设文件写入失败：" + output.error().message();
         return false;
     }
     return true;

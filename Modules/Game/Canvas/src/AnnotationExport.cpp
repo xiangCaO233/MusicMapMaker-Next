@@ -1,5 +1,6 @@
 #include "canvas/AnnotationExport.h"
 #include "common/ClockTimeText.h"
+#include "config/StagedFile.h"
 
 #include "ui/utils/TimeFormatUtils.h"
 
@@ -8,7 +9,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <fmt/format.h>
-#include <fstream>
 #include <miniz.h>
 #include <string>
 #include <string_view>
@@ -246,18 +246,12 @@ bool packageOfficeXml(
     return success;
 }
 
-/// @brief 将完整输出先写到同目录临时文件，再替换目标。
+/// @brief 将完整文本或 ZIP 暂存并原子替换目标。
 /// @param path 用户选择的目标路径。
 /// @param data 完整 TXT 或 ZIP 字节。
 /// @param error 失败时接收具体阶段说明。
-/// @return 目标已完整写入时返回 true。
-/// @warning 用户触发的同步文件 IO；同一路径的导出由 UI 串行执行。
-/// @details 临时文件位于目标同目录，正常 rename 不跨文件系统。
-/// 写入和关闭都成功后才替换原目标，避免半个 ZIP 覆盖已有文件。
-/// 标准 rename 在部分 Windows 文件系统上不能覆盖现有路径。
-/// 因此复制覆盖仅作为 rename 失败时的兼容回退，并清理临时文件。
-/// 两个文件操作均使用 error_code，导出失败不经异常机制传播。
-/// 这里假设同一个 UI 操作不会并发导出到相同目标文件。
+/// @return 正式路径可读取完整输出时返回真。
+/// @warning 用户触发的同步文件 IO。
 bool writeCompleteFile(const std::filesystem::path&     path,
                        const std::vector<std::uint8_t>& data,
                        std::string&                     error)
@@ -266,44 +260,16 @@ bool writeCompleteFile(const std::filesystem::path&     path,
         error = "请选择有效的导出文件路径";
         return false;
     }
-    auto tempPath = path;
-    // 同名 .tmp 在每次导出时重写，避免上次失败留下的半成品被复用。
-    tempPath += ".tmp";
-    {
-        std::ofstream stream(tempPath, std::ios::binary | std::ios::trunc);
-        if ( !stream ) {
-            error = "无法创建导出临时文件";
-            return false;
-        }
-        stream.write(reinterpret_cast<const char*>(data.data()),
-                     // 数据由完整文本或完整 ZIP 归档产生，此处只做一次顺序写。
-                     static_cast<std::streamsize>(data.size()));
-        stream.close();
-        if ( !stream ) {
-            // 写入不完整时绝不触碰现有目标文件。
-            std::error_code ignored;
-            std::filesystem::remove(tempPath, ignored);
-            error = "无法完整写入导出文件";
-            return false;
-        }
+    Config::StagedOutputFile output(path, std::ios::binary | std::ios::trunc);
+    if ( !output.stream().is_open() ) {
+        error = "无法创建导出临时文件：" + output.error().message();
+        return false;
     }
-    std::error_code replaceError;
-    // 先尝试单步替换，成功时用户永远看不到中途的部分数据。
-    std::filesystem::rename(tempPath, path, replaceError);
-    if ( !replaceError ) return true;
-
-    // Windows 不允许 rename 覆盖已有文件时沿用项目已有的覆盖复制回退。
-    std::error_code copyError;
-    // Windows 覆盖回退只在 rename 失败后触发，不主动删除旧目标。
-    std::filesystem::copy_file(
-        tempPath,
-        path,
-        std::filesystem::copy_options::overwrite_existing,
-        copyError);
-    std::error_code ignored;
-    std::filesystem::remove(tempPath, ignored);
-    if ( copyError ) {
-        error = "无法替换导出文件：" + copyError.message();
+    // 写出期间只接触独占暂存，短写或关闭失败时正式路径仍保留旧文件。
+    output.stream().write(reinterpret_cast<const char*>(data.data()),
+                          static_cast<std::streamsize>(data.size()));
+    if ( !output.commit() ) {
+        error = "无法完整发布导出文件：" + output.error().message();
         return false;
     }
     return true;

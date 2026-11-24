@@ -1,6 +1,7 @@
 #include "logic/ProjectStorage.h"
 
 #include "common/platform/DocumentStorage.h"
+#include "config/StagedFile.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 
@@ -88,65 +89,31 @@ bool readJsonObject(const std::filesystem::path& path, nlohmann::json& output,
     return true;
 }
 
-/// @brief 先写临时文件，再重命名或复制替换目标分片。
+/// @brief 写出并原子发布一个完整配置分片。
 /// @param path 目标路径，父目录由 save 预先创建。
 /// @param value 本分片的完整对象，不对旧内容做增量合并。
-/// @param errorMessage 失败时接收创建、写入或替换阶段的错误。
-/// @return 本分片写入并替换成功时为 true。
-/// @warning 同步文件 IO；固定 .tmp 名称要求同一路径的保存串行执行。
-/// 重命名失败时退回覆盖复制，因此不承诺所有平台上均原子替换。
-/// 临时文件名从完整目标名追加后缀，不会误写另一个职责的 JSON 分片。
+/// @param errorMessage 失败时接收暂存、替换或 Android 发布错误。
+/// @return 本分片写入并发布成功时为真。
+/// @warning 同步文件 IO；多个分片分别提交，不构成跨文件原子事务。
 bool writeJsonAtomically(const std::filesystem::path& path,
                          const nlohmann::json& value, std::string& errorMessage)
 {
-    std::filesystem::path tempPath = path;
-    tempPath += ".tmp";
-    // 临时文件和目标位于同一目录，优先让重命名在同一文件系统内完成。
-    {
-        std::ofstream file(tempPath, std::ios::trunc);
-        // 截断的是临时文件；生成 JSON 期间不直接破坏已有目标内容。
-        if ( !file.is_open() ) {
-            errorMessage =
-                "无法创建配置临时文件：" + Config::pathToUtf8(tempPath);
-            return false;
-        }
-        // 格式化输出便于人工维护分片，末尾换行保持文本工具兼容。
-        file << std::setw(4) << value << '\n';
-        if ( !file.good() ) {
-            // 写出失败时不继续 rename，已有目标文件仍由上一次保存保留。
-            errorMessage =
-                "无法写入配置临时文件：" + Config::pathToUtf8(tempPath);
-            return false;
-        }
-    }
-
-    std::error_code replaceError;
-    // 流已离开作用域，替换操作不再与仍打开的输出流共用临时文件。
-    std::filesystem::rename(tempPath, path, replaceError);
-    if ( !replaceError ) {
-        // 本地原子替换不代表 SAF
-        // 文档已保存，授权目标也完成发布后才向上返回成功。
-        return Common::publishDocument(path, errorMessage);
-    }
-
-    // 某些平台无法 rename 覆盖已有文件，沿用复制覆盖的兼容路径。
-    // 此回退不是多文件事务，也不尝试恢复已经被部分覆盖的目标。
-    std::error_code copyError;
-    std::filesystem::copy_file(
-        tempPath,
-        path,
-        std::filesystem::copy_options::overwrite_existing,
-        copyError);
-    std::error_code removeError;
-    // 复制尝试结束后清理临时文件；返回成败以目标复制结果为准。
-    std::filesystem::remove(tempPath, removeError);
-    // 临时文件删除失败不会把已经成功覆盖的目标重新判为未保存。
-    if ( copyError ) {
-        // 报告最终替换错误，而不是掩盖回退结果的首次重命名错误。
-        errorMessage = "无法替换配置分片：" + Config::pathToUtf8(path) +
-                       "，错误：" + copyError.message();
+    Config::StagedOutputFile output(path);
+    if ( !output.stream().is_open() ) {
+        errorMessage = "无法暂存配置分片：" + Config::pathToUtf8(path) +
+                       "，错误：" + output.error().message();
         return false;
     }
+    // 保持历史 JSON 缩进与换行，分片关闭成功之后其旧内容才会被替换。
+    output.stream() << std::setw(4) << value << '\n';
+    if ( !output.commit() ) {
+        errorMessage = "无法替换配置分片：" + Config::pathToUtf8(path) +
+                       "，错误：" + output.error().message();
+        return false;
+    }
+    // Android 上还须将已经提交的本地镜像交给授权文档。
+    // 需要发布给授权文档时传播外层失败，不能把本地暂存提交视为完整项目保存。
+    // 多个配置分片的协调仍由项目保存入口按原序完成。
     return Common::publishDocument(path, errorMessage);
 }
 

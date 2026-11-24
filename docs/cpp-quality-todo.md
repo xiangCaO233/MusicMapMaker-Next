@@ -208,11 +208,13 @@
 
   [AssetSyncService.cpp L1016](../Modules/Network/src/AssetSyncService.cpp#L1016)
 
-- [ ] **R57 · P2 · 配置、工程设置与批注导出的写入失败保护不一致**
+- [x] **R57 · P2 · 配置、工程设置与批注导出的写入失败保护不一致**
 
   多处固定 .tmp 与覆盖复制回退，部分在 close 前判断成功，布局预设直接截断旧文件。R01 的脏状态和 R05 的请求合并没有解决这些目标文件的落盘事务。 复用现有同目录暂存与关闭检查的原则，收敛事务发布；同目标并发须明确提交顺序。对已有目标模拟写入、关闭和替换失败，核对原字节；并发写后目标应是一个完整版本。
 
   [ConfigSnapshotWriter.cpp L67](../Modules/Config/src/ConfigSnapshotWriter.cpp#L67)、[ColorPaletteFile.cpp L145](../Modules/Config/src/ColorPaletteFile.cpp#L145)、[LayoutPresets.cpp L456](../Modules/Config/src/LayoutPresets.cpp#L456)、[ProjectStorage.cpp L125](../Modules/Game/Logic/src/logic/ProjectStorage.cpp#L125)、[AnnotationExport.cpp L292](../Modules/Game/Canvas/src/AnnotationExport.cpp#L292)、[BeatmapOutputFile.h L86](../Modules/MMM/include/mmm/beatmap/BeatmapOutputFile.h#L86)
+
+  已验证。配置快照、调色板、布局、工程分片、批注和谱面共用同卷暂存，检查关闭后再发布。同一目标的最后一次成功重命名生效。Linux 回归覆盖并发完整版本、写入、关闭、重命名失败及暂存清理。Win10 文件占用探针验证旧字节保留、暂存回收及释放后替换成功。配置加载在迁移写回前关闭读句柄，原生布局和调色板用例通过。
 
 - [ ] **R58 · P2 · osu! 首行的宽松签名检测可触发越界 substr**
 
