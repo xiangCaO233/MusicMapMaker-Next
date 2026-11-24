@@ -59,6 +59,8 @@ add_library(
   src/logic/MalodyPackageCompatibility.cpp
   src/logic/ProjectCommandService.cpp
   src/logic/ProjectController.cpp
+  # 后台目录刷新负责扫描与分片写入，应用层只提交已就绪的资源差异。
+  src/logic/ProjectController_DirectoryRefresh.cpp
   # EditorEngine 聚合会话调度，其实现留在 Logic，启动程序仅负责装配。
   src/logic/EditorEngine.cpp
   # 导出对话框读取纯值快照，命名与文案不会占用会话临界区。

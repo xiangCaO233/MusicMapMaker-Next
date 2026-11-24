@@ -581,7 +581,9 @@
 
 ### P2 · R13 · 目录监视去抖后仍在逻辑线程持锁全量扫描
 
-- [ ] 外部改文件即可触发完整目录扫描，有变化时锁内还保存工程。文件数与存储延迟都会延长更新停顿。后台扫描，按项目代次应用差异；阻塞枚举期间测试逻辑推进及切工程。
+- [x] 外部改文件即可触发完整目录扫描，有变化时锁内还保存工程。文件数与存储延迟都会延长更新停顿。后台扫描，按项目代次应用差异；阻塞枚举期间测试逻辑推进及切工程。
+
+  已验证。Linux Clang 22 RelWithDebInfo 全量构建和 6 项回归通过。文件池受阻时提交和轮询不等待，同目录重开拒绝旧任务，同工程修订冲突重扫，并验证资源表后台写入。
 
 [Modules/Game/Logic/src/logic/EditorEngine.cpp:5111](../Modules/Game/Logic/src/logic/EditorEngine.cpp#L5111) [Modules/Game/Logic/src/logic/EditorEngine.cpp:6099](../Modules/Game/Logic/src/logic/EditorEngine.cpp#L6099) [Modules/Game/Logic/src/logic/EditorEngine.cpp:6107](../Modules/Game/Logic/src/logic/EditorEngine.cpp#L6107) [Modules/Game/Logic/src/logic/EditorEngine.cpp:6123](../Modules/Game/Logic/src/logic/EditorEngine.cpp#L6123)
 

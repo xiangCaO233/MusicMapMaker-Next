@@ -227,9 +227,33 @@ public:
     /// @return 有待处理目录变更时返回 true。
     bool consumeDirectoryChangePending();
 
-    /// @brief 扫描当前项目目录并同步项目资源列表。
-    /// @return 目录同步结果，包含是否改变项目和需要预加载的音效。
-    DirectorySyncResult scanProjectDirectory();
+    /// @brief 文件线程扫描完成后要在逻辑线程提交的结果。
+    struct DirectoryScanUpdate {
+        /// @brief 已应用的资源增删和运行时音频更新。
+        DirectorySyncResult m_sync;
+        /// @brief 同一工程在扫描期间已编辑，重新取值再扫。
+        bool m_retry{};
+    };
+
+    /// @brief 将独立工程资源快照交给文件池。
+    /// @return 已提交或无需扫描时为真，已有任务时保留最新待处理通知。
+    /// @pre 调用方串行调用目录刷新入口。
+    bool startDirectoryScan();
+
+    /// @brief 仅查询任务是否完成，不等待磁盘或进入会话锁。
+    [[nodiscard]] bool isDirectoryScanReady() const;
+
+    /// @brief 提交就绪结果，仅替换资源表，丢弃已切换或已编辑工程上的旧结果。
+    /// @pre 调用方持有会话锁，成功时可在释放该锁前同步运行时状态。
+    DirectoryScanUpdate applyDirectoryScan();
+
+    /// @brief 冻结目录刷新产生的项目配置保存，文件线程执行分片写入。
+    /// @pre 调用方持有会话锁，并已捕获本次修改对应的工作区。
+    void queueDirectorySave();
+
+    /// @brief 仅消费已就绪的写入结果并提交最新待写请求。
+    /// @warning 逻辑循环调用；不等待文件线程和会话锁，普通帧仅检查任务槽。
+    void pollDirectorySave();
 
     /// @brief 保存当前项目配置。
     /// @return 保存成功时返回 true。

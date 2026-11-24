@@ -5,15 +5,21 @@
 #include "logic/ProjectStorage.h"
 
 #include "log/colorful-log.h"
+#include "logic/EditorEngine.h"
 #include "logic/ProjectController.h"
 #include "logic/ProjectDirectoryScanner.h"
+#include "runtime/AppThreadPool.h"
+
+#include <ice/thread/ThreadPool.hpp>
 
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iomanip>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <string_view>
 #include <system_error>
@@ -523,6 +529,7 @@ bool testProjectUiStateAfterReopen(const std::filesystem::path& root)
     std::error_code error;
     std::filesystem::create_directories(root, error);
     auto& controller = MMM::Logic::ProjectController::instance();
+    // 打开前不提供资源；后续出现的文件只能来自指定扫描，不会被初始打开记录。
     if ( error || !controller.openProject(root).m_opened ) return false;
     // 持有关闭前的快照，模拟渲染已开始而逻辑线程正在释放项目的顺序。
     const auto previous = controller.uiSnapshot();
@@ -577,6 +584,137 @@ bool testProjectUiStateAfterReopen(const std::filesystem::path& root)
     return controller.closeProject().m_closed && ok;
 }
 
+/// @brief 使用受控文件任务验证目录扫描可跨逻辑轮次且结果绑定工程实例。
+/// @param root 独立工程夹具的根，一切新资源与配置都留在此目录。
+/// @return 非阻塞入口、旧结果拒绝与最新资源的后台持久化均通过时为真。
+/// @details 四个文件工作者都停在门闩处；关闭和同根重开在释放门闩前执行。
+/// 不依赖磁盘速度和固定等待时长来制造竞争。
+/// 本用例直接沿生产接口依次推进逻辑轮询；线程池互斥状态由 promise 证实。
+/// 每次 shutdown 都排空已接收的任务，因此测试不会在文件写至一半时断言。
+/// 测试以最终文件状态区分确实写入和仅发布内存资源两种行为。
+/// 同根重开的例子主要测试生命周期身份，之后的显式保存测试同一生命周期
+/// 里的内容修订；两次分别观察无需重试与需要重试。
+/// 目录文件创建固定在重开之后，所以新工程基线必定不包含该文件。
+/// 测试不启动真实 UI 或音频播放，只受控推进控制器的生产调用边界。
+bool testWatchedDirectoryRefresh(const std::filesystem::path& root)
+{
+    using namespace std::chrono_literals;
+    auto&           controller = MMM::Logic::ProjectController::instance();
+    auto&           pool       = MMM::Runtime::AppThreadPool::instance();
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    // 打开前不提供资源；后续出现的文件只能来自指定扫描，不会被初始打开记录。
+    if ( error || !controller.openProject(root).m_opened ) return false;
+
+    pool.init();
+    // 只堵塞文件线程池，普通线程池与工程生命周期入口都能独立推进。
+    auto* worker = pool.getFileThreadPool();
+    // 文件池配置为四工作者；四次独立到达确认排队的扫描尚未执行。
+    std::array<std::promise<void>, 4> entered;
+    std::promise<void>                release;
+    const auto                        gate  = release.get_future().share();
+    bool                              ready = true;
+    for ( auto& entry : entered ) {
+        auto       started = entry.get_future();
+        const auto job     = worker->enqueue([&entry, gate] {
+            entry.set_value();
+            gate.wait();
+        });
+        ready &=
+            job.valid() && started.wait_for(5s) == std::future_status::ready;
+    }
+    bool ok =
+        check(ready && controller.startDirectoryScan(),
+              "directory scan should enqueue while file workers are busy");
+    ok &= check(
+        !controller.isDirectoryScanReady() && !controller.startDirectoryScan(),
+        "busy file worker must not prevent polling or queue duplicate scans");
+
+    // 同一路径重开后才新增文件。若把旧结果交给新工程，它就会错误登记这个文件。
+    ok &= check(controller.closeProject().m_closed &&
+                    controller.openProject(root).m_opened,
+                "same-root project should reopen while old scan is pending");
+    {
+        std::ofstream output(root / "new.wav");
+        output << "resource fixture";
+    }
+    // 门闩释放后旧任务允许完成，关闭工程不会先销毁它所需要的根目录。
+    // 接下来用应用结果判断是否隔离旧工程，而不是依赖异步任务取消。
+    release.set_value();
+    // 关闭线程池会排空任务，测试不需要自旋等待结果进入就绪状态。
+    pool.shutdown();
+
+    // 与正常逻辑消费一样先取得会话锁。测试在无活跃 UI 条件下直接检查值，
+    // 避免通过异步界面动画推断资源是否已被提交。
+    const auto apply = [&] {
+        std::lock_guard lock(
+            MMM::Logic::EditorEngine::instance().getSessionMutex());
+        return controller.applyDirectoryScan();
+    };
+    // 返回空列表和扫描失败并不能区分是否被接纳，需同时检查成功标志与
+    // 新工程资源是否保持初始基线。
+    const auto stale = apply();
+    ok &= check(!stale.m_sync.m_scanSucceeded && !stale.m_retry &&
+                    controller.currentProject() &&
+                    controller.currentProject()->m_audioResources.empty(),
+                "finished scan data must not apply to a reopened instance");
+
+    // 此次不重开工程，只在后台随后应用前修改保存快照。代次仍相同，
+    // 因而仅比较 m_generation 会误接受并覆写用户刚保存的排除项。
+    pool.init();
+    ok &= check(controller.startDirectoryScan(),
+                "same-instance scan should enqueue");
+    pool.shutdown();
+    // 将排除项作为真实变化写盘，保持目录文件没变化。扫描重试须来自模型修订。
+    controller.currentProject()->m_excludedAudioPaths.emplace_back("new.wav");
+    ok &= check(controller.saveProject(),
+                "explicit edit should persist before scan commit");
+    const auto superseded = apply();
+    ok &= check(superseded.m_retry && !superseded.m_sync.m_scanSucceeded &&
+                    controller.currentProject()->m_audioResources.empty(),
+                "a stale revision must retry and keep the explicit edit");
+    // 恢复输入以验证实际可接纳的结果。若丢弃了旧修订后忘记释放任务槽，
+    // 下一次 startDirectoryScan 不会接受，测试也无法获得新资源。
+    controller.currentProject()->m_excludedAudioPaths.clear();
+    ok &= check(controller.saveProject(), "restore fixture to allow discovery");
+
+    // 同一文件用当前工程的新请求扫描时应成功应用，排除一律丢弃结果的实现。
+    pool.init();
+    ok &= check(controller.startDirectoryScan(),
+                "current project scan should enqueue");
+    pool.shutdown();
+    // 正向结果应同时表示扫描成功与资源实际变化，否则不会触发监视保存。
+    const auto current = apply();
+    ok &= check(current.m_sync.m_scanSucceeded && current.m_sync.m_changed &&
+                    controller.currentProject()->m_audioResources.size() == 1,
+                "current scan should apply new audio resource");
+
+    // 后台保存只接收完整配置值，调用方必须先进入短暂的采样临界区。
+    // 释放锁后由测试串行推进提交和收尾，和正常逻辑循环的两阶段一致。
+    pool.init();
+    {
+        std::lock_guard lock(
+            MMM::Logic::EditorEngine::instance().getSessionMutex());
+        controller.queueDirectorySave();
+    }
+    // 在池可用时先把写入排队，shutdown 再等待已经入队的文件任务结束。
+    controller.pollDirectorySave();
+    pool.shutdown();
+    controller.pollDirectorySave();
+    // 从磁盘读回保存，而不是只观察内存资源表或事件标志。
+    // WAV 内容在本例只是普通文件：目录任务负责描述，不能在刷新中尝试解码。
+    // 检查存储分片中的项目相对路径，避免将本次临时绝对路径写入工程。
+    // 通过与启动相同的读取入口验证 manifest 和资源列表片段互相匹配。
+    const auto persisted = MMM::Logic::ProjectStorage{}.load(root);
+    ok &= check(
+        persisted.m_success &&
+            persisted.m_project.m_audioResources.size() == 1 &&
+            persisted.m_project.m_audioResources.front().m_path == "new.wav",
+        "background save should persist the refreshed table");
+    // 关闭控制器前已排空全部测试文件任务，外层随后可以安全删除夹具根。
+    return controller.closeProject().m_closed && ok;
+}
+
 }  // namespace
 
 /// @brief 运行项目分片存储与旧格式迁移测试。
@@ -607,7 +745,8 @@ int main()
         testOpenProjectPreservesDraftLaneGroups(openProjectRoot) &&
         testOpenWithoutConfigurationInheritsPalette(root /
                                                     "no_configuration") &&
-        testProjectUiStateAfterReopen(root / "project_ui_state");
+        testProjectUiStateAfterReopen(root / "project_ui_state") &&
+        testWatchedDirectoryRefresh(root / "watched_directory");
     std::filesystem::remove_all(root, filesystemError);
     // 清理只使用本次生成的具体路径，不根据项目资源字段扩展删除范围。
     // 只清理本次生成的根；测试成功与否由前面的业务断言决定。
