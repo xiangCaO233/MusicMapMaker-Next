@@ -203,15 +203,18 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         float titleEndX = titleX + titleWidth;
 
         // FT 和 FPS 沿用 ImGui 的帧率统计，TPU 按逻辑更新预算单独着色。
-        // 颜色边界取新区间的下界，等于预算时已没有调度余量。
+        // 只有严格超过各档预算倍数才升档，恰好达到边界仍使用较低档。
+        // 使用原始耗时判断，避免整数显示影响颜色切换。
         const float     tpu = Logic::EditorEngine::instance().getLogicTpuUs();
         constexpr float budget = Logic::EditorEngine::LOGIC_UPDATE_BUDGET_US;
         ImVec4          tpuColor{ 0.38f, 0.84f, 0.42f, 1.0f };
-        if ( tpu >= budget ) {
+        if ( tpu > budget * 10.0f ) {
+            tpuColor = { 0.72f, 0.12f, 0.18f, 1.0f };
+        } else if ( tpu > budget * 5.0f ) {
             tpuColor = { 1.0f, 0.34f, 0.34f, 1.0f };
-        } else if ( tpu >= budget * 0.75f ) {
+        } else if ( tpu > budget * 2.5f ) {
             tpuColor = { 1.0f, 0.58f, 0.26f, 1.0f };
-        } else if ( tpu >= budget * 0.5f ) {
+        } else if ( tpu > budget ) {
             tpuColor = { 0.98f, 0.83f, 0.25f, 1.0f };
         }
         // 整数显示向下取整，让临近阈值的读数与实际颜色区间一致。
