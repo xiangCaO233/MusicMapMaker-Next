@@ -118,12 +118,12 @@ public:
 
             if ( current_chapter == "Events" ) {
                 // Events 由首字段区分视频、休息和通用背景，不按冒号解析。
-                auto start_5_string = line.substr(0, 5);
-                auto start_1_char   = line.front();
+                auto start_1_char = line.front();
                 // 视频事件可能使用文本 Video 或数字 1 两种等价格式。
                 if ( line.starts_with("Video,") || line.starts_with("1,") ) {
                     map_properties[current_chapter]["background video"] = line;
-                } else if ( start_5_string == "Break" ) {
+                } else if ( line.starts_with("Break,") ||
+                            line.starts_with("2,") ) {
                     // Break 没有稳定键，以递增编号保留全部事件顺序。
                     map_properties[current_chapter]
                                   ["Break" +
@@ -453,8 +453,10 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
     // 休息段以原始多行文本保存，当前领域模型不拆分其开始与结束字段。
     auto& break_events = osumeta_props["Events::breaks"];
     for ( int i = 0; i < osureader.current_breaks_index; i++ ) {
+        // 与收集阶段共享同一标号规则，缺失记录不制造零长度事件。
         auto breaks_des = osureader.get_value(
-            "Events", std::to_string(i), std::string("2,0,0"));
+            "Events", "Break" + std::to_string(i), std::string{});
+        if ( breaks_des.empty() ) continue;
         // 每条事件补换行，保存器可直接按原顺序写回 Events 段。
         break_events.insert(
             break_events.end(), breaks_des.begin(), breaks_des.end());
