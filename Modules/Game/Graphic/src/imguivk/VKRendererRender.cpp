@@ -784,10 +784,11 @@ void VKRenderer::render(NativeWindow&                window,
         true,
         std::numeric_limits<uint64_t>::max());
     if ( waitResult != vk::Result::eSuccess ) {
-        // 当前既有控制流只记录异常结果并继续
-        // reset/acquire；诊断注释不改变该错误
-        // 策略，后续若需中止帧应作为独立行为修复并补充故障测试。
-        XWARN("VK Device WaitForFences failed");
+        // 等待失败时不能证明已退役，主命令缓冲和离屏槽缓冲均不可复用。
+        // 在 acquire 之前退出，避免遗留尚未消费的图像获取信号量。
+        XWARN("VK Device WaitForFences failed: {}",
+              static_cast<int>(waitResult));
+        return;
     }
 
     // acquire 可能因窗口生命周期提前结束本帧，Fence 必须保持可再次等待。
@@ -959,7 +960,7 @@ void VKRenderer::render(NativeWindow&                window,
         // 不支持透明时底色由启动主题提供，避免圆角外露出灰色块。
         const auto bg = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
         clearColor    = swapchainCreateInfo.compositeAlpha ==
-                                vk::CompositeAlphaFlagBitsKHR::eOpaque
+                             vk::CompositeAlphaFlagBitsKHR::eOpaque
                             ? std::array<float, 4>{ bg.x, bg.y, bg.z, 1.0f }
                             : std::array<float, 4>{};
     }
@@ -995,7 +996,7 @@ void VKRenderer::render(NativeWindow&                window,
             // 任务描述与 command buffer 句柄按值捕获；只有 latch
             // 以引用跨线程共享。
             const OffscreenRecordTask task = m_offscreenRecordTasks[taskSlot];
-            vk::CommandBuffer taskCmd = m_offscreenRecordSlots[taskSlot]
+            vk::CommandBuffer         taskCmd = m_offscreenRecordSlots[taskSlot]
                                             .commandBuffers[recordFrameIndex];
             offscreenRecordThreadPool->enqueue_void(
                 [task, taskCmd, recordFrameIndex, &offscreenLatch]() mutable {
