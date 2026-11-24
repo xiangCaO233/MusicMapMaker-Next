@@ -4,6 +4,7 @@
 #include "mmm/metadata/BaseMapMeta.h"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <future>
@@ -20,6 +21,7 @@ class BeatMap;
 namespace MMM::Logic
 {
 class BeatmapSession;
+struct ProjectUiState;
 
 /// @brief 文件线程计算的路径展示值，不在 UI 回调中探测文件。
 struct BeatmapSettingsPath {
@@ -59,6 +61,14 @@ struct BeatmapSettingsSnapshot {
     bool hasProject{};
     /// @brief 临时工程不允许导入或重命名资源。
     bool readOnly{};
+    /// @brief 项目发布模型标识已登记资源的修订，不延长旧工程读模型生命周期。
+    std::weak_ptr<const ProjectUiState> projectRevision;
+    /// @brief 文件修改可以改变路径状态，即使工程清单没有修改。
+    std::uint64_t directoryRevision{};
+    /// @brief 工程监听覆盖不到的引用在这个时间点后需要重新验证。
+    std::chrono::steady_clock::time_point externalPathExpiry{
+        std::chrono::steady_clock::time_point::max()
+    };
     /// @brief 谱面、音频、封面及背景对应的路径状态。
     std::array<BeatmapSettingsPath, 4> paths;
     /// @brief 工程登记的 Main 音频，不在 UI 借用项目容器。
@@ -88,10 +98,13 @@ activeBeatmapSettingsState();
 
 /// @brief 请求逻辑线程复制活动谱面，再由文件线程检查路径。
 /// @param scanResources 资源弹层是否需要重新枚举图片和视频。
+/// @param previous UI 当前持有的快照，输入相同时可原样返回。
 /// @return 没有活动谱面或请求被更新请求替代时得到空结果。
 /// @warning 仅限低频交互；提交后只轮询 future，禁止等待。
 [[nodiscard]] std::future<std::shared_ptr<const BeatmapSettingsSnapshot>>
-requestBeatmapSettings(bool scanResources);
+requestBeatmapSettings(
+    bool                                           scanResources,
+    std::shared_ptr<const BeatmapSettingsSnapshot> previous = {});
 
 /// @brief 在引擎循环中捕获一次请求，并将文件阶段交给文件线程。
 /// @warning 每轮逻辑更新调用；空闲只读标志，不分配、不加锁、不访问文件系统。

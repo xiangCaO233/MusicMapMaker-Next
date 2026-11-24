@@ -227,6 +227,9 @@ public:
     /// @return 有待处理目录变更时返回 true。
     bool consumeDirectoryChangePending();
 
+    /// @brief 已消费的目录通知代次，逻辑线程用它使路径缓存失效。
+    [[nodiscard]] std::uint64_t directoryRevision() const;
+
     /// @brief 文件线程扫描完成后要在逻辑线程提交的结果。
     struct DirectoryScanUpdate {
         /// @brief 已应用的资源增删和运行时音频更新。
@@ -337,6 +340,8 @@ private:
 
     /// @brief 当前工程身份，由会话锁保护；切换和正式目录接管时递增。
     std::uint64_t m_projectGeneration{};
+    /// @brief 仅逻辑线程访问；同一批目录通知可共享一个代次。
+    std::uint64_t m_directoryRevision{};
     /// @brief 工程所有者 release 发布，UI 可见页每帧 acquire 读取。
     /// @warning 不可变结果跨越工程关闭，不能使用不会延长寿命的裸指针代替。
     std::atomic<std::shared_ptr<const ProjectUiState>> m_uiSnapshot;

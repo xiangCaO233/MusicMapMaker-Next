@@ -62,6 +62,9 @@ struct BaseMapMeta {
     int32_t bgm_track_count{ 0 };
     /// @brief 谱面总时长
     double map_length{ -1. };
+
+    /// @brief 比较快照中全部可见字段，新增元数据自动参与缓存失效。
+    bool operator==(const BaseMapMeta&) const = default;
 };
 
 }  // namespace MMM
