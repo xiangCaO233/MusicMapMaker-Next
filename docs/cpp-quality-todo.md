@@ -1,5 +1,221 @@
 # C++ 工程整改清单
 
+## 当前最高优先级 · P0 拆分待办
+
+以主仓 `61d26b35` 和 ICE `595a041b` 为基线，优先执行 R62–R74。P0 表示本轮实施顺序。先拆 UIManager、BeatmapSession、AudioManager 和 CollaborationRoom，再按下列顺序处理其余类和平台实现。
+
+每项单独开分支和提交，落后 main 时先 rebase。构建及本项回归通过后勾选，审阅后以 merge commit 合入。涉及公开头的条目须在相同配置下对比 Ninja 对象依赖，记录已解除依赖的消费者。私有重状态按组件生命周期构造，热路径复用现有存储。
+
+- [ ] **R62 · P0 · UIManager 的视图注册和工作区生命周期仍共享公开布局**
+
+  69 个对象依赖此头。已有 Impl，但泛型 getView 直接查拥有视图的 map；视图顺序、帧准备缓存和工作区恢复状态仍在头中。 模板保留既有指针校正，改调非模板 findView；在既有 Impl 内由 ViewRegistry 拥有视图、顺序和借用缓存；另设工作区恢复协调器。检查注册/移除顺序、准备任务结束后才能销毁、延迟恢复和 GPU 资源释放。
+
+  [UIManager.h L238](../Modules/Game/UI/include/ui/UIManager.h#L238)
+
+- [ ] **R63 · P0 · BeatmapSession 的保存调度和表格投影可独立拥有**
+
+  53 个对象依赖；保存时钟、在途任务、改名状态、表格快照与会话控制处于同一布局。与 PERF-05 已迁移的 UI 读接口不同。 先由私有持久化组件承担自动保存时钟、备份和在途任务，再把时序与批注投影交给内部发布器。保留会话身份、控制入口和热读取语义。覆盖保存中改名/编辑、关闭时回收、换图及表格快照复用。
+
+  [BeatmapSession.h L342](../Modules/Game/Logic/include/logic/BeatmapSession.h#L342)、[BeatmapSession.cpp L651](../Modules/Game/Logic/src/logic/session/BeatmapSession.cpp#L651)
+
+- [ ] **R64 · P0 · AudioManager 同时拥有时间线安装退休与音效资产池**
+
+  44 个对象依赖；私有准备缓存的锁与 map、时间线 clip、音效资产池直接影响公开布局，拆成 BGM/SFX 实现文件并未隔离所有权。 门面保留公有 DTO。按现有锁和寿命把准备/安装/退休放入 TimelinePlayback，把音效加载池放入 SoundEffectBank；回调持有稳定节点。设备与后台工作先停，再释放组件；验证时间线切换、重启与并发音效加载。
+
+  [AudioManager.h L792](../Modules/Audio/include/audio/AudioManager.h#L792)、[AudioManager_BGM.cpp L300](../Modules/Audio/src/AudioManager_BGM.cpp#L300)
+
+- [ ] **R65 · P0 · CollaborationRoom 同时承担文档事务、目录连接与资源收发**
+
+  11 个对象依赖；公开头携带两套文档 codec、跨线程本地编辑队列与锁、资源收发状态、目录重连和视口限频。 保留房间门面和公开值类型。先把编解码及本地/远端事务队列归给复制组件，资源任务另归协调器，随后拆目录重连和视口发布。Impl 一次构造。验证房间退出时回调回收、断线补同步、资源取消、视口末次发布及重连。
+
+  [CollaborationRoom.h L412](../Modules/Network/Collaboration/include/network/collaboration/CollaborationRoom.h#L412)、[CollaborationRoom.cpp L981](../Modules/Network/Collaboration/src/CollaborationRoom.cpp#L981)
+
+- [ ] **R66 · P0 · CollaborationPeer 的播放时钟与编辑提交日志共享头布局**
+
+  14 个对象依赖。播放与跟随已分实现文件，但成员权限、重同步、日志和播放确认的私有布局仍共同传播。 将播放时钟/跟随状态和提交应答/有界日志分别交给私有类，公开统计与配置保留值语义。验证补包、断连重入、跟随切换与播放确认，避免重复为 Room 和 Peer 保存权威状态。
+
+  [CollaborationPeer.h L260](../Modules/Network/Collaboration/include/network/collaboration/CollaborationPeer.h#L260)、[CollaborationPeer_Playback.cpp L1](../Modules/Network/Collaboration/src/CollaborationPeer_Playback.cpp#L1)
+
+- [ ] **R67 · P0 · BPM 测量窗口把后台作业、历史与标记文件操作带给消费者**
+
+  15 个对象依赖；向导和撤销菜单只需窗口能力，但包含分析纹理块、撤销栈、标记 I/O 与 worker/future 私有状态。R39 已修复 UI 等待。 先抽拥有取消/停止/收件的分析作业类，再抽测量历史和标记文件操作。公开 Timing 回调保持签名；纹理上传留在原 UI/GPU 线程。覆盖快速换源、关闭等待、撤销手势合并、导入标记和失效结果丢弃。
+
+  [BpmMeasurementToolView.h L188](../Modules/Game/UI/include/ui/imgui/menu/actions/tools/BpmMeasurementToolView.h#L188)、[NewBeatmapWizard.cpp L699](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L699)
+
+- [ ] **R68 · P0 · TimelineCanvas 混合表格交互、时间点手势和快照装饰**
+
+  15 个对象依赖；表格批选/搜索、时间点拖拽、顶点颜色恢复与贴图状态进入同一头。按 Popups/Interaction 分 cpp 后布局仍耦合。 先拆 TimingTableController 拥有表格选择/拖拽，再拆快照装饰器拥有覆盖和恢复数组；固定画布寿命并复用缓冲。回归鼠标/触屏多选、切谱、取消拖拽、重复装饰同一快照后顶点恢复。
+
+  [TimelineCanvas.h L371](../Modules/Game/Canvas/include/canvas/TimelineCanvas.h#L371)
+
+- [ ] **R69 · P0 · ToolbarView 的音效编辑缓存与调色板不必公开**
+
+  15 个对象依赖；主停靠窗口按值含工具栏，音效配置缓存、整套调色板、导入草稿随之传播。布局面板的公开接口确实有移动端消费者。 保留轻量公共布局契约，音效草稿和调色板会话分别放入内部实现；仅移走私有重状态，构造一次，复用原回调。验证移动端面板、音效滚动、调色导入/撤销与停靠恢复，比较公开配置头扇出。
+
+  [ToolbarView.h L41](../Modules/Game/UI/include/ui/imgui/manager/ToolbarView.h#L41)、[MainDockSpaceUI.h L185](../Modules/Game/UI/include/ui/imgui/MainDockSpaceUI.h#L185)
+
+- [ ] **R70 · P0 · Basic2DCanvas 的视频提交和教学动作识别缺少各自的所有者**
+
+  6 个对象依赖；解码已有 BackgroundVideoPlayer，画布仍维护上传/跳转代次，同时跟踪独立的演练动作。 将视频帧提交和 GPU 确认状态放在单个私有组件；演练识别器只接收交互和谱面身份。覆盖迟到视频帧、GPU 在途资源释放与换谱后的演练重置。
+
+  [Basic2DCanvas.h L361](../Modules/Game/Canvas/include/canvas/Basic2DCanvas.h#L361)
+
+- [ ] **R71 · P0 · VKContext 同时拥有设备寿命、启动诊断与主题字体状态**
+
+  25 个对象依赖。字体切换与实例诊断变更波及设备和 swapchain 消费者。 先移出低频主题/字体重建状态及实例诊断配置，保留已有 Vulkan 句柄借用接口，逐步缩小 friend 范围。验证主题切换、字体重建、诊断开关、设备重建和关闭顺序。
+
+  [VKContext.h L210](../Modules/Game/Graphic/include/graphic/imguivk/VKContext.h#L210)
+
+- [ ] **R72 · P0 · ICE 文件接收器在公开头承载编码会话私有状态**
+
+  FFmpeg 句柄、转换缓冲、FIFO、PTS 与 trailer 状态属于单次编码会话。主要收益是约束关闭和失败清理的顺序。 由私有 EncoderSession 独占这些资源并负责排空/关闭；Receiver 保留块预算、进度与取消接口。单次导出分配，析构在完整类型可见处定义。覆盖打开部分失败、取消、短末块、关闭错误和多次导出；同步验证 ICE 公共头与库 ABI。
+
+  [FFmpegFileReceiver.hpp L119](../3rdpty/sources/IonCachyEngine/include/ice/out/io/FFmpegFileReceiver.hpp#L119)、[FFmpegFileReceiver.cpp L515](../3rdpty/sources/IonCachyEngine/src/ice/out/io/FFmpegFileReceiver.cpp#L515)
+
+- [ ] **R73 · P0 · 独立更新器的多平台实现仍集中在入口文件**
+
+  平台宏分隔进程等待、原生重启、macOS 包事务和 Linux 安装。修改一侧需要在共同入口中维护多套失败与回滚路径。 common 只负责参数、状态和错误结果，由 CMake 选取各系统的进程与安装实现。复跑原生 Windows 目标占用/重启、macOS 包替换、Linux 回滚，以及父进程退出判定。
+
+  [main.cpp L73](../Modules/Updater/main.cpp#L73)
+
+- [ ] **R74 · P0 · ICE OpenAL 播放器内嵌平台驱动环境和线程优先级策略**
+
+  公共播放器同时处理 Win32 线程优先级与环境变量；对已存在但为空的变量两端处理不一致。 把打开设备前的环境策略与工作线程启动策略移至 CMake 选取的实现文件，统一空值约定。覆盖外部非空值、空值、Linux 空设备和 Windows 音频线程启动。
+
+  [ALPlayer.cpp L123](../3rdpty/sources/IonCachyEngine/src/ice/out/play/openal/ALPlayer.cpp#L123)
+
+## 拆分之后的复查待办
+
+保留审查时的风险等级与编号，便于按独立问题验收。
+
+- [ ] **R45 · P1 · 侧栏、工程音频和打包仍直接借用可替换的工程**
+
+  控制器返回 unique_ptr.get()，逻辑线程换工程时可移走所有权。侧栏直接改工作区字段再保存，音频工具将字段地址交给控件，打包还跨目录扫描借用工程信息。事先查询过切换标志不能保证随后访问的寿命。R03 的快照修复没有覆盖这些入口。 目录与图集读者拿带工程代次的值快照；设置写入交给所有者按代次核对的字段命令。覆盖读取和关闭交错、同目录重开、旧 UI 写入被拒绝，新工程配置保持原值。
+
+  [ProjectController.cpp L1248](../Modules/Game/Logic/src/logic/ProjectController.cpp#L1248)、[SideBarUI.cpp L215](../Modules/Game/UI/src/ui/imgui/SideBarUI.cpp#L215)、[ProjectAudioToolView.cpp L1971](../Modules/Game/UI/src/ui/imgui/manager/ProjectAudioToolView.cpp#L1971)、[Basic2DCanvas_Rendering.cpp L212](../Modules/Game/Canvas/src/Basic2DCanvas_Rendering.cpp#L212)、[OpenProjectDirectoryAction.cpp L37](../Modules/Game/UI/src/ui/imgui/menu/actions/file/OpenProjectDirectoryAction.cpp#L37)、[PackBeatmapAction.cpp L2305](../Modules/Game/UI/src/ui/imgui/menu/actions/file/PackBeatmapAction.cpp#L2305)
+
+- [ ] **R46 · P1 · Windows 窗口适配器析构后仍有拖拽区域订阅**
+
+  构造时丢弃订阅号，lambda 捕获 this；析构解除窗口过程后，事件总线仍可调用旧对象并写两个区域数组。R38 只涉及主停靠视图。 保存订阅句柄并在析构前注销；已取走的分发快照还需受同线程寿命令牌或独立收件状态保护。原生 Win10 创建、销毁、重建后再发布，覆盖分发中销毁，只有当前窗口更新。
+
+  [Win32WindowAdapter.cpp L347](../Modules/Game/Graphic/src/glfw/adapters/Win32WindowAdapter.cpp#L347)、[UIManager.cpp L775](../Modules/Game/UI/src/ui/UIManager.cpp#L775)
+
+- [ ] **R47 · P1 · 皮肤翻译迁移可能删除皮肤根之外的同名文件**
+
+  启动清理仅检查皮肤条目本身，随后通过 resources/lang 等中间目录删除旧文件。用户以目录链接共享资源时，删除会作用于链接指向的位置。 限定迁移操作可达的真实父目录，处理目录链接及 Windows 重解析点，无法确认归属时保留文件。正常旧翻译可清理；共享目录中的哨兵文件保留，失败后可重试。
+
+  [TranslationResourceMigration.cpp L119](../Modules/Config/src/skin/TranslationResourceMigration.cpp#L119)、[main.cpp L598](../Modules/Main/src/main.cpp#L598)
+
+- [ ] **R48 · P1 · 插件倍速导出失败可截断已有目标音频**
+
+  单文件插件接口直接传最终路径，编码器以写模式打开后仍可能失败。只防输入输出同文件不足以保护上一次成功导出的目标。 在目标卷创建唯一且保留原扩展名的暂存文件，编码、排空、关闭全部成功后再替换。已有目标、中途写失败、关闭失败均保留原字节，同时验证正常覆盖和暂存清理。
+
+  [ToolPluginView.cpp L1197](../Modules/Game/UI/src/ui/plugin/ToolPluginView.cpp#L1197)、[AudioSpeedExportService.cpp L400](../Modules/Audio/src/AudioSpeedExportService.cpp#L400)、[FFmpegFileReceiver.cpp L830](../3rdpty/sources/IonCachyEngine/src/ice/out/io/FFmpegFileReceiver.cpp#L830)
+
+- [ ] **R49 · P2 · 文件管理器注销订阅后，在途回调仍可写已销毁对象**
+
+  工程保存事件可从其他线程发布。解除订阅只影响后续发布，已取得的订阅快照仍持有捕获 this 的回调。 参照新谱面向导的独立收件箱，回调只持有安全的收件状态；UI 线程负责消费。用同步屏障停在发布已取快照之后，销毁视图再放行，旧回调安全结束。
+
+  [FileManagerView.cpp L72](../Modules/Game/UI/src/ui/imgui/manager/FileManagerView.cpp#L72)、[ProjectController_DirectoryRefresh.cpp L145](../Modules/Game/Logic/src/logic/ProjectController_DirectoryRefresh.cpp#L145)
+
+- [ ] **R50 · P2 · 新建工程向导静置时反复查询目录，部分查询错误判为可用**
+
+  位置页多次调用校验，目录探测随绘制重复；exists 返回 false 同时设置错误时，会进入路径可用分支。R11 针对另一处新谱面向导。 以父路径与名称为键，输入变化才发起验证，提交时复核；区分不存在与查询失败。静置时探测次数稳定、慢目录不阻塞、切换目录丢弃旧结果、权限错误不能提交。
+
+  [NewProjectWizard.cpp L311](../Modules/Game/UI/src/ui/imgui/manager/NewProjectWizard.cpp#L311)
+
+- [ ] **R51 · P2 · 打包格式选择在 UI 线程递归扫描并解析谱面**
+
+  选择格式同步遍历工程并逐谱解析依赖；大工程或慢盘可阻塞界面。R45 的寿命修正本身不能缩短 UI 等待。 向文件池提交工程根值、格式和代次，返回候选清单；切工程或取消即废弃旧结果。阻塞文件工作者时界面仍绘制且可取消；同一工程同步参考清单与异步结果一致。
+
+  [PackBeatmapAction.cpp L1379](../Modules/Game/UI/src/ui/imgui/menu/actions/file/PackBeatmapAction.cpp#L1379)
+
+- [ ] **R52 · P2 · 离线时间线导出可将损坏音频的有效前缀当成整曲**
+
+  直接使用解码实例，只看返回帧数；先返回有效帧再发生错误时，非空片段可通过后续检查并被混音发布。R41 修改的是流式播放。 每次读取检查后端状态，失败撤销该次导出；先使默认构建获得匹配的 ICE 头与库。正常短尾成功，报告错误的非空前缀不能替换上一次输出。
+
+  [AudioTimelineExportService.cpp L308](../Modules/Audio/src/AudioTimelineExportService.cpp#L308)、[IDecoderInstance.hpp L48](../3rdpty/sources/IonCachyEngine/include/ice/manage/dec/IDecoderInstance.hpp#L48)
+
+- [ ] **R53 · P2 · ICE 将单次无错误短读提前确认为 EOF**
+
+  临时探针链接当前 ICE 本地归档：后端共 1,000 帧，每次最多返回 17 帧，首读后 num_frames 与 end_frame 均为 17。全量解码路径对同类返回会继续读取。 在后台与首页分配的页内累计非零短读，每次检查错误；零帧且无错确认 EOF。验证首页、预读、跳页、末块及带错误的有效前缀；音频回调保持零分配。
+
+  [StreamingDecoder.cpp L217](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp#L217)、[CachyDecoder.cpp L100](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/CachyDecoder.cpp#L100)
+
+- [ ] **R54 · P2 · ICE 回跳定位与复位同时失败时持续静音并重复请求**
+
+  seek_exact 失败后 seek(0) 也失败时直接 continue，无终止码也无进度，音源可随下个块继续请求。与 R41 的读错误分支独立。 将不可恢复复位失败发布为定位错误；如后端确有可重试错误，将其显式分类并限制次数。首页成功、页淘汰后回跳失败时结束重试，输出错误且不发送正常播放完成。
+
+  [StreamingDecoder.cpp L185](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp#L185)、[SourceNode.cpp L205](../3rdpty/sources/IonCachyEngine/src/ice/core/SourceNode.cpp#L205)
+
+- [ ] **R55 · P2 · 资产下载临时名由并行调用和多个进程共用**
+
+  两个不同安装根也会写同一个 assets.zip 或 asset-file.tmp，可能互相截断、挪走已验证文件或清掉另一方下载。 每次同步排他创建独立暂存目录，清理绑定本次所有权。两个不同根并行下载不同内容，分别在校验前后暂停并取消其中一个，另一份成功且摘要正确。
+
+  [AssetSyncService.cpp L637](../Modules/Network/src/AssetSyncService.cpp#L637)
+
+- [ ] **R56 · P2 · 增量资产安装缺少完整包已有的真实父目录检查**
+
+  完整包检查实际目标；增量只做词法规范化，已有目录链接会把写入引至安装根外。跨卷回退直接覆盖目标，复制失败还可能损坏旧资产。 两个入口共用目标路径检查，下载内容先在目标卷暂存并复验，再原子替换。已有目录链接时外部文件原样保留；验证跨卷复制失败后原资产仍完整。
+
+  [AssetSyncService.cpp L1016](../Modules/Network/src/AssetSyncService.cpp#L1016)
+
+- [ ] **R57 · P2 · 配置、工程设置与批注导出的写入失败保护不一致**
+
+  多处固定 .tmp 与覆盖复制回退，部分在 close 前判断成功，布局预设直接截断旧文件。R01 的脏状态和 R05 的请求合并没有解决这些目标文件的落盘事务。 复用现有同目录暂存与关闭检查的原则，收敛事务发布；同目标并发须明确提交顺序。对已有目标模拟写入、关闭和替换失败，核对原字节；并发写后目标应是一个完整版本。
+
+  [ConfigSnapshotWriter.cpp L67](../Modules/Config/src/ConfigSnapshotWriter.cpp#L67)、[ColorPaletteFile.cpp L145](../Modules/Config/src/ColorPaletteFile.cpp#L145)、[LayoutPresets.cpp L456](../Modules/Config/src/LayoutPresets.cpp#L456)、[ProjectStorage.cpp L125](../Modules/Game/Logic/src/logic/ProjectStorage.cpp#L125)、[AnnotationExport.cpp L292](../Modules/Game/Canvas/src/AnnotationExport.cpp#L292)、[BeatmapOutputFile.h L86](../Modules/MMM/include/mmm/beatmap/BeatmapOutputFile.h#L86)
+
+- [ ] **R58 · P2 · osu! 首行的宽松签名检测可触发越界 substr**
+
+  只要首行包含 format 就从其位置加八取子串，尾部长短不足时标准库会抛异常。正常节区路径与签名误判混在一起。 用有边界检查的 string_view 解析完整签名，保留无签名谱面首行和 CRLF 行为。测试常规签名、短签名、普通首节和空文件，导入返回明确结果。
+
+  [LoadOSUMap.hpp L247](../Modules/MMM/src/beatmap/LoadOSUMap.hpp#L247)、[BeatMap.cpp L151](../Modules/MMM/src/beatmap/BeatMap.cpp#L151)
+
+- [ ] **R59 · P2 · 工程扫描识别的混合大小写扩展名在打开和保存时被拒绝**
+
+  扫描统一小写，.osu/.mc/.imd/.mmm 的读写分派却比较原始扩展名；列表可见而打开失败。BMS 已有大小写兼容。 仅对用于分派的 ASCII 扩展名归一化，原生文件路径原样交给文件系统。测试四类扩展名混排、非 ASCII 主文件名、按原路径保存并重新打开。
+
+  [ProjectDirectoryScanner.cpp L94](../Modules/Game/Logic/src/logic/ProjectDirectoryScanner.cpp#L94)、[BeatMap.cpp L135](../Modules/MMM/src/beatmap/BeatMap.cpp#L135)
+
+- [ ] **R60 · P2 · osu!mania 横坐标上边界会生成越界轨号**
+
+  Note 和 Hold 独立使用 floor(x*键数/512)，4K 的 x=512 得到轨号 4；负数、异常键数还缺显式转换前检查。 两种物件共用校验与坐标映射；键数先验证，右边界落到末轨，对非法坐标明确兼容策略。以 4K 和其他合法键数测左右端、异常数字、单键和长条往返。
+
+  [Note.cpp L71](../Modules/MMM/src/note/Note.cpp#L71)、[Hold.cpp L74](../Modules/MMM/src/note/Hold.cpp#L74)、[LoadOSUMap.hpp L384](../Modules/MMM/src/beatmap/LoadOSUMap.hpp#L384)
+
+- [ ] **R61 · P2 · 资产版本标记写入失败仍返回同步成功**
+
+  写版本函数返回 void，打开和收尾错误没有传播。资源文件可已安装而本地版本未持久化，下次启动会重新进入同步判断。 标记采用同目录临时写入并检查 close，将元数据提交结果反馈同步调用方。只令标记不可写，验证结果可诊断且稍后可重试；成功后复读版本。
+
+  [AssetSyncService.cpp L702](../Modules/Network/src/AssetSyncService.cpp#L702)
+
+- [ ] **R75 · P2 · PGO 配置可能把上一次构建的 profdata 当作本次结果**
+
+  空输入走成功跳过。离线探针预置旧输出，脚本返回 0 且旧字节仍在；CMake 的成功条件仅是返回零且固定路径存在。 为本次生成独立输出，区分跳过与生成成功，只有本轮确实产生有效文件才启用 PGO。同一 build 连续先有样本再无样本，第二轮按配置明确报未生成。
+
+  [pgo_merge.py L366](../scripts/pgo_merge.py#L366)、[pgo.cmake L301](../cmake/pgo.cmake#L301)
+
+- [ ] **R76 · P3 · 远程 PGO 样本缓存名碰撞会漏掉样本并改变权重**
+
+  离线探针确认 a/b.profraw 与 a_b.profraw 生成相同本地名。复用非空文件后同一路径两次进入 merge，另一份未下载。 以完整来源身份的摘要或唯一序号生成缓存名，在列表中保持来源与本地内容一一对应。两份不同内容、同 basename/扁平化别名和不同 query 都应分别处理。
+
+  [pgo_merge.py L126](../scripts/pgo_merge.py#L126)
+
+- [ ] **R77 · P3 · 热修复资源制品摘要与暂存副本可能不一致**
+
+  准备阶段先算来源摘要再复制。离线夹具在两步之间修改源文件，prepare 报成功，发布预检以 staged checksum mismatch 拒绝。已存在的发布校验能阻止该制品上线。 先取得稳定暂存副本，再基于这同一份字节生成摘要、单文件对象和完整 ZIP。准备期间模拟修改源，候选应自洽或明确失败。
+
+  [prepare_assets.py L137](../scripts/hotfix/prepare_assets.py#L137)、[publish_assets.py L59](../scripts/hotfix/publish_assets.py#L59)
+
+- [ ] **R78 · P3 · 远程 PGO 分支提前退出会遗留下载缓存**
+
+  远程下载后样本不足或工具失败会跳过函数尾部的 rmtree；长寿命 Runner 可累积临时目录及采样文件。 把本次下载缓存交给 TemporaryDirectory 或 try/finally，实现成功、跳过、失败都清理。覆盖远端下载成功后不足门槛、合并工具失败和正常完成。
+
+  [pgo_merge.py L327](../scripts/pgo_merge.py#L327)
+
+## 历次整改记录
+
 2026-11-23 · 主仓 `db00b802` · IonCachyEngine `4f54467c`。本次交付为审查清单。P1 优先处理正确性、数据完整性和交互停滞，P2 按子系统排期，P3 先量化收益或明确产品契约。已勾选项记录本次完成的实现和回归依据。
 
 ## 范围与证据
@@ -10,7 +226,7 @@
 
 项目有房间目录、WebRTC 传输、协作资源 AES-256-GCM、资产同步及更新下载。入口分别见 `CollaborationDirectoryClient.cpp`、`WebRtcTransport.cpp`、`CollaborationResourceCipher.cpp`、`AssetSyncService.cpp` 和 `UpdateChecker.cpp`。本清单关注这些模块的内存、执行模型和工程边界；项目包含联网功能本身不能说明存在网络漏洞。
 
-## 优先顺序
+## 首轮整改顺序（已完成）
 
 先处理 ICE-01 的声道状态、UI-01 的编辑截断和 PERF-01 的线程池进展条件。PERF-02 与 PERF-04 共用注册表锁，适合一起采样，再分别修正音频生命周期和 UI 读路径。之后做每拍显示、格式导入、逐块哈希等能单独验收的改动，最后按消费者逐批缩窄接口。
 
