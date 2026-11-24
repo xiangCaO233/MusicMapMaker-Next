@@ -4,6 +4,7 @@
 /// 关联谱面导入分别覆盖磁盘与活动会话；新建向导检查尚未提交的 BPM 草稿。
 /// 独立文件场景模拟投放事件，先验证窗口命中，再读回输出核对时域转换。
 #include "audio/AudioMarkerService.h"
+#include "common/AudioInfoUtils.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/VisualConfig.h"
@@ -108,6 +109,71 @@ namespace MMM::UI
 {
 /// @brief 测试只准备来源与选择，实际解析、导入及历史使用生产实现。
 struct BpmBeatmapImportTestAccess {
+    /// @brief 读取真实向导草稿和提交模型，验证 UTF-8 文本未静默裁剪。
+    /// @param root 已关闭工程的隔离测试目录。
+    /// @return 完整元数据可提交并落盘，手工编辑优先于模板预填。
+    /// @details 模板阶段刻意选用多种保留策略。空标题和原始艺术家
+    /// 从来源补齐，已填写的 Unicode 艺术家保持现值；二者同时核对。
+    /// 读回字节用于发现 UTF-8 被截断后由 JSON 或读取器替换的问题。
+    /// 音频阶段使用已探测标签，独立于系统解码器及媒体元数据解析。
+    /// 同一方法也是文件任务完成后的提交入口，故不需要模拟拖放事件。
+    /// 只在工程关闭后写夹具，避免目录监听将其当作之前 BPM 场景的来源。
+    static bool preservesLongTemplateMetadata(const std::filesystem::path& root)
+    {
+        NewBeatmapWizard wizard;
+        BeatMap          source;
+        auto&            meta = source.m_baseMapMetadata;
+        // 第 255 字节落在三字节字符内部，旧缓冲会留下无效的 UTF-8 后缀。
+        meta.title         = std::string(254, 'x') + "谱面完整标题";
+        meta.title_unicode = meta.title + "♥";
+        // 艺术家与专辑超过缓冲区，但已手工填写的 Unicode 艺术家优先于模板。
+        // 三栏使用不同前缀，不能把某一栏的值错误复制到其他栏目。
+        // 普通字段与 Unicode 对应字段额外放入不同字符，验证独立保存。
+        meta.artist                 = std::string(254, 'y') + "音乐作者";
+        meta.artist_unicode         = meta.artist;
+        meta.album                  = std::string(260, 'z') + "专辑";
+        wizard.m_artistUnicodeInput = "保留原编辑";
+        wizard.applyTemplateResourceDefaults(meta);
+        wizard.syncMetaFromInputs();
+        // 同时匹配精确字节和内容，防止仅修补损坏字符却继续丢掉合法尾部。
+        if ( wizard.m_meta.title != meta.title ||
+             wizard.m_meta.title_unicode != meta.title_unicode ||
+             wizard.m_meta.artist != meta.artist ||
+             wizard.m_meta.artist_unicode != "保留原编辑" ||
+             wizard.m_meta.album != meta.album )
+            return false;
+        // 使用正式谱面写出器和加载器检查存储边界，避免只核对向导内的中转结构。
+        BeatMap saved;
+        saved.m_baseMapMetadata = wizard.m_meta;
+        const auto path         = root / "long-wizard-metadata.mmm";
+        if ( !saved.saveToFile(path) ) return false;
+        // 读取使用正式格式入口；路径上的真实文件必须保存有效、完整的 JSON。
+        const auto restored = BeatMap::loadFromFile(path).m_baseMapMetadata;
+        if ( restored.title != meta.title || restored.artist != meta.artist ||
+             restored.album != meta.album ||
+             restored.artist_unicode != "保留原编辑" )
+            return false;
+        // 已探测的标签由普通选曲与后台导入共用，同一边界不应再次复制到固定数组。
+        // 长标题不宜直接成为自动文件名，但显示文本仍按原字节进入保存命令。
+        // 自动文件名沿用原值，防止长标签导致新谱面因文件名分量无法创建。
+        // 夹具在模板之后应用，校验音频预填的确覆盖上一来源而非保留旧标题。
+        const auto                    name = wizard.m_meta.name;
+        const ::MMM::Utils::AudioInfo tags{
+            .title    = std::string(254, 'a') + "新音频标题",
+            .artist   = std::string(254, 'b') + "新音频作者",
+            .album    = meta.album,
+            .duration = 1.0
+        };
+        wizard.applyAudioInfo(tags);
+        wizard.syncMetaFromInputs();
+        return wizard.m_meta.name == name &&
+               wizard.m_meta.title == tags.title &&
+               wizard.m_meta.title_unicode == tags.title &&
+               wizard.m_meta.artist == tags.artist &&
+               wizard.m_meta.artist_unicode == tags.artist &&
+               wizard.m_meta.album == tags.album;
+    }
+
     /// @brief 断言失败包含独立场景标签，不因一项失败跳过后续来源校验。
     /// @param value 当前场景的完整行为断言。
     /// @param label 日志中可识别的失败场景。
@@ -711,5 +777,10 @@ int main(int argc, char** argv)
     // 显式关闭隔离项目，使会话清理完成后才结束测试进程。
     // 夹具保留在构建输出下供失败诊断，不向源码资源目录复制。
     controller.closeProject();
+    if ( !MMM::UI::BpmBeatmapImportTestAccess::preservesLongTemplateMetadata(
+             root) ) {
+        XERROR("Wizard truncated template or audio metadata");
+        return 1;
+    }
     return passed ? 0 : 1;
 }

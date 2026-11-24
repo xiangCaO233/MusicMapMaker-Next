@@ -589,7 +589,9 @@
 
 ### P2 · R14 · 新谱面向导静默截断多字节元数据
 
-- [ ] 从工程等来源复制到定长字符数组，再将截短文本写入新谱；UTF-8 字符可能被从中间切断。验证长标题、艺术家名和多字节边界；未编辑字段需原样保全。
+- [x] 从工程等来源复制到定长字符数组，再将截短文本写入新谱；UTF-8 字符可能被从中间切断。验证长标题、艺术家名和多字节边界；未编辑字段需原样保全。
+
+  已验证。Linux Clang 22 RelWithDebInfo 全量构建和 4 项回归通过。模板与音频标签跨旧 255 字节边界不会截断，已有手工输入受到保护，并验证原生谱面写出和读回的长文本。过长音频标题不会自动作为文件名。
 
 [Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:88](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L88) [Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:548](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L548) [Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:1476](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L1476) [Modules/Game/UI/include/ui/imgui/manager/NewBeatmapWizard.h:274](../Modules/Game/UI/include/ui/imgui/manager/NewBeatmapWizard.h#L274)
 
