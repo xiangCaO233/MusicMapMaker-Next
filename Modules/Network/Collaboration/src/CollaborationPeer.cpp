@@ -1,5 +1,6 @@
-#include "network/collaboration/CollaborationPeer.h"
+#include "CollaborationPeer_Impl.h"
 #include "config/CreatorIdentity.h"
+#include "network/collaboration/ICollaborationTransport.h"
 
 #include <algorithm>
 #include <cmath>
@@ -7,6 +8,22 @@
 
 namespace MMM::Network::Collaboration
 {
+/// @brief 按修订顺序保存操作，新访客仍可从最近完整快照恢复。
+/// @details 常规编辑和历史补偿已经在本地应用，进入日志后共享同一保留窗口。
+/// @param operation 已应用的规范操作。日志保存其值，调用方继续用原值广播。
+/// @param limit 本 Peer 构造时确认的正常补发窗口长度。
+void CollaborationPeer::Impl::CommitLog::record(
+    const CommittedOperation& operation, std::size_t limit)
+{
+    // 先保留刚刚提交的操作，再淘汰日志中最老且已超出窗口的记录。
+    // 复制负载保证请求或广播对象释放后仍可按修订补发。
+    // 窗口只在 UI 网络更新线程修改，读者使用同一串行协议处理路径。
+    m_journal.push_back(operation);
+    while ( m_journal.size() > limit ) {
+        m_journal.pop_front();
+    }
+}
+
 /// @brief 创建房主或访客的权威增量同步状态机。
 /// @param config 身份、角色和所有有界处理参数。
 /// @param transport 当前 Peer 独占的可靠有序传输端点。
@@ -20,7 +37,8 @@ CollaborationPeer::CollaborationPeer(
     ApplyOperationCallback                   applyCallback,
     ResourceMessageCallback resourceCallback, ChatMessageCallback chatCallback,
     AuthorizeEditCallback authorizeEditCallback)
-    : m_config(std::move(config))
+    : m_impl(std::make_unique<Impl>())
+    , m_config(std::move(config))
     , m_transport(std::move(transport))
     , m_applyCallback(std::move(applyCallback))
     , m_resourceCallback(std::move(resourceCallback))
@@ -124,7 +142,7 @@ const OperationSessionId& CollaborationPeer::localSessionId() const
 /// @warning 逻辑热路径可调用，不执行同步或容器访问。
 std::uint64_t CollaborationPeer::appliedRevision() const
 {
-    return m_appliedRevision;
+    return m_impl->m_commits.m_appliedRevision;
 }
 
 /// @brief 返回累计的协议与传输诊断计数。
@@ -149,7 +167,7 @@ CollaborationPeer::participantIdentities() const
 const std::unordered_map<PeerId, ParticipantViewport>&
 CollaborationPeer::participantViewports() const
 {
-    return m_participantViewports;
+    return m_impl->m_followPlayback.m_participantViewports;
 }
 
 /// @brief 返回房主发布并由访客镜像的权限状态。
@@ -212,13 +230,15 @@ bool CollaborationPeer::addParticipant(PeerId             peerId,
         static_cast<void>(sendMessage(peerId, identity));
     }
     // 跟随图依赖身份表，必须先发完全部身份再同步既有边。
-    for ( const auto& [source, target] : m_participantFollowTargets ) {
+    for ( const auto& [source, target] :
+          m_impl->m_followPlayback.m_participantFollowTargets ) {
         static_cast<void>(
             sendMessage(peerId, makeFollowState(source, target, 0)));
     }
     // 同步发送失败会进入 sendFailures，但成员登记仍继续保持拓扑收敛。
     // 已发布视口作为初始在线状态一并补给新访客。
-    for ( const auto& [knownPeerId, viewport] : m_participantViewports ) {
+    for ( const auto& [knownPeerId, viewport] :
+          m_impl->m_followPlayback.m_participantViewports ) {
         static_cast<void>(knownPeerId);
         static_cast<void>(sendMessage(peerId, viewport));
     }
@@ -233,7 +253,7 @@ bool CollaborationPeer::addParticipant(PeerId             peerId,
     // 完成初始单播后再登记参与者，使后续广播包含新访客。
     m_participants.insert(peerId);
     // 新访客尚未确认任何修订，从零开始跟踪。
-    m_lastAcknowledgedRevision.try_emplace(peerId, 0);
+    m_impl->m_commits.m_lastAcknowledgedRevision.try_emplace(peerId, 0);
     // 移动规范化字符串进入权威身份记录，避免额外分配。
     const ParticipantIdentity identity{ peerId,
                                         std::move(participantId),
@@ -254,8 +274,9 @@ bool CollaborationPeer::addParticipant(PeerId             peerId,
     }
     // 两条广播各自独立，部分发送失败不会撤销已发送或本地登记。
     // 若房主已有可独立恢复快照，新访客可跳过日志起点限制直接追平。
-    if ( m_stateSnapshot ) {
-        static_cast<void>(sendMessage(peerId, *m_stateSnapshot));
+    if ( m_impl->m_commits.m_stateSnapshot ) {
+        static_cast<void>(
+            sendMessage(peerId, *m_impl->m_commits.m_stateSnapshot));
     }
     // 单次发送失败由统计记录，不回滚已建立的房间成员身份。
     return true;
@@ -267,7 +288,8 @@ bool CollaborationPeer::addParticipant(PeerId             peerId,
 bool CollaborationPeer::setStateSnapshot(ByteBuffer payload)
 {
     // 捕获调用时的权威修订，避免快照声明未来版本。
-    return setStateSnapshot(m_appliedRevision, std::move(payload));
+    return setStateSnapshot(m_impl->m_commits.m_appliedRevision,
+                            std::move(payload));
 }
 
 /// @brief 保存指定权威修订对应的最新完整状态快照。
@@ -279,14 +301,16 @@ bool CollaborationPeer::setStateSnapshot(std::uint64_t revision,
 {
     // 快照不能来自访客、未来修订、旧于已有快照或空/超限负载。
     if ( !m_valid || !m_config.isHost || revision == 0 ||
-         revision > m_appliedRevision ||
-         (m_stateSnapshot && revision < m_stateSnapshot->revision) ||
+         revision > m_impl->m_commits.m_appliedRevision ||
+         (m_impl->m_commits.m_stateSnapshot &&
+          revision < m_impl->m_commits.m_stateSnapshot->revision) ||
          payload.empty() ||
          payload.size() > m_config.limits.maxOperationBytes ) {
         return false;
     }
     // 按值移动替换旧快照，使新加入和日志缺口访客只收到最新恢复点。
-    m_stateSnapshot = StateSnapshot{ revision, std::move(payload) };
+    m_impl->m_commits.m_stateSnapshot =
+        StateSnapshot{ revision, std::move(payload) };
     return true;
 }
 
@@ -305,21 +329,22 @@ void CollaborationPeer::removeParticipant(PeerId peerId)
     if ( identity != m_participantIdentities.end() ) {
         // 清除该加入会话尚未排序的请求，避免离线访客操作稍后被提交。
         const auto sessionId = identity->second.sessionId;
-        std::erase_if(m_pendingRequests,
+        std::erase_if(m_impl->m_commits.m_pendingRequests,
                       [&sessionId](const EditRequest& request) {
                           // 只移除精确会话请求，不影响同一人未来重连的新会话。
                           return request.sessionId == sessionId;
                       });
         // 去重水位随会话退役，新的唯一 SessionId 从零开始。
-        m_lastAcceptedSequence.erase(sessionId);
+        m_impl->m_commits.m_lastAcceptedSequence.erase(sessionId);
     }
     // 确认、视口、聊天序号和权限均以临时 PeerId 为生命周期边界。
     clearParticipantFollowState(peerId);
-    m_lastFollowRequestSequence.erase(peerId);
-    m_lastAcknowledgedRevision.erase(peerId);
-    m_participantViewports.erase(peerId);
+    m_impl->m_followPlayback.m_lastFollowRequestSequence.erase(peerId);
+    m_impl->m_commits.m_lastAcknowledgedRevision.erase(peerId);
+    m_impl->m_followPlayback.m_participantViewports.erase(peerId);
     // 断开后清除同一槽位的时钟偏移，重连必须重新校准。
-    if ( m_playbackClockPeer == peerId ) probePlaybackClock(0);
+    if ( m_impl->m_followPlayback.m_playbackClockPeer == peerId )
+        probePlaybackClock(0);
     m_lastChatSequence.erase(peerId);
     m_participantPermissions.erase(peerId);
     // 身份已经缺失说明状态不完整，此时不再广播重复离开通知。
@@ -401,7 +426,7 @@ SubmitOperationResult CollaborationPeer::submitOperation(
     EditRequest request;
     request.participantId  = m_config.participantId;
     request.sessionId      = m_config.sessionId;
-    request.clientSequence = m_nextClientSequence;
+    request.clientSequence = m_impl->m_commits.m_nextClientSequence;
     // span 仅在调用期间有效，进入队列或传输前复制到消息所有权。
     request.payload.assign(payload.begin(), payload.end());
 
@@ -417,9 +442,9 @@ SubmitOperationResult CollaborationPeer::submitOperation(
 
     // 只有请求已进入房主队列或传输层后才消费本地序号。
     if ( acceptedClientSequence ) {
-        *acceptedClientSequence = m_nextClientSequence;
+        *acceptedClientSequence = m_impl->m_commits.m_nextClientSequence;
     }
-    ++m_nextClientSequence;
+    ++m_impl->m_commits.m_nextClientSequence;
     return SubmitOperationResult::Accepted;
 }
 
@@ -457,25 +482,23 @@ SubmitOperationResult CollaborationPeer::commitHostCorrection(
     if ( payload.size() > m_config.limits.maxOperationBytes ) {
         return SubmitOperationResult::OperationTooLarge;
     }
-    if ( !m_pendingRequests.empty() ) {
+    if ( !m_impl->m_commits.m_pendingRequests.empty() ) {
         // 请求队列中已有尚未分配修订的编辑，交还调用方重新校验最新文档。
         return SubmitOperationResult::QueueFull;
     }
     // 此入口由房主 UI 独占，先立即提交再处理队列中的新访客请求，
     // 避免已通过旧文档冲突校验的补丁被随后分配的修订插队。
     CommittedOperation committed;
-    committed.revision       = m_nextRevision++;
+    committed.revision       = m_impl->m_commits.m_nextRevision++;
     committed.participantId  = m_config.participantId;
     committed.sessionId      = m_config.sessionId;
-    committed.clientSequence = m_nextClientSequence++;
+    committed.clientSequence = m_impl->m_commits.m_nextClientSequence++;
     committed.payload.assign(payload.begin(), payload.end());
     committed.historyCorrection = std::move(correction);
     // 先让房主自身收到相同修订，再记录重同步日志并广播其他成员。
     applyCommittedOperation(committed);
-    m_journal.push_back(committed);
-    while ( m_journal.size() > m_config.limits.maxJournalOperations ) {
-        m_journal.pop_front();
-    }
+    // 补偿操作和常规编辑共享窗口，避免前者绕开修订补发预算。
+    m_impl->m_commits.record(committed, m_config.limits.maxJournalOperations);
     broadcastCommittedOperation(committed);
     return SubmitOperationResult::Accepted;
 }
@@ -530,12 +553,13 @@ bool CollaborationPeer::publishViewport(ParticipantViewport viewport)
 
     // 路由身份和单调序号始终由 Peer 覆盖，调用方不能伪造。
     viewport.peerId   = m_config.peerId;
-    viewport.sequence = m_nextViewportSequence++;
+    viewport.sequence = m_impl->m_followPlayback.m_nextViewportSequence++;
     // 非 UI 发布者可省略采样时刻；产品入口提供实际快照采样时间。
     if ( viewport.sampledAt == 0.0 )
         viewport.sampledAt = playbackSteadySeconds();
     viewport.receivedAt = playbackSteadySeconds();
-    m_participantViewports.insert_or_assign(m_config.peerId, viewport);
+    m_impl->m_followPlayback.m_participantViewports.insert_or_assign(
+        m_config.peerId, viewport);
     if ( m_config.isHost ) {
         // 房主向全部访客广播，并累计而不因单个失败停止其他发送。
         bool sent = true;
@@ -588,8 +612,9 @@ bool CollaborationPeer::canFollowPeer(PeerId peerId) const
 PeerId CollaborationPeer::followTargetPeerId(PeerId peerId) const
 {
     // 同时验证来源和目标生命周期，不能把表内旧路由值暴露给画布。
-    const auto found = m_participantFollowTargets.find(peerId);
-    return found != m_participantFollowTargets.end() &&
+    const auto found =
+        m_impl->m_followPlayback.m_participantFollowTargets.find(peerId);
+    return found != m_impl->m_followPlayback.m_participantFollowTargets.end() &&
                    m_participantIdentities.contains(peerId) &&
                    m_participantIdentities.contains(found->second)
                ? found->second
@@ -650,15 +675,19 @@ bool CollaborationPeer::requestFollowPeer(PeerId peerId)
 {
     if ( !m_valid || !canFollowPeer(peerId) ) return false;
     const auto request =
-        makeFollowState(m_config.peerId, peerId, m_nextFollowRequestSequence++);
+        makeFollowState(m_config.peerId,
+                        peerId,
+                        m_impl->m_followPlayback.m_nextFollowRequestSequence++);
     // 只有成功入发送队列才暂停旧边，失败保留此前仍有效的选择。
     if ( !m_config.isHost && !sendMessage(m_config.hostPeerId, request) )
         return false;
     // 只保留最新意图的结果；旧确认仍可更新权威图，不能完成新的等待。
     // 旧确认已不代表最新用户意图，必须在新请求提交时清除。
-    m_followConfirmation.reset();
-    m_pendingFollowRequestSequence = request.requestSequence;
-    m_pendingFollowRequest         = request;
+    // 新请求发送成功后替代旧选择，旧确认不能污染新目标状态。
+    m_impl->m_followPlayback.m_followConfirmation.reset();
+    m_impl->m_followPlayback.m_pendingFollowRequestSequence =
+        request.requestSequence;
+    m_impl->m_followPlayback.m_pendingFollowRequest = request;
     if ( m_config.isHost ) {
         // 房主本地操作与访客收包共用同一串行校验和确认快照入口。
         handleParticipantFollowState(m_config.peerId, request);
@@ -672,7 +701,7 @@ bool CollaborationPeer::requestFollowPeer(PeerId peerId)
 /// @warning UI 每帧查询路径；只读取同线程维护的序号，不等待网络。
 bool CollaborationPeer::followRequestPending() const
 {
-    return m_pendingFollowRequestSequence != 0;
+    return m_impl->m_followPlayback.m_pendingFollowRequestSequence != 0;
 }
 
 /// @brief 返回 UI 最新选择，等待期间仍可显示停止按钮。
@@ -683,7 +712,7 @@ PeerId CollaborationPeer::selectedFollowPeerId() const
     if ( !followRequestPending() ) return followTargetPeerId(m_config.peerId);
     // 只展示最新请求，旧确认即使先到也不能把停止入口切回旧目标。
     // 展示目标也检查加入会话，防止停止按钮误关联到新占位者。
-    const auto& request = m_pendingFollowRequest;
+    const auto& request = m_impl->m_followPlayback.m_pendingFollowRequest;
     return request && followIdentityMatches(request->targetPeerId,
                                             request->targetParticipantId,
                                             request->targetSessionId)
@@ -706,7 +735,9 @@ PeerId CollaborationPeer::followedPeerId() const
 std::optional<ParticipantFollowState> CollaborationPeer::popFollowConfirmation()
 {
     // 移动有界身份字符串；清理图时不会修改已经匹配的确认结果。
-    return std::exchange(m_followConfirmation, std::nullopt);
+    // UI 只消费一次确认，即使同一轮还收到同槽位离开事件。
+    return std::exchange(m_impl->m_followPlayback.m_followConfirmation,
+                         std::nullopt);
 }
 
 /// @brief 串行验证跟随请求，或应用来自房主的完整权威边。
@@ -739,7 +770,8 @@ void CollaborationPeer::handleParticipantFollowState(
                                         follow.targetSessionId);
         // 水位属于已验证的来源会话，退房时会与其图状态一起清理。
         // 目标过期被拒绝也要消耗意图序号，避免旧包在以后重新生效。
-        auto& sequence = m_lastFollowRequestSequence[senderId];
+        auto& sequence =
+            m_impl->m_followPlayback.m_lastFollowRequestSequence[senderId];
         if ( follow.requestSequence <= sequence ) return;
         // 来源双身份验证后即可消费意图序号；目标过期或闭环拒绝也不能被旧包回滚。
         sequence = follow.requestSequence;
@@ -750,10 +782,11 @@ void CollaborationPeer::handleParticipantFollowState(
         if ( accepted ) {
             // 先改权威图，后续同轮请求看到最新已确认边，不能同时闭环。
             if ( follow.targetPeerId == 0 )
-                m_participantFollowTargets.erase(follow.peerId);
+                m_impl->m_followPlayback.m_participantFollowTargets.erase(
+                    follow.peerId);
             else
-                m_participantFollowTargets.insert_or_assign(
-                    follow.peerId, follow.targetPeerId);
+                m_impl->m_followPlayback.m_participantFollowTargets
+                    .insert_or_assign(follow.peerId, follow.targetPeerId);
         }
         // 确认复制当时目标双身份与接受结果，不引用后续可变身份表。
         // 本次更新内随后发生的退房只改图，不能改变这份确认的含义。
@@ -764,9 +797,9 @@ void CollaborationPeer::handleParticipantFollowState(
                             accepted);
         // 房主本地操作也产生确认快照，Room 不需要按角色猜测恢复意图。
         if ( senderId == m_config.peerId ) {
-            m_followConfirmation           = confirmed;
-            m_pendingFollowRequestSequence = 0;
-            m_pendingFollowRequest.reset();
+            m_impl->m_followPlayback.m_followConfirmation           = confirmed;
+            m_impl->m_followPlayback.m_pendingFollowRequestSequence = 0;
+            m_impl->m_followPlayback.m_pendingFollowRequest.reset();
         }
         if ( !accepted ) {
             // 目标已换会话或闭环时，明确回复原权威边与拒绝结果。
@@ -795,19 +828,21 @@ void CollaborationPeer::handleParticipantFollowState(
         return;
     }
     if ( follow.targetPeerId == 0 )
-        m_participantFollowTargets.erase(follow.peerId);
+        m_impl->m_followPlayback.m_participantFollowTargets.erase(
+            follow.peerId);
     else
-        m_participantFollowTargets.insert_or_assign(follow.peerId,
-                                                    follow.targetPeerId);
+        m_impl->m_followPlayback.m_participantFollowTargets.insert_or_assign(
+            follow.peerId, follow.targetPeerId);
     // 零序号清理不能匹配本地待确认请求。
     // 较早回复也不能完成最新请求，避免覆盖快速取消或换目标。
     if ( follow.peerId == m_config.peerId &&
-         m_pendingFollowRequestSequence != 0 &&
-         follow.requestSequence == m_pendingFollowRequestSequence ) {
+         m_impl->m_followPlayback.m_pendingFollowRequestSequence != 0 &&
+         follow.requestSequence ==
+             m_impl->m_followPlayback.m_pendingFollowRequestSequence ) {
         // 在确认生效瞬间保存身份；本轮后续退房清理不能抹掉恢复目标。
-        m_followConfirmation           = follow;
-        m_pendingFollowRequestSequence = 0;
-        m_pendingFollowRequest.reset();
+        m_impl->m_followPlayback.m_followConfirmation           = follow;
+        m_impl->m_followPlayback.m_pendingFollowRequestSequence = 0;
+        m_impl->m_followPlayback.m_pendingFollowRequest.reset();
     }
 }
 
@@ -818,15 +853,18 @@ void CollaborationPeer::handleParticipantFollowState(
 void CollaborationPeer::clearParticipantFollowState(PeerId peerId)
 {
     // 来源的离开通知将使所有镜像删除出边；入边额外发送明确取消状态。
-    m_participantFollowTargets.erase(peerId);
-    for ( auto iterator = m_participantFollowTargets.begin();
-          iterator != m_participantFollowTargets.end(); ) {
+    m_impl->m_followPlayback.m_participantFollowTargets.erase(peerId);
+    for ( auto iterator =
+              m_impl->m_followPlayback.m_participantFollowTargets.begin();
+          iterator !=
+          m_impl->m_followPlayback.m_participantFollowTargets.end(); ) {
         if ( iterator->second != peerId ) {
             ++iterator;
             continue;
         }
         const PeerId source = iterator->first;
-        iterator            = m_participantFollowTargets.erase(iterator);
+        iterator =
+            m_impl->m_followPlayback.m_participantFollowTargets.erase(iterator);
         // 只有房主发权威清理；访客收到离开通知也执行相同幂等清理。
         if ( m_config.isHost ) {
             for ( const PeerId participant : m_participants )
@@ -902,11 +940,12 @@ bool CollaborationPeer::enqueueHostRequest(EditRequest request)
 {
     // 队列只由逻辑线程访问，不需要锁或跨线程所有权同步。
     // 入队前检查硬上限，避免接收速度超过处理速度时无界增长。
-    if ( m_pendingRequests.size() >= m_config.limits.maxPendingRequests ) {
+    if ( m_impl->m_commits.m_pendingRequests.size() >=
+         m_config.limits.maxPendingRequests ) {
         return false;
     }
     // 移动负载所有权，避免大型操作额外复制。
-    m_pendingRequests.push_back(std::move(request));
+    m_impl->m_commits.m_pendingRequests.push_back(std::move(request));
     return true;
 }
 
@@ -1031,12 +1070,12 @@ void CollaborationPeer::handleCommittedOperation(
         return;
     }
     // 已应用或更旧提交属于可靠重传重复，不再次调用业务回调。
-    if ( committed.revision <= m_appliedRevision ) {
+    if ( committed.revision <= m_impl->m_commits.m_appliedRevision ) {
         ++m_stats.duplicateCommits;
         return;
     }
     // 观察到未来修订时不缓存乱序操作，只请求从当前下一版补发。
-    if ( committed.revision != m_appliedRevision + 1 ) {
+    if ( committed.revision != m_impl->m_commits.m_appliedRevision + 1 ) {
         requestResync(committed.revision);
         return;
     }
@@ -1044,9 +1083,11 @@ void CollaborationPeer::handleCommittedOperation(
     // 唯一连续提交先更新本地模型与修订水位。
     applyCommittedOperation(committed);
     // 追到触发缺口时观察的目标修订后结束当前补发抑制窗口。
-    if ( m_resyncTargetRevision.has_value() &&
-         m_appliedRevision >= m_resyncTargetRevision.value() ) {
-        m_resyncTargetRevision.reset();
+    // 同一缺口只发送一次补发请求，直到已知目标修订再次前移。
+    if ( m_impl->m_commits.m_resyncTargetRevision.has_value() &&
+         m_impl->m_commits.m_appliedRevision >=
+             m_impl->m_commits.m_resyncTargetRevision.value() ) {
+        m_impl->m_commits.m_resyncTargetRevision.reset();
     }
     // 每次连续应用后向房主确认最新水位。
     sendRevisionAck();
@@ -1062,12 +1103,13 @@ void CollaborationPeer::handleRevisionAck(PeerId             senderId,
     // 只接受在线访客且不能确认房主尚未提交的未来修订。
     const auto participantIt = m_participants.find(senderId);
     if ( participantIt == m_participants.end() ||
-         ack.revision > m_appliedRevision ) {
+         ack.revision > m_impl->m_commits.m_appliedRevision ) {
         ++m_stats.invalidMessages;
         return;
     }
     // 迟到 Ack 不得降低已有确认水位。
-    auto& acknowledged = m_lastAcknowledgedRevision[senderId];
+    // 确认水位属于补发状态并与访客槽位同寿命，退房会移除对应记录。
+    auto& acknowledged = m_impl->m_commits.m_lastAcknowledgedRevision[senderId];
     acknowledged       = std::max(acknowledged, ack.revision);
 }
 
@@ -1081,27 +1123,29 @@ void CollaborationPeer::handleResyncRequest(PeerId               senderId,
     // 起点必须处于 [1, applied+1]，且请求方仍在房间内。
     if ( m_participants.find(senderId) == m_participants.end() ||
          request.fromRevision == 0 ||
-         request.fromRevision > m_appliedRevision + 1 ) {
+         request.fromRevision > m_impl->m_commits.m_appliedRevision + 1 ) {
         ++m_stats.invalidMessages;
         return;
     }
     // applied+1 表示访客已经追平，无需发送任何历史数据。
-    if ( request.fromRevision == m_appliedRevision + 1 ) {
+    if ( request.fromRevision == m_impl->m_commits.m_appliedRevision + 1 ) {
         return;
     }
     // 日志为空或起点早于最老保留项时无法增量补发。
-    if ( m_journal.empty() ||
-         request.fromRevision < m_journal.front().revision ) {
+    // 日志只记录连续提交，窗口外的起点需要一个独立完整恢复点。
+    if ( m_impl->m_commits.m_journal.empty() ||
+         request.fromRevision < m_impl->m_commits.m_journal.front().revision ) {
         ++m_stats.resyncUnavailable;
-        if ( m_stateSnapshot ) {
+        if ( m_impl->m_commits.m_stateSnapshot ) {
             // 有快照时发送最近恢复点，让访客直接跳过已淘汰日志。
-            static_cast<void>(sendMessage(senderId, *m_stateSnapshot));
+            static_cast<void>(
+                sendMessage(senderId, *m_impl->m_commits.m_stateSnapshot));
         }
         return;
     }
 
     // 日志按 revision 排序，向请求方发送起点及之后全部保留操作。
-    for ( const auto& committed : m_journal ) {
+    for ( const auto& committed : m_impl->m_commits.m_journal ) {
         if ( committed.revision >= request.fromRevision ) {
             // 保留日志顺序逐条发送，使访客能继续执行连续性检查。
             static_cast<void>(sendMessage(senderId, committed));
@@ -1169,8 +1213,11 @@ void CollaborationPeer::handleParticipantLeft(
     clearParticipantFollowState(participantLeft.peerId);
     // 身份、视口、聊天水位和权限共享同一 PeerId 生命周期。
     m_participantIdentities.erase(participantLeft.peerId);
-    m_participantViewports.erase(participantLeft.peerId);
-    if ( m_playbackClockPeer == participantLeft.peerId ) probePlaybackClock(0);
+    m_impl->m_followPlayback.m_participantViewports.erase(
+        participantLeft.peerId);
+    if ( m_impl->m_followPlayback.m_playbackClockPeer ==
+         participantLeft.peerId )
+        probePlaybackClock(0);
     m_lastChatSequence.erase(participantLeft.peerId);
     m_participantPermissions.erase(participantLeft.peerId);
     // 访客不维护 m_participants 或请求队列，因此无需额外清理。
@@ -1233,8 +1280,9 @@ void CollaborationPeer::handleParticipantViewport(
     }
 
     // 每名参与者只接受严格更大的序号，迟到和重复状态静默丢弃。
-    const auto existing = m_participantViewports.find(viewport.peerId);
-    if ( existing != m_participantViewports.end() &&
+    const auto existing =
+        m_impl->m_followPlayback.m_participantViewports.find(viewport.peerId);
+    if ( existing != m_impl->m_followPlayback.m_participantViewports.end() &&
          viewport.sequence <= existing->second.sequence ) {
         return;
     }
@@ -1244,16 +1292,17 @@ void CollaborationPeer::handleParticipantViewport(
     received.receivedAt = playbackSteadySeconds();
     // 仅状态边界进入队列；普通连续播放位置仍只保留最新值。
     // 先比较旧缓存再替换，连续收到播放、暂停、播放也能保留全部边界。
-    if ( viewport.peerId == m_playbackClockPeer &&
-         (existing == m_participantViewports.end() ||
+    if ( viewport.peerId == m_impl->m_followPlayback.m_playbackClockPeer &&
+         (existing == m_impl->m_followPlayback.m_participantViewports.end() ||
           existing->second.playing != viewport.playing ||
           existing->second.playbackRate != viewport.playbackRate) ) {
         // 三十二次未消费切换说明接收端长期未推进，保留最近状态限制内存。
-        if ( m_playbackTransitions.size() == 32U )
-            m_playbackTransitions.pop_front();
-        m_playbackTransitions.push_back(received);
+        if ( m_impl->m_followPlayback.m_playbackTransitions.size() == 32U )
+            m_impl->m_followPlayback.m_playbackTransitions.pop_front();
+        m_impl->m_followPlayback.m_playbackTransitions.push_back(received);
     }
-    m_participantViewports.insert_or_assign(viewport.peerId, received);
+    m_impl->m_followPlayback.m_participantViewports.insert_or_assign(
+        viewport.peerId, received);
 
     if ( m_config.isHost ) {
         // 房主转发给除原发送方外的所有访客，避免无意义回显。
@@ -1315,12 +1364,12 @@ void CollaborationPeer::handleStateSnapshot(PeerId               senderId,
     if ( senderId != m_config.hostPeerId || snapshot.revision == 0 ||
          snapshot.payload.empty() ||
          snapshot.payload.size() > m_config.limits.maxOperationBytes ||
-         snapshot.revision < m_appliedRevision ) {
+         snapshot.revision < m_impl->m_commits.m_appliedRevision ) {
         ++m_stats.invalidMessages;
         return;
     }
     // 相同修订已在本地体现，重复快照无需再次应用或确认。
-    if ( snapshot.revision == m_appliedRevision ) return;
+    if ( snapshot.revision == m_impl->m_commits.m_appliedRevision ) return;
 
     // 复用提交应用回调承载完整负载，并以快照修订直接推进水位。
     CommittedOperation committed;
@@ -1338,7 +1387,7 @@ void CollaborationPeer::handleStateSnapshot(PeerId               senderId,
     committed.payload        = snapshot.payload;
     // 应用成功语义由回调负责，状态机随后结束补发并确认新水位。
     applyCommittedOperation(committed);
-    m_resyncTargetRevision.reset();
+    m_impl->m_commits.m_resyncTargetRevision.reset();
     sendRevisionAck();
 }
 
@@ -1349,14 +1398,16 @@ void CollaborationPeer::processHostRequests()
     // 队列顺序就是房主全局排序输入，不执行额外排序或全表扫描。
     // 双重条件同时限制单帧工作量并在队列提前耗尽时结束。
     for ( std::size_t index = 0; index < m_config.limits.maxRequestsPerUpdate &&
-                                 !m_pendingRequests.empty();
+                                 !m_impl->m_commits.m_pendingRequests.empty();
           ++index ) {
         // 先移动队首再弹出，后续所有分支都消费该请求一次。
-        EditRequest request = std::move(m_pendingRequests.front());
-        m_pendingRequests.pop_front();
+        EditRequest request =
+            std::move(m_impl->m_commits.m_pendingRequests.front());
+        m_impl->m_commits.m_pendingRequests.pop_front();
 
         // 去重键使用 SessionId，重连后的新会话可从序号一重新开始。
-        auto& lastSequence = m_lastAcceptedSequence[request.sessionId];
+        auto& lastSequence =
+            m_impl->m_commits.m_lastAcceptedSequence[request.sessionId];
         if ( request.clientSequence <= lastSequence ) {
             // 重复或倒序请求不分配 revision，也不调用业务授权。
             ++m_stats.duplicateRequests;
@@ -1373,7 +1424,7 @@ void CollaborationPeer::processHostRequests()
 
         // 仅授权请求获得下一个连续全房间 revision。
         CommittedOperation committed;
-        committed.revision       = m_nextRevision++;
+        committed.revision       = m_impl->m_commits.m_nextRevision++;
         committed.participantId  = request.participantId;
         committed.sessionId      = request.sessionId;
         committed.clientSequence = request.clientSequence;
@@ -1382,11 +1433,9 @@ void CollaborationPeer::processHostRequests()
 
         // 房主先在本地应用，再写入补发日志并广播相同提交。
         applyCommittedOperation(committed);
-        m_journal.push_back(committed);
-        // 日志只保留配置数量的最近操作，旧缺口改由快照恢复。
-        while ( m_journal.size() > m_config.limits.maxJournalOperations ) {
-            m_journal.pop_front();
-        }
+        // 只保留已经应用的修订，日志裁剪不改变权威提交水位。
+        m_impl->m_commits.record(committed,
+                                 m_config.limits.maxJournalOperations);
         broadcastCommittedOperation(committed);
         // 广播完成与否不改变 revision 已提交事实，失败通过统计暴露。
     }
@@ -1436,7 +1485,7 @@ void CollaborationPeer::applyCommittedOperation(
 {
     // 状态机不解释操作负载，业务层回调负责文档语义和持久化边界。
     // 先发布水位，再调用回调，使回调查询状态时观察到新修订。
-    m_appliedRevision = committed.revision;
+    m_impl->m_commits.m_appliedRevision = committed.revision;
     if ( m_applyCallback ) {
         // 回调借用 committed 仅限调用期间，不能跨帧保存引用。
         m_applyCallback(committed);
@@ -1484,7 +1533,8 @@ void CollaborationPeer::sendRevisionAck()
     // m_appliedRevision 在连续提交或快照应用后已经更新。
     // Ack 只发给权威房主；传输失败由统一发送统计记录。
     static_cast<void>(
-        sendMessage(m_config.hostPeerId, RevisionAck{ m_appliedRevision }));
+        sendMessage(m_config.hostPeerId,
+                    RevisionAck{ m_impl->m_commits.m_appliedRevision }));
 }
 
 /// @brief 访客在观察到修订缺口时请求从下一连续版本补发。
@@ -1494,15 +1544,17 @@ void CollaborationPeer::requestResync(std::uint64_t observedRevision)
 {
     // observedRevision 只定义抑制范围，实际请求起点始终来自本地水位。
     // 已有请求覆盖相同或更早观察目标时不重复发送。
-    if ( m_resyncTargetRevision.has_value() &&
-         observedRevision <= m_resyncTargetRevision.value() ) {
+    if ( m_impl->m_commits.m_resyncTargetRevision.has_value() &&
+         observedRevision <=
+             m_impl->m_commits.m_resyncTargetRevision.value() ) {
         return;
     }
     // 保存最新追赶目标用于抑制重复请求，并累计实际请求次数。
-    m_resyncTargetRevision = observedRevision;
+    m_impl->m_commits.m_resyncTargetRevision = observedRevision;
     ++m_stats.resyncRequests;
     // 始终从当前连续水位的下一修订开始，避免留下本地缺口。
-    static_cast<void>(sendMessage(m_config.hostPeerId,
-                                  ResyncRequest{ m_appliedRevision + 1 }));
+    static_cast<void>(
+        sendMessage(m_config.hostPeerId,
+                    ResyncRequest{ m_impl->m_commits.m_appliedRevision + 1 }));
 }
 }  // namespace MMM::Network::Collaboration
