@@ -541,7 +541,9 @@
 
 ### P2 · R08 · 更新器两次进程启动都可能误报成功
 
-- [ ] POSIX 父进程只知道 fork 成功就退出；Linux 更新器还忽略执行位设置失败。用不可执行格式在 Linux 临时目录实测，更新器退出 0，留下成功标记，stderr 为空。两次交接分别确认 exec 结果，测试失败后主程序的存活、错误及标记语义。
+- [x] POSIX 父进程只知道 fork 成功就退出；Linux 更新器还忽略执行位设置失败。用不可执行格式在 Linux 临时目录实测，更新器退出 0，留下成功标记，stderr 为空。两次交接分别确认 exec 结果，测试失败后主程序的存活、错误及标记语义。
+
+  已验证。Linux Clang 22 RelWithDebInfo 全量构建和 2 项更新回归通过。测试实际装载失败后主程序继续运行，新程序无法装载时更新器返回错误并撤下标记，成功启动可立即读取该标记。macOS open 返回状态检查已审阅，原生 macOS 回归未执行。
 
 [Modules/Network/src/UpdateChecker.cpp:689](../Modules/Network/src/UpdateChecker.cpp#L689) [Modules/Updater/main.cpp:458](../Modules/Updater/main.cpp#L458) [Modules/Updater/main.cpp:665](../Modules/Updater/main.cpp#L665)
 

@@ -23,6 +23,7 @@
 #include <nlohmann/json.hpp>
 #include <regex>
 #include <string_view>
+#include <system_error>
 #include <thread>
 
 #if defined(_WIN32)
@@ -38,9 +39,11 @@
 // clang-format on
 #elif defined(__APPLE__)
 #    include <mach-o/dyld.h>
+#endif
+#if !defined(_WIN32)
+#    include <spawn.h>
 #    include <unistd.h>
-#else
-#    include <unistd.h>
+extern char** environ;
 #endif
 
 using json = nlohmann::json;
@@ -572,7 +575,7 @@ std::string UpdateChecker::currentExecutablePath()
 /// - 第一个参数是已验证下载包路径。
 /// - 第二个参数是主程序或完整 App bundle 目标。
 /// - 第三个参数是当前进程 PID。
-/// - 更新器进程创建成功前不得结束主程序。
+/// - 系统成功装载更新器映像前不得结束主程序。
 /// - 父进程不等待更新器完成替换，以便先释放目标文件。
 /// @param downloadedFilePath 已完成校验的主程序更新包 UTF-8 路径。
 /// @param updaterFilePath 可选的已完成校验更新器 UTF-8 路径。
@@ -634,7 +637,7 @@ bool UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath,
     }
 
 #if !defined(_WIN32)
-    // 新下载文件常缺少执行位，fork/exec 前确保内核允许启动。
+    // 新下载文件常缺少执行位，提交启动请求前先检查文件模式。
     if ( !ensureExecutablePermission(updaterPath, errorMessage) ) {
         return false;
     }
@@ -684,30 +687,32 @@ bool UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath,
         return false;
     }
 #else
-    // POSIX fork 后父进程退出，子进程用 execl 替换为独立更新器。
-    const std::string updateTargetPath = Config::pathToUtf8(updateTarget);
-    pid_t             child            = fork();
-    if ( child < 0 ) {
-        constexpr const char* message = "Failed to fork updater process";
+    // 源和目标已解析为原生 POSIX 路径。所有参数先由主进程持有，
+    // 不在 fork 后的子进程分配内存，也不经 shell 重新解释路径。
+    auto      updaterArgument  = updaterPath.native();
+    auto      downloadArgument = downloadedPath.native();
+    auto      targetArgument   = updateTarget.native();
+    auto      pidArgument      = std::to_string(pid);
+    char*     arguments[]{ updaterArgument.data(),
+                           downloadArgument.data(),
+                           targetArgument.data(),
+                           pidArgument.data(),
+                           nullptr };
+    pid_t     child{};
+    const int spawnError = posix_spawn(
+        &child, updaterArgument.c_str(), nullptr, nullptr, arguments, environ);
+    if ( spawnError != 0 ) {
+        // 返回值直接携带失败原因；errno 可能属于之前的系统调用。
+        const std::string message = fmt::format(
+            "Failed to launch updater: {}",
+            std::error_code(spawnError, std::generic_category()).message());
         writeRestartError(errorMessage, message);
         XERROR("UpdateChecker: {}", message);
         return false;
     }
-    if ( child == 0 ) {
-        // 子进程只构造 argv 并 exec，不返回主程序更新流程。
-        std::string updater = Config::pathToUtf8(updaterPath);
-        std::string pidStr  = std::to_string(pid);
-        execl(updater.c_str(),
-              updater.c_str(),
-              downloadedFilePath.c_str(),
-              updateTargetPath.c_str(),
-              pidStr.c_str(),
-              nullptr);
-        _exit(1);
-    }
 #endif
 
-    // 只有成功创建独立更新器后才结束当前进程，避免下载完成但无法替换时退出。
+    // 更新器映像成功启动后结束当前进程，让独立更新器继续等待文件释放。
     XINFO("UpdateChecker: Exiting for update...");
 #if defined(_WIN32)
     ExitProcess(0);
@@ -1291,7 +1296,7 @@ void UpdateChecker::downloadAsync()
             std::max<std::int64_t>(0, result.downloadSize));
         mainRouting.m_timeoutSeconds = 3600;
         mainRouting.m_progress       = [this](std::int64_t downloaded,
-                                              std::int64_t total) {
+                                        std::int64_t total) {
             std::lock_guard<std::mutex> lock(m_infoMutex);
             m_info.downloadedBytes = downloaded;
             if ( total > 0 )

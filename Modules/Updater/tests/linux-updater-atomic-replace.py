@@ -47,7 +47,10 @@ def check_success(updater, download_dir, install_dir, mode):
     target = install_dir / "MusicMapMaker-Next"
     target.write_bytes(b"old executable")
     downloaded = download_dir / "downloaded"
-    payload = b"#!/bin/sh\nexit 0\n"
+    # 新进程启动时立即打开标记，验证更新器准备标记和启动的先后顺序。
+    observed = install_dir / "marker-observed"
+    observed.unlink(missing_ok=True)
+    payload = b'#!/bin/sh\ncat "${0%/*}/.mm_update_success" > "${0%/*}/marker-observed"\n'
     downloaded.write_bytes(payload)
     downloaded.chmod(mode)
     # 即使下载源没有执行位，成功路径也必须让新文件可重新启动。
@@ -59,6 +62,8 @@ def check_success(updater, download_dir, install_dir, mode):
     assert target.read_bytes() == payload
     assert target.stat().st_mode & 0o111 == 0o111
     assert marker.read_text() == str(target)
+    # 子进程继承了 stderr，subprocess.run 读到 EOF 时其诊断与输出已完整。
+    assert observed.read_text() == str(target)
     assert not downloaded.exists()
     assert not list(install_dir.glob(".mmm-update-*"))
 
@@ -93,6 +98,31 @@ def check_copy_failure(updater, download_dir, install_dir, mode):
     downloaded.unlink()
 
 
+def check_restart_failure(updater, install_dir):
+    """已替换但无法装载时，更新器应返回错误并撤销启动标记。
+
+    使用可读、可执行但没有程序格式的文件。它能通过原子替换，
+    只会在运行新版本的阶段失败。
+    """
+    target = install_dir / "MusicMapMaker-Next"
+    downloaded = install_dir / "downloaded"
+    payload = b"not an executable image"
+    downloaded.write_bytes(payload)
+    downloaded.chmod(0o755)
+    marker = install_dir / ".mm_update_success"
+    marker.unlink(missing_ok=True)
+
+    result = update(updater, downloaded, target)
+    # 非零退出码和装载错误共同区分替换阶段的错误与启动阶段的错误。
+    assert (
+        result.returncode == 1
+        and b"Cannot execute installed program:" in result.stderr
+    ), result
+    # 正常安装已提交，按现有契约留给用户手工处理，但不能宣告启动成功。
+    assert target.read_bytes() == payload
+    assert not marker.exists()
+
+
 def main():
     """在构建树运行同卷测试，另一个可写文件系统存在时补充跨卷。
 
@@ -107,6 +137,8 @@ def main():
         check_copy_failure(updater, install_dir, install_dir, 0o600)
         check_success(updater, install_dir, install_dir, 0o755)
         check_success(updater, install_dir, install_dir, 0o600)
+        # 故障后仍运行跨卷用例，确认错误标记的清理不影响后续成功更新。
+        check_restart_failure(updater, install_dir)
         other_mount = Path("/dev/shm")
         if (
             os.access(other_mount, os.W_OK | os.X_OK)

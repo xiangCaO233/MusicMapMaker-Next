@@ -8,7 +8,7 @@
  *   1. 等待父进程 (parent_pid) 退出
  *   2. Windows/Linux 替换单个可执行文件，macOS 解压并替换完整 .app
  *   3. 写入更新成功标记
- *   4. 启动新版本
+ *   4. 启动新版本，启动失败时撤下本次标记
  *
  * 完全独立，不依赖任何项目库，仅使用标准库和平台 API。
  */
@@ -39,16 +39,16 @@
 // clang-format on
 #else
 #    include <signal.h>
+#    include <spawn.h>
 #    include <sys/types.h>
 #    include <unistd.h>
 #    if defined(__APPLE__)
 #        include <fcntl.h>
-#        include <spawn.h>
 #        include <sys/stdio.h>
 #        include <sys/wait.h>
+#    endif
 
 extern char** environ;
-#    endif
 #endif
 
 /// @brief 向标准错误流写入独立更新器诊断。
@@ -152,28 +152,6 @@ void waitForParent(pid_t pid)
 
 #    if defined(__APPLE__)
 
-/// @brief 启动 macOS App bundle。
-/// @param targetPath App bundle 根路径。
-/// @return 成功创建启动进程时返回 true。
-///
-/// 子进程脱离当前会话后执行系统 open -n，由 LaunchServices 建立新应用实例。
-bool launchTarget(const std::string& targetPath)
-{
-    const pid_t child = fork();
-    if ( child == 0 ) {
-        // 子进程只执行异步启动，不返回更新器主流程。
-        setsid();
-        execl("/usr/bin/open",
-              "open",
-              "-n",
-              targetPath.c_str(),
-              static_cast<char*>(nullptr));
-        _exit(1);
-    }
-    // 父进程只确认 fork 成功，不等待新应用退出。
-    return child > 0;
-}
-
 /// @brief 运行系统工具并等待其结束。
 /// @param executable 系统工具绝对路径。
 /// @param arguments 不含 argv[0] 的参数列表。
@@ -209,6 +187,17 @@ bool runSystemTool(const char*                     executable,
         if ( errno != EINTR ) return false;
     }
     return WIFEXITED(waitStatus) && WEXITSTATUS(waitStatus) == 0;
+}
+
+/// @brief 请求 LaunchServices 启动更新后的 macOS 应用。
+/// @param targetPath App bundle 根路径。
+/// @return 系统 open 工具确认启动请求成功时返回 true。
+/// @note 等待的是短时 open 工具，没有传入 -W，新应用无需先退出。
+bool launchTarget(const std::string& targetPath)
+{
+    // open -n 要求启动新实例。检查工具退出码能将无效应用包或启动错误
+    // 与可执行工具本身已启动的情况区分开。
+    return runSystemTool("/usr/bin/open", { "-n", targetPath });
 }
 
 /// @brief 尽力删除更新过程使用的专属临时目录。
@@ -501,21 +490,41 @@ std::error_code installLinuxExecutable(
     return error;
 }
 
-/// @brief 启动更新后的 Linux 可执行文件。
-/// @param targetPath 可执行文件路径。
-/// @return 成功创建启动进程时返回 true。
-///
-/// 子进程创建新会话并直接 exec 更新后的文件；父更新器不等待应用结束。
+/// @brief 启动更新后的 Linux 可执行文件并检查装载失败。
+/// @param targetPath 已替换的目标可执行文件路径。
+/// @return 系统成功装载程序映像时返回 true。
+/// @details 进程映像一旦被内核装载，应用由其自己的生命周期管理。
+/// 更新器不等待初始化完成，避免安装和应用关闭之间形成相互等待。
+/// @note 支持会话属性的 libc 保留原先的脱离会话行为。
 bool launchTarget(const std::string& targetPath)
 {
-    const pid_t child = fork();
-    if ( child == 0 ) {
-        // exec 失败时使用 _exit，避免运行父进程的静态析构和缓冲刷新。
-        setsid();
-        execl(targetPath.c_str(), targetPath.c_str(), nullptr);
-        _exit(1);
+    // posix_spawn 的 argv 形式需要可写字符指针，字符串由调用端借给系统。
+    std::string path = targetPath;
+    char*       arguments[]{ path.data(), nullptr };
+    pid_t       child{};
+#        if defined(POSIX_SPAWN_SETSID)
+    // 明确要求在新会话中启动，以免终端关闭时顺带终止已更新的程序。
+    posix_spawnattr_t attributes;
+    int               launchError = posix_spawnattr_init(&attributes);
+    if ( launchError == 0 ) {
+        launchError = posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSID);
+        if ( launchError == 0 )
+            launchError = posix_spawn(
+                &child, path.c_str(), nullptr, &attributes, arguments, environ);
+        posix_spawnattr_destroy(&attributes);
     }
-    return child > 0;
+#        else
+    // libc 未提供脱离会话属性时仍检查实际装载结果。
+    const int launchError =
+        posix_spawn(&child, path.c_str(), nullptr, nullptr, arguments, environ);
+#        endif
+    if ( launchError == 0 ) return true;
+
+    // posix_spawn 的返回值直接携带 ENOEXEC、EACCES 等实际错误。
+    writeStderr(
+        "Cannot execute installed program: " +
+        std::error_code(launchError, std::generic_category()).message() + "\n");
+    return false;
 }
 
 #    endif
@@ -587,7 +596,7 @@ long parseParentPid(std::string_view text)
 ///
 /// 主流程假设下载文件已经由主程序完成完整性校验。Windows 通过备份后复制
 /// 支持回滚，Linux 仅通过原子 rename 发布已备齐权限的文件，macOS 交给完整
-/// bundle 安装事务。替换完成后写成功标记并启动新版本。
+/// bundle 安装事务。替换完成后准备成功标记并启动新版本；启动失败撤下标记。
 ///
 /// 退出码约定：
 /// - 参数数量或 PID 非法返回 1，且不触碰下载文件与目标；
@@ -701,11 +710,19 @@ int main(int argc, char* argv[])
     }
 #endif
 
-    // 替换成功后先写标记，新进程启动即可读取完整更新结果。
+    // 启动中的新应用可以立即消费标记，不能等启动返回后补写。
+    // 若装载或系统请求失败，新应用尚未启动，撤下本次预先写入的标记。
     writeUpdateSuccessMarker(targetPath);
 
     // 启动失败不回滚新版本，保留更新结果供用户手工启动和诊断。
     if ( !launchTarget(targetPath.string()) ) {
+        std::error_code markerError;
+        const auto      markerPath = updateSuccessMarkerPath(targetPath);
+        if ( !markerPath.empty() )
+            std::filesystem::remove(markerPath, markerError);
+        if ( markerError )
+            writeStderr("Failed to clear update marker: " +
+                        markerError.message() + "\n");
         writeStderr("Failed to launch updated application\n");
         return 1;
     }
