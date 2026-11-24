@@ -19,6 +19,8 @@ add_library(
   # 加载和运行期同步都使用 SessionUtils，但分别维护各自低频与热路径约束。
   src/logic/session/SessionUtils_Loading.cpp
   src/logic/session/BeatmapSession_Rendering.cpp
+  # 时间点表格在逻辑线程按需投影，独立于相机几何生成和 UI 绘制。
+  src/logic/session/BeatmapSession_TimingTable.cpp
   src/logic/session/SessionUtils.cpp
   src/logic/session/ActionController.cpp
   # 音符稳定身份独立于 entt 实体编号，撤销及协作流程共享该实现。

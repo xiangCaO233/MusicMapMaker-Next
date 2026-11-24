@@ -29,6 +29,7 @@ namespace MMM::Logic
 {
 
 struct AnnotationTableSnapshot;
+struct TimingTableSnapshot;
 
 struct SessionContext;
 class PlaybackController;
@@ -110,6 +111,10 @@ public:
     /// @warning UI 低频轮询。只有发布句柄的共享所有权跨线程，不等待会话锁。
     std::shared_ptr<const AnnotationTableSnapshot>
     requestAnnotationTableSnapshot();
+
+    /// @brief 请求逻辑线程刷新时间点表格，并保活最近一份只读数据。
+    /// @warning UI 在表格可见时读取，不等待保护可变上下文的会话锁。
+    std::shared_ptr<const TimingTableSnapshot> requestTimingTableSnapshot();
 
     /// @brief 获取共享上下文的只读引用（通常供 UI 渲染层读取状态）
     const SessionContext& getContext() const { return *m_ctx; }
@@ -327,6 +332,22 @@ private:
     /// @brief 在渲染缓存之后投影批注表。
     /// @warning 每次活动会话更新可调用，无请求时只检查标志。
     void publishAnnotationTableSnapshot();
+
+    /// @brief 按需投影当前谱面完整的时间点表格。
+    /// @warning 每轮活动会话更新可调用，无请求仅检查一个标志。
+    void publishTimingTableSnapshot();
+
+    /// @brief UI 写、逻辑线程读写。连续请求合并，relaxed 只传递意图。
+    /// @warning 活动会话每轮检查，关表后不启动新的全表投影。
+    std::atomic<bool> m_timingTableRequested{ false };
+
+    /// @brief 逻辑线程发布、UI 读取，保活已排序的时间点表格数据。
+    /// @warning 请求或发布时复制句柄，旧表跨编辑或会话销毁继续有效。
+    PublishedSharedPtr<const TimingTableSnapshot> m_timingTableSnapshot;
+
+    /// @brief 逻辑侧已经投影的滚动缓存修订，载入时清空以撤回已有发布。
+    /// @note 由唯一写者直接查询，避免每次比较时复制已发布的共享句柄。
+    std::optional<std::uint64_t> m_timingTableRevision;
 
     /// @brief UI 轮询设置标志，逻辑更新消费合并的待处理请求。
     /// @warning 每次活动逻辑更新可能读取一次，relaxed 仅传递请求，不传数据。

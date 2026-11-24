@@ -1258,7 +1258,11 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
         if ( currentSysTime - m_ctx->lastSnapshotTime <
              IDLE_UPDATE_MIN_INTERVAL_SECONDS ) {
             // 已有干净缓存时仍响应表格轮询，无需为此生成完整渲染快照。
-            if ( isActiveSession ) publishAnnotationTableSnapshot();
+            // 两个请求彼此独立，开启时间点表不触发额外的批注文字投影。
+            if ( isActiveSession ) {
+                publishAnnotationTableSnapshot();
+                publishTimingTableSnapshot();
+            }
             // 这里跳过空闲尾部工作，不丢弃此前已经消费的命令或资源状态变化。
             return;
         }
@@ -1488,8 +1492,12 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
         // 只有实际生成快照才推进发布时刻，跳过轮次不延后下一次可发布时间。
         m_lastRenderSnapshotTime = currentSysTime;
     }
-    // 活动会话即使没有可见主画布，也可按请求发布批注表。普通更新只读请求标志。
-    if ( isActiveSession ) publishAnnotationTableSnapshot();
+    // 主画布隐藏时仍允许独立辅助表格更新，检查请求不生成相机几何。
+    // 只让活动会话发布，避免后台标签在一次切换后继续重建整份表格。
+    if ( isActiveSession ) {
+        publishAnnotationTableSnapshot();
+        publishTimingTableSnapshot();
+    }
 }
 
 }  // namespace MMM::Logic

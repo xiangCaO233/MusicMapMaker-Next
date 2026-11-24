@@ -38,6 +38,7 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
+#include "logic/TimingTableSnapshot.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/SafeParse.h"
@@ -918,107 +919,6 @@ std::string_view getTimingPointsTableBeatmapKey(
         return snapshot.beatmapPathKey;
     }
     return snapshot.beatmapName;
-}
-
-/// @brief 判定 Timeline 表格当前取得的快照是否属于活动谱面。
-///
-/// @details 状态判定：
-/// - 无活动 Session 返回 Close。
-/// - Logo 占位会话返回 Close。
-/// - Session 正在切换谱面且快照为空时返回 AwaitingSnapshot。
-/// - 快照存在但无谱面时根据活动上下文判断等待或关闭。
-/// - 快照 beatmap key 与活动谱面不匹配时等待新代际。
-/// - key 匹配且快照有效时返回 Ready。
-/// - 判定只比较身份，不准备或消费快照。
-/// - 调用方在 session mutex 保护下取得活动会话指针。
-/// @param activeSession 当前活动会话观察指针。
-/// @param snapshot Timeline 当前快照观察指针。
-/// @return 无活动谱面时关闭，快照尚未追上时等待，身份一致时可绘制。
-/// @warning UI 热路径：每个打开的表格每帧调用，不复制共享所有权。
-TimelineTableSnapshotStatus getTimelineTableSnapshotStatus(
-    const Logic::BeatmapSession*          activeSession,
-    const Common::Render::RenderSnapshot* snapshot)
-{
-    const auto* activeBeatmap =
-        activeSession ? activeSession->getContext().currentBeatmap.get()
-                      : nullptr;
-    return resolveTimelineTableSnapshotStatus(
-        activeBeatmap != nullptr,
-        reinterpret_cast<std::uintptr_t>(activeBeatmap),
-        snapshot != nullptr,
-        snapshot && snapshot->hasBeatmap,
-        snapshot ? snapshot->beatmapInstanceId : 0);
-}
-
-/// @brief 从当前 Session 收集完整 Timing 列表，供表格窗口编辑使用。
-///
-/// @details 收集规则：
-/// - 短暂锁定活动 Session 的递归互斥量。
-/// - 无活动 Session 或 BeatMap 时返回空列表。
-/// - 遍历 Timeline registry 的有效组件视图。
-/// - 每个实体生成独立表格元素。
-/// - 时间、effect、value 和 metadata 从组件按值复制。
-/// - 不依赖 RenderSnapshot 的视口裁剪列表。
-/// - 元素按时间升序稳定排序。
-/// - 同时间元素按 effect 顺序排序。
-/// - 相同时间和类型仍保留各自实体行。
-/// - 释放锁后 ImGui 只处理值语义副本。
-/// - 本函数不修改 registry 或选择集合。
-/// - 完整列表只在表格窗口打开时构建。
-std::vector<Common::Render::TimelineInteractiveElement>
-collectTimelineElements()
-{
-    std::vector<Common::Render::TimelineInteractiveElement> elements;
-    auto& engine = Logic::EditorEngine::instance();
-    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
-    auto                                  session = engine.getActiveSession();
-    if ( !session ) return elements;
-
-    auto& registry = session->getContext().timelineRegistry;
-    auto  view     = registry.view<const Logic::TimelineComponent>();
-    elements.reserve(view.size());
-
-    for ( auto entity : view ) {
-        const auto& tc = view.get<const Logic::TimelineComponent>(entity);
-        Common::Render::TimelineInteractiveElement el;
-        // registry 中一段就是一个实体，复制定义不会增加表格行。
-        // 运行时虚拟积分点不属于这个 registry，也不进入选择和剪贴板。
-        // 表格可用整体移动与删除，范围细调由专门窗口提交一次动作。
-        el.interpolation = tc.m_interpolation;
-        el.time          = tc.m_timestamp;
-        el.y             = 0.0f;
-
-        if ( tc.m_effect == ::MMM::TimingEffect::BPM ) {
-            el.effects   = Common::Render::SCROLL_EFFECT_BPM;
-            el.bpmEntity = entity;
-            el.bpmValue  = tc.m_value;
-        } else if ( tc.m_effect == ::MMM::TimingEffect::SCROLL ) {
-            el.effects      = Common::Render::SCROLL_EFFECT_SCROLL;
-            el.scrollEntity = entity;
-            el.scrollValue  = tc.m_value;
-        } else if ( tc.m_effect == ::MMM::TimingEffect::JUMP ) {
-            el.effects    = Common::Render::SCROLL_EFFECT_JUMP;
-            el.jumpEntity = entity;
-            el.jumpValue  = tc.m_value;
-        } else if ( tc.m_effect == ::MMM::TimingEffect::STOP ) {
-            el.effects    = Common::Render::SCROLL_EFFECT_STOP;
-            el.stopEntity = entity;
-            el.stopValue  = tc.m_value;
-        } else if ( tc.m_effect == ::MMM::TimingEffect::HS ) {
-            el.effects  = Common::Render::SCROLL_EFFECT_HS;
-            el.hsEntity = entity;
-            el.hsValue  = tc.m_value;
-        }
-
-        elements.push_back(el);
-    }
-
-    std::stable_sort(
-        elements.begin(), elements.end(), [](const auto& a, const auto& b) {
-            if ( std::abs(a.time - b.time) > 1e-6 ) return a.time < b.time;
-            return a.effects < b.effects;
-        });
-    return elements;
 }
 
 /// @brief 将时间点表格当前选中行写入编辑器级 Timeline 剪贴板。
@@ -2263,7 +2163,7 @@ void TimelineCanvas::renderEventCreationPopup()
 /// - 新建高亮超过截止时间后自然失效。
 /// - 绑定实体失效时由刷新与窗口生命周期清理。
 /// - 快照等待路径不残留半初始化 ImGui table。
-/// - 任一提前返回都不会遗留 session mutex。
+/// - 当前表格身份与行只读于同一发布句柄，提前返回不接触会话长锁。
 ///
 /// @details 七列职责：
 /// - 选择列提供行选择、范围选择和拖选的交互区域。
@@ -2382,23 +2282,28 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         finishKeepSpeedBinding();
     };
 
-    auto&                       engine = Logic::EditorEngine::instance();
-    TimelineTableSnapshotStatus snapshotStatus;
-    {
-        // 会话锁保证读取 currentBeatmap 地址令牌时不会与谱面切换并发。
-        std::lock_guard<std::recursive_mutex> sessionLock(
-            engine.getSessionMutex());
-        const int32_t activeIndex = engine.getActiveSessionIndex();
-        const auto*   activeEntry = engine.getSessionEntry(activeIndex);
-        if ( !activeEntry || activeEntry->isLogoPlaceholder ||
-             !activeEntry->session ) {
-            // 没有真实活动谱面会话时表格没有合法数据所有者。
-            closeTableWindow();
-            return;
-        }
-        snapshotStatus = getTimelineTableSnapshotStatus(
-            activeEntry->session.get(), m_currentSnapshot);
+    auto&      engine      = Logic::EditorEngine::instance();
+    const auto activeTable = Logic::readActiveTimingTable();
+    if ( !activeTable ) {
+        // 关闭最后一个真实谱面后，Logo 占位页不能接管旧窗口。
+        closeTableWindow();
+        return;
     }
+
+    // 尚未投影时保留打开请求，已有表格和相机快照须来自同一个谱面实例。
+    // 普通帧只借用完整行列表，不读取、复制或排序可变 Timing 注册表。
+    // 空 optional 表示活动列表没有可读会话，存在但为空的句柄表示尚未发布。
+    // 前者结束会话归属，后者必须维持菜单刚提交的打开意图。
+    const auto& table = *activeTable;
+    const auto  snapshotStatus =
+        table
+             ? resolveTimelineTableSnapshotStatus(
+                  table->beatmapInstanceId != 0,
+                  table->beatmapInstanceId,
+                  m_currentSnapshot != nullptr,
+                  m_currentSnapshot && m_currentSnapshot->hasBeatmap,
+                  m_currentSnapshot ? m_currentSnapshot->beatmapInstanceId : 0)
+             : TimelineTableSnapshotStatus::AwaitingSnapshot;
     if ( snapshotStatus == TimelineTableSnapshotStatus::Close ) {
         closeTableWindow();
         return;
@@ -2502,7 +2407,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             ImGui::BeginDisabled();
         }
 
-        auto elements = collectTimelineElements();
+        // 活动快照句柄覆盖整个当前帧，任何绘制或按钮回调都可借用同一代行数据。
+        // 下一轮逻辑发布或关闭会话不会同时改变这一代实体标识。
+        const auto& elements = table->rows;
         // 表格元素来自完整列表，不受当前时间线可见范围裁剪。
         // 因此视口之外的点也可以打开属性，不重新从 hover 或选区推断目标。
         // 本地编辑草稿与多选集合独立，单个属性窗不会批量覆盖其它选中行。
@@ -2537,7 +2444,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 m_shouldFocusNextFrame = false;
             }
         };
-        // 完整表格元素独立从 Session 收集，不受当前视口裁剪范围限制。
+        // 拍号换算继续使用同一谱面的渲染快照，避免切换时混用上一谱面的锚点。
         const auto beatTimeline =
             buildTimingTableBeatTimeline(*m_currentSnapshot);
         const double tableFallbackBpm =

@@ -33,6 +33,7 @@
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ProjectController.h"
 #include "logic/ProjectResourceService.h"
+#include "logic/TimingTableSnapshot.h"
 #include "logic/UnlimitedIdleUpdateGate.h"
 #include "logic/audio/CanvasAudioPreparation.h"
 #include "logic/ecs/components/InteractionComponent.h"
@@ -1292,6 +1293,24 @@ std::optional<ActiveAnnotationTableRead> readActiveAnnotationTable()
         active->session->requestAnnotationTableSnapshot(),
         active->session->isCollaborationOfflineReadOnly()
     };
+}
+
+/// @brief 使用一代已发布的列表路由活动时间点表格请求。
+/// @warning 仅在表格可见时调用。列表保活所选会话，读者不等待逻辑线程的更新锁。
+std::optional<std::shared_ptr<const TimingTableSnapshot>>
+readActiveTimingTable()
+{
+    const auto registry =
+        EditorEngine::instance().impl().m_sessionRegistry.publishedSnapshot();
+    // 活动索引与列表一同发布，关闭前方标签时不能按失效索引转投其他会话。
+    const auto active = std::ranges::find(registry->sessions,
+                                          registry->activeIndex,
+                                          &SessionSnapshotEntry::index);
+    if ( active == registry->sessions.end() || active->isLogoPlaceholder )
+        return std::nullopt;
+
+    // 返回值只持有表格数据，旧行可能跨关闭继续绘制，但不会阻止会话释放。
+    return active->session->requestTimingTableSnapshot();
 }
 
 /// @brief 按索引借用注册表条目，不延长会话或列表的生命周期。
