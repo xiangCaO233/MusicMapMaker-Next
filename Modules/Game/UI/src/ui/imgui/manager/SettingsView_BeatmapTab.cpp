@@ -809,11 +809,8 @@ void SettingsView::drawBeatmapSettings()
                     m_importBackgroundVideo =
                         target == BeatmapResourceTarget::Background &&
                         meta.cover_type == CoverType::VIDEO;
-                    m_resourceImportProjectRoot = snapshot.projectRoot;
-                    m_resourceImportBeatmapPath = snapshot.metadata.map_path;
-                    // 请求仅保存值，不把 project 或 beatmap
-                    // 观察指针带到弹窗下一帧。
-                    // 对话框可能跨帧返回，结果必须与这两项身份重新比较。
+                    // 保留点击时的载图实例；同路径重载后也不能接收旧结果。
+                    m_resourceImportSource = m_beatmapSettings;
                     m_beatmapResourceImportError.clear();
                 }
                 // 统一提示入口显式采用美学配置，不继承设置窗口放大的内边距。

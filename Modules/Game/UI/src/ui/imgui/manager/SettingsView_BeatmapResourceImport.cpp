@@ -11,6 +11,7 @@
 #include "config/skin/translation/Translation.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "logic/BeatmapSession.h"
+#include "logic/BeatmapSettingsSnapshot.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectController.h"
 #include "logic/ProjectResourceService.h"
@@ -31,12 +32,14 @@
 #include <algorithm>
 #include <filesystem>
 #include <imgui.h>
+#include <memory>
 #include <mutex>
 #include <nfd.h>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 /// @file SettingsView_BeatmapResourceImport.cpp
@@ -115,6 +118,7 @@ void SettingsView::renderBeatmapResourcePicker(float dpiScale)
                 m_beatmapResourceImportError = NFD_GetError();
             }
             m_beatmapResourceTarget = BeatmapResourceTarget::None;
+            m_resourceImportSource.reset();
             return;
         }
 
@@ -124,8 +128,8 @@ void SettingsView::renderBeatmapResourcePicker(float dpiScale)
         config.path              = settings.lastFilePickerPath;
         config.countSelectionMax = 1;
         config.flags             = ImGuiFileDialogFlags_Modal |
-                                   ImGuiFileDialogFlags_HideColumnType |
-                                   ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                       ImGuiFileDialogFlags_HideColumnType |
+                       ImGuiFileDialogFlags_ReadOnlyFileNameField;
         dialog->OpenDialog(PICKER_ID,
                            title,
                            audio   ? ".mp3,.ogg,.wav,.flac,.opus,.aac,.m4a"
@@ -153,6 +157,7 @@ void SettingsView::renderBeatmapResourcePicker(float dpiScale)
         }
         dialog->Close();
         m_beatmapResourceTarget = BeatmapResourceTarget::None;
+        m_resourceImportSource.reset();
     }
 }
 
@@ -164,8 +169,11 @@ void SettingsView::renderBeatmapResourcePicker(float dpiScale)
 /// 封面和背景只改各自元数据字段，背景类型与请求一致；已有封面不覆盖。
 ///
 /// 类型判定及音频探针先于会话锁执行，不合格文件不占用工程目录。
-/// 项目根和谱面路径作为一次选择事务的身份，复制前在锁内同时核对。
-/// 文件成功复制后才改设置页草稿，失败不碰用户输入的其他元数据。
+/// 工程根与载图实例共同标识选择事务，复制前在锁内同时核对。
+/// 文件成功复制后才提交资源差量，设置页等待发布的新快照回显结果。
+/// 用户尚未结束输入的字段继续留在草稿，资源选择不隐式确认其它控件。
+/// 选择器关闭即销毁请求；素材不匹配或项目已切换时不产生编辑命令。
+/// 载图身份在复制前及会话消费时各核对一次，因为两次处理之间可能再次重载。
 /// 主音频登记后反查资源表，防止绑定到没有 Main 条目的普通文件。
 /// 已登记的同路径文件即使导入命令去重，也仍允许绑定为谱面主音频。
 /// 最终使用 CmdUpdateBeatmapMetadata 保持采样重定向和保存逻辑一致。
@@ -194,16 +202,18 @@ void SettingsView::importBeatmapResource(const std::filesystem::path& source)
 
     auto& engine = Logic::EditorEngine::instance();
     std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
-    // 单独比较谱面文件名不足以区分工程，必须同时核对工程根目录。
-    // 两项比较都在同一锁内，避免校验后会话被替换再绑定旧路径。
-    auto* project = engine.getCurrentProject();
-    auto  session = engine.getActiveSession();
-    if ( !project ||
+    // 同路径重载会得到不同控制块。只有原会话的原载图实例可以接收结果。
+    // 比较会话是为了限制活动标签发生变化后返回的选择结果。
+    // 比较载图则覆盖会话不变但替换内部谱面的情况。
+    const auto& request = m_resourceImportSource;
+    auto*       project = engine.getCurrentProject();
+    const auto  session = engine.getActiveSession();
+    if ( !request || !project ||
          Logic::ProjectController::instance().isCurrentProjectTemporary() ||
-         !session || !session->getContext().currentBeatmap ||
-         project->m_projectRoot != m_resourceImportProjectRoot ||
-         session->getContext().currentBeatmap->m_baseMapMetadata.map_path !=
-             m_resourceImportBeatmapPath ) {
+         request->projectRoot != project->m_projectRoot || !session ||
+         request->session.lock() != session ||
+         !session->getContext().currentBeatmap ||
+         request->beatmap.lock() != session->getContext().currentBeatmap ) {
         m_beatmapResourceImportError =
             TR("ui.settings.beatmap.import_context_changed").toString();
         return;
@@ -218,24 +228,9 @@ void SettingsView::importBeatmapResource(const std::filesystem::path& source)
         m_beatmapResourceImportError = imported.error().message();
         return;
     }
-    auto updatedMeta = m_editingMeta;
-    // 标题等文本继续采用本页草稿；可能被其他入口改动的资源和结构字段
-    // 则重新取会话当前值，避免文件选择器打开期间的变化被整份命令覆盖。
-    // 音频与封面/背景分别刷新，随后只覆盖本次按钮负责的目标字段。
-    // 视频起点和偏移也属于背景结构，不应因为导入封面而回退旧值。
-    const auto& liveMeta =
-        session->getContext().currentBeatmap->m_baseMapMetadata;
-    updatedMeta.track_count     = liveMeta.track_count;
-    updatedMeta.song_file_hint  = liveMeta.song_file_hint;
-    updatedMeta.main_audio_path = liveMeta.main_audio_path;
-    updatedMeta.cover_path      = liveMeta.cover_path;
-    updatedMeta.main_cover_path = liveMeta.main_cover_path;
-    updatedMeta.cover_type      = liveMeta.cover_type;
-    updatedMeta.video_starttime = liveMeta.video_starttime;
-    updatedMeta.bgxoffset       = liveMeta.bgxoffset;
-    updatedMeta.bgyoffset       = liveMeta.bgyoffset;
-    // 这份快照仍在同一会话锁内，赋值过程中不会与逻辑线程的修改交错。
-    // 命令提交后由会话规范化路径，UI 不私自改写当前 BeatMap 对象。
+    // 以此刻的会话值作为差量基线，文件操作不提交本页未发布的文本草稿。
+    auto baseline    = session->getContext().currentBeatmap->m_baseMapMetadata;
+    auto updatedMeta = baseline;
     if ( audio ) {
         // 导入既有工程文件时命令可能因去重返回“未新增”；仍需确认资源表
         // 中确实有对应 Main 条目，不能只凭文件复制成功就绑定谱面。
@@ -258,6 +253,7 @@ void SettingsView::importBeatmapResource(const std::filesystem::path& source)
         // 外部格式提示字段优先于旧主音频路径，保持与下拉选择一致。
         updatedMeta.song_file_hint = *imported;
         updatedMeta.main_audio_path.clear();
+        updatedMeta.song_file_hint_cleared = false;
     } else if ( m_beatmapResourceTarget == BeatmapResourceTarget::Cover ) {
         updatedMeta.cover_path = *imported;
     } else {
@@ -268,9 +264,14 @@ void SettingsView::importBeatmapResource(const std::filesystem::path& source)
             updatedMeta.cover_path = *imported;
     }
 
-    // 文件已复制并登记后只发送一次完整元数据命令，保留同帧其他字段草稿。
-    m_editingMeta = updatedMeta;
-    engine.pushCommand(Logic::CmdUpdateBeatmapMetadata{ updatedMeta });
+    // 只发布本次资源操作修改的字段。消费队列时再次检查载图实例，
+    // 并把这些字段合并到最新元数据，保留队列中先到的其他修改。
+    Logic::submitBeatmapSettingsCommand(
+        *request,
+        Logic::CmdUpdateBeatmapMetadata{
+            .baseMeta = std::move(updatedMeta),
+            .settingsBaseline =
+                std::make_shared<const BaseMapMeta>(std::move(baseline)) });
     m_beatmapResourceImportError.clear();
 }
 
