@@ -38,11 +38,14 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <future>
+#include <ice/thread/ThreadPool.hpp>
 #include <initializer_list>
 #include <iterator>
 #include <memory>
 #include <string>
 #include <system_error>
+#include <thread>
 
 namespace
 {
@@ -109,6 +112,107 @@ namespace MMM::UI
 {
 /// @brief 测试只准备来源与选择，实际解析、导入及历史使用生产实现。
 struct BpmBeatmapImportTestAccess {
+    /// @brief 使用两个短 PCM 文件和繁忙文件池验证分析请求可立即替换。
+    /// @param root 已打开隔离项目的构建目录，资源表包含这两个音轨 ID。
+    /// @return 两个请求都在文件池仍繁忙时返回，且仅第二段分析进入 UI。
+    /// @note 夹具只写构建目录，不依赖真实音频设备或播放引擎生命周期。
+    /// @details 时长差异单独验证真实 PCM 已经读入，而非仅进入就绪状态。
+    /// 文件池门闩同时固定任务开始顺序，排除机器负载改变测试语义。
+    /// UI 对象同一时刻只由测试线程或外层观察端访问，切换点通过 future 同步。
+    // 文件池阻塞仅用于测试，不接入生产线程池的调度策略。
+    static bool checkAnalysisSwitch(const std::filesystem::path& root)
+    {
+        // 标准小端单声道 PCM。不同帧数让错误采纳旧结果可直接观察。
+        const auto write = [](const auto& path, std::uint32_t frames) {
+            std::ofstream output(path, std::ios::binary);
+            // RIFF 字段与 PCM 样本固定小端表示，不直接写本机 uint32_t 的字节。
+            const auto integer = [&](std::uint32_t value, int bytes) {
+                for ( int i = 0; i < bytes; ++i )
+                    output.put(static_cast<char>((value >> (i * 8)) & 255));
+            };
+            // 总长度包含两个块头和正文，不包含 RIFF 自己的前八个字节。
+            output.write("RIFF", 4);
+            integer(36 + frames * 2, 4);
+            // 常规十六字节 fmt 描述未压缩 PCM，FFmpeg 可按数据长度精确求帧数。
+            output.write("WAVEfmt ", 8);
+            integer(16, 4);
+            integer(1, 2);
+            integer(1, 2);
+            // 48 kHz 单声道 16 位，每帧两字节，字节率必须和块对齐一致。
+            integer(48000, 4);
+            integer(96000, 4);
+            integer(2, 2);
+            integer(16, 2);
+            // 静音样本也要实际写入，不能只构造合法头部以绕过完整解码。
+            output.write("data", 4);
+            integer(frames * 2, 4);
+            const std::string samples(frames * 2, '\0');
+            output.write(samples.data(),
+                         static_cast<std::streamsize>(samples.size()));
+            return output.good();
+        };
+        // 第一条轨为 0.1 秒，第二条为 0.2 秒。采纳旧时长会稳定失败。
+        if ( !write(root / "song-a.wav", 4800) ||
+             !write(root / "song-b.wav", 9600) )
+            return false;
+
+        // 只初始化真实线程池，避免误走 AudioManager 已有的播放缓存。
+        auto& pools = Runtime::AppThreadPool::instance();
+        pools.init();
+        bool passed = false;
+        {
+            BpmMeasurementToolView tool("BpmQueuedAnalysis");
+            std::promise<void>     unblock;
+            const auto             gate = unblock.get_future().share();
+            // 每个文件工作者先收到一个阻塞任务。始终释放门闩后才等待测试线程。
+            for ( int i = 0; i < 4; ++i )
+                pools.getFileThreadPool()->enqueue([gate] { gate.wait(); });
+            // 同一输入任务顺序提交选曲。外层在这期间只观察 future，
+            // 保证对 UI 成员的读写不会与测试自己的断言并发。
+            auto input = std::async(std::launch::async, [&tool] {
+                tool.m_selectedAudioTrackId = "song-a";
+                tool.m_selectedAudioSyncKey = "a";
+                tool.requestAnalyzeSelectedTrack();
+                // 用户可在 A 尚未探测时点 B，旧任务必须立即失去交付资格。
+                tool.m_selectedAudioTrackId = "song-b";
+                tool.m_selectedAudioSyncKey = "b";
+                tool.requestAnalyzeSelectedTrack();
+                return tool.m_analysisRequest &&
+                       tool.m_analysisRequest->key == "b" &&
+                       tool.m_duration == 0.0 && tool.m_waveTimes.empty();
+            });
+            // 即使回归为同步等待，也释放门闩再取任务结果，避免失败后无法退出。
+            const bool returned = input.wait_for(std::chrono::seconds(2)) ==
+                                  std::future_status::ready;
+            // 此前文件池不可能完成第一条轨，returned 因而直接反映 UI 是否等待。
+            unblock.set_value();
+            // 工作提交端退出后才从测试主线程读取工具字段，确保观察没有数据竞争。
+            if ( input.get() && returned ) {
+                // 轮询实际交付路径，消化取消任务并让最新请求获得工作槽。
+                // 超时仅用于测试失败退出，生产轮询使用零等待并随正常帧推进。
+                const auto deadline =
+                    std::chrono::steady_clock::now() + std::chrono::seconds(10);
+                while ( std::chrono::steady_clock::now() < deadline &&
+                        tool.m_duration == 0.0 ) {
+                    tool.consumePendingAnalysis();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                // 时长验证 PCM，非空包络验证完整结果进入消费端。
+                // 身份验证 B 的结果沿正常路径提交，而不是测试直接设置时长。
+                passed = std::abs(tool.m_duration - 0.2) < 0.005 &&
+                         !tool.m_waveTimes.empty() &&
+                         tool.m_activeAnalysisKey == "b";
+            }
+            // 先销毁观察端并回收任务，再关闭其借用的解码线程池。
+        }
+        // 测试组随后还会建立别的工作区，因此恢复线程池到未初始化状态。
+        pools.shutdown();
+        if ( !passed )
+            XERROR(
+                "BPM analysis did not publish only the latest selected track");
+        return passed;
+    }
+
     /// @brief 读取真实向导草稿和提交模型，验证 UTF-8 文本未静默裁剪。
     /// @param root 已关闭工程的隔离测试目录。
     /// @return 完整元数据可提交并落盘，手工编辑优先于模板预填。
@@ -751,7 +855,9 @@ int main(int argc, char** argv)
         return 1;
     auto* project = controller.currentProject();
     // 两个 Main 资源都存在于项目表，用歌曲提示进行真实关联匹配。
-    // 本用例不解码音乐，故无需制造无关的大型音频测试资源。
+    // 导入回归只需资源记录，排队测试随后为这两个路径各生成一小段 PCM。
+    // 保留两个不同资源身份，避免工具错误地把具有相同类型的来源合并。
+    // 自造音频留在构建目录，测试不消费实际工程媒体。
     for ( const auto* id : { "song-a", "song-b" } ) {
         MMM::AudioResource resource;
         resource.m_id   = id;
@@ -772,8 +878,10 @@ int main(int argc, char** argv)
     // 行为检查返回值是本进程唯一成功标准，文件写出成功不能替代功能通过。
     // 关闭项目在返回之前执行，确保资源生命周期也经过生产清理路径。
     // 保存测试注入的资源，向导与生产一致地从发布快照读取。
-    const bool passed = controller.saveProject() &&
-                        MMM::UI::BpmBeatmapImportTestAccess::run(root);
+    const bool passed =
+        controller.saveProject() &&
+        MMM::UI::BpmBeatmapImportTestAccess::run(root) &&
+        MMM::UI::BpmBeatmapImportTestAccess::checkAnalysisSwitch(root);
     // 显式关闭隔离项目，使会话清理完成后才结束测试进程。
     // 夹具保留在构建输出下供失败诊断，不向源码资源目录复制。
     controller.closeProject();

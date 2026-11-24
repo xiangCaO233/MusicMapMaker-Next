@@ -238,10 +238,13 @@ BpmMeasurementToolView::readBoundBeatmapTimings(
 /// @warning 仅点击路径持结果槽短锁；该锁不覆盖解码、FFT 或会话更新。
 bool BpmMeasurementToolView::hasAnalysisPendingForImport() const
 {
+    // 排队请求在旧任务退出后才提交，此时 running 可能已经由旧线程复位。
+    // 新请求仍可能恢复内嵌标记，导入需要同时检查 UI 请求槽与 future。
     // 工作线程先写结果槽再发布完成标志，单独读取 running 会漏掉交付间隙。
     // 读取槽与生产者使用同一把锁，不消费或丢弃其原有分析结果。
     std::lock_guard lock(m_pendingResultMutex);
-    return m_analysisRunning.load(std::memory_order_relaxed) ||
+    return m_analysisRequest.has_value() || m_analysisFuture.valid() ||
+           m_analysisRunning.load(std::memory_order_relaxed) ||
            m_analysisFinished.load(std::memory_order_acquire) ||
            m_pendingResult.has_value();
 }
