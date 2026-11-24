@@ -46,6 +46,56 @@ static bool checkHoldTypeFlags(const std::filesystem::path& output)
            map.m_noteData.notes.size() == 1;
 }
 
+/// @brief 验证数字和文字休息段的时间与顺序经过实际保存后仍然完整。
+/// @param output 当前测试输出名，两个夹具都在同一测试输出目录。
+/// @return 首次加载和再次打开均获得原区间时返回 true。
+/// @details 每种事件名只出现一次，用不同的区间区分顺序反转和默认归零。
+static bool checkBreakRoundTrip(const std::filesystem::path& output)
+{
+    // 从同一测试输出派生两个文件名，避免导出时覆盖用来对照的源。
+    auto fixture = output;
+    fixture.replace_extension(".break-source.osu");
+    // 导出仍使用 osu 扩展名，两次读取走同一正式分派。
+    auto exported = output;
+    exported.replace_extension(".break-export.osu");
+    constexpr auto BREAKS = "2,1500,2500\nBreak,3500,4500\n";
+    {
+        std::ofstream file(fixture);
+        // 混用两个合法事件名，保持各自原文并核对同一顺序。
+        // 两个区间都位于首个物件之前，便于核对导出章节。
+        // 输入含有效时间点与物件，防止空谱面的拒绝分支提前终止测试。
+        file
+            << "osu file format v14\n[General]\nMode:3\n"
+               "[Metadata]\nTitle:break-roundtrip\n[Difficulty]\nCircleSize:4\n"
+               "[Events]\n"
+            << BREAKS
+            << "[TimingPoints]\n0,500,4,2,0,100,1,0\n[HitObjects]\n"
+               "64,192,5000,1,0,0:0:0:0:\n";
+        if ( !file ) return false;
+    }
+    auto map = MMM::BeatMap::loadFromFile(fixture);
+    // 使用只读查询，缺失的元数据不能在断言阶段被默认插入后掩盖。
+    const auto breaksMatch = [=](const MMM::BeatMap& beatmap) {
+        const auto& properties = beatmap.m_metadata.map_properties;
+        const auto  osu        = properties.find(MMM::MapMetadataType::OSU);
+        if ( osu == properties.end() ) return false;
+        // 完整文本比较才能检出归零和事件调换，条数可能仍正确。
+        const auto breaks = osu->second.find("Events::breaks");
+        return breaks != osu->second.end() && breaks->second == BREAKS;
+    };
+    // 同时核查首次导入和再次打开的结果，避免将错误输出误当作新基准。
+    // sync 与正常导出调用保持一致，更新通用物件元数据和时长。
+    // 再次打开时使用真实落盘的数据，避免在同一内存对象上做无效往返。
+    map.sync();
+    const bool preserved = breaksMatch(map) && map.saveToFile(exported) &&
+                           breaksMatch(MMM::BeatMap::loadFromFile(exported));
+    std::error_code error;
+    std::filesystem::remove(fixture, error);
+    // 两个夹具都只归此用例所有，保留调用方提供的主输入和正式测试输出。
+    std::filesystem::remove(exported, error);
+    return preserved;
+}
+
 /// @brief 运行指定 osu! 输入与输出路径的一致性测试。
 /// @param argc 参数数量，必须包含输入和输出路径。
 /// @param argv 参数数组。
@@ -58,6 +108,8 @@ int main(int argc, char* argv[])
     std::filesystem::path output = argv[2];
 
     if ( !checkHoldTypeFlags(output) ) return 1;
+
+    if ( !checkBreakRoundTrip(output) ) return 1;
 
     XINFO("========================================");
     XINFO("  OSU Consistency Test: {}", input.filename().string());
