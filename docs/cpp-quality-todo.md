@@ -226,11 +226,13 @@
 
   [LoadOSUMap.hpp L247](../Modules/MMM/src/beatmap/LoadOSUMap.hpp#L247)、[BeatMap.cpp L151](../Modules/MMM/src/beatmap/BeatMap.cpp#L151)
 
-- [ ] **R59 · P2 · 工程扫描识别的混合大小写扩展名在打开和保存时被拒绝**
+- [x] **R59 · P2 · 工程扫描识别的混合大小写扩展名在打开和保存时被拒绝**
 
   扫描统一小写，.osu/.mc/.imd/.mmm 的读写分派却比较原始扩展名；列表可见而打开失败。BMS 已有大小写兼容。 仅对用于分派的 ASCII 扩展名归一化，原生文件路径原样交给文件系统。测试四类扩展名混排、非 ASCII 主文件名、按原路径保存并重新打开。
 
   [ProjectDirectoryScanner.cpp L94](../Modules/Game/Logic/src/logic/ProjectDirectoryScanner.cpp#L94)、[BeatMap.cpp L135](../Modules/MMM/src/beatmap/BeatMap.cpp#L135)
+
+  已验证。读取和保存只规范分派用的 ASCII 后缀。四种混合大小写后缀在同一 Unicode 文件名上完成保存、重开、原路径覆盖和再次重开。Linux 与原生 Win10 均通过。
 
 - [ ] **R60 · P2 · osu!mania 横坐标上边界会生成越界轨号**
 

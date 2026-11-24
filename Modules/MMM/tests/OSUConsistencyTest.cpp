@@ -1,8 +1,11 @@
 #include "FormatTestHelpers.hpp"
 #include "TestHelper.hpp"
+#include "config/Utf8Path.h"
 #include "mmm/beatmap/BeatMap.h"
 
+#include <filesystem>
 #include <fstream>
+#include <system_error>
 
 /**
  * @file OSUConsistencyTest.cpp
@@ -96,6 +99,49 @@ static bool checkBreakRoundTrip(const std::filesystem::path& output)
     return preserved;
 }
 
+/// @brief 用完整谱面验证四种后缀的实际保存、打开及原路径再次保存。
+/// @param output 提供工作目录和各测试用例独立的文件名前缀。
+/// @return 四种格式都按原路径保存、读取及再次写出时为真。
+/// @details 使用四种格式共同可表达的简单模型，避免依赖各格式不共通的扩展数据。
+/// 中文及重音字母覆盖原生路径编码，两次保存都使用同一个混合大小写的后缀。
+bool checkMixedCaseExtensions(const std::filesystem::path& output)
+{
+    // 加入一个真实物件，确保输出经过格式 writer 且从磁盘重新解析到内容。
+    MMM::BeatMap source;
+    source.m_baseMapMetadata.track_count = 4;
+    source.m_baseMapMetadata.title       = "mixed case";
+    MMM::Note note;
+    note.m_track     = 1;
+    note.m_timestamp = 1000;
+    source.m_noteData.notes.push_back(note);
+    source.sync();
+
+    // Unicode 部分先转为平台路径，再追加到基名，Windows 不经过 ANSI 代码页。
+    const auto name = MMM::Config::utf8ToPath("歌曲-é");
+    // 仅扩展名参与大小写分派，同一个 Unicode 基名由四个 writer 原样使用。
+    for ( const auto suffix : { ".oSu", ".mC", ".iMd", ".mMm" } ) {
+        // 输出文件的前缀含各 CTest 资源名；并发执行不会覆盖其他测试的结果。
+        auto path = output;
+        path.replace_extension();
+        path += name.native();
+        path += suffix;
+        // 保存分派只读后缀，目标名和源元数据路径都使用传入的 Unicode 名称。
+        if ( !source.saveToFile(path) ) return false;
+        // 依次使用同一原路径完成写入、读取和覆盖，防止只修正加载端。
+        auto loaded = MMM::BeatMap::loadFromFile(path);
+        loaded.sync();
+        // 同时核对路径身份与内部音符。创建了输出文件本身不足以证明成功识别格式。
+        if ( loaded.m_baseMapMetadata.map_path.filename() != path.filename() ||
+             loaded.m_noteData.notes.size() != 1 || !loaded.saveToFile(path) ||
+             MMM::BeatMap::loadFromFile(path).m_noteData.notes.size() != 1 )
+            return false;
+        std::error_code ignored;
+        // 只回收该格式的独立输出，不触碰其余夹具。
+        std::filesystem::remove(path, ignored);
+    }
+    return true;
+}
+
 /// @brief 运行指定 osu! 输入与输出路径的一致性测试。
 /// @param argc 参数数量，必须包含输入和输出路径。
 /// @param argv 参数数组。
@@ -110,6 +156,10 @@ int main(int argc, char* argv[])
     if ( !checkHoldTypeFlags(output) ) return 1;
 
     if ( !checkBreakRoundTrip(output) ) return 1;
+    if ( !checkMixedCaseExtensions(output) ) {
+        XERROR("Mixed-case chart extension round trip failed");
+        return 1;
+    }
 
     XINFO("========================================");
     XINFO("  OSU Consistency Test: {}", input.filename().string());

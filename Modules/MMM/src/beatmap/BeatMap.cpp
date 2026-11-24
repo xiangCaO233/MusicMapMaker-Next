@@ -131,8 +131,9 @@ BeatMap BeatMap::loadFromFile(std::filesystem::path mapFilePath)
             "failed.");
         return {};
     }
-    // UTF-8 转换只作用于扩展名；实际路径继续以 filesystem::path 传递。
-    std::string mapFileExtention = Config::pathToUtf8(mapFilePath.extension());
+    // 规范化仅用于分派；原生路径的大小写和非 ASCII 文件名原样传给读取器。
+    const auto mapExtension =
+        Bms::upper(Config::pathToUtf8(mapFilePath.extension()));
     // BMS 家族共用文本协议，PMS 根据后缀使用独立九键映射。
     // STOP 保留成等待事件，不修改后续物件的音乐时间戳。
     // 相同入口也用于原生保存后的再次导出，不能只在文件浏览器识别后缀。
@@ -141,31 +142,29 @@ BeatMap BeatMap::loadFromFile(std::filesystem::path mapFilePath)
     // BME/BML 的常见长条写法由文本声明决定，不按后缀强行覆盖。
     // 导入保留绑定路径与等待，原生格式往返应保持这些领域字段。
     // 只有外部导出器负责单位转换，BeatMap 分派不重复计算时间。
-    if ( Bms::upper(mapFileExtention) == ".BMS" ||
-         Bms::upper(mapFileExtention) == ".BME" ||
-         Bms::upper(mapFileExtention) == ".BML" ||
-         Bms::upper(mapFileExtention) == ".PMS" ) {
+    if ( mapExtension == ".BMS" || mapExtension == ".BME" ||
+         mapExtension == ".BML" || mapExtension == ".PMS" ) {
         // BMS 家族复用通道解析，PMS 单独解释九键轨道。
         return Bms::load(mapFilePath);
     }
-    if ( mapFileExtention == ".osu" ) {
+    if ( mapExtension == ".OSU" ) {
         // osu! 是带节区的文本格式，由专用读取器完成字段兼容。
         return loadOSUMap(mapFilePath);
     }
-    if ( mapFileExtention == ".mc" ) {
+    if ( mapExtension == ".MC" ) {
         // `.mc` 在本项目语境中是 Malody JSON 谱面，不是 Windows 消息文件。
         return loadMalodyMap(mapFilePath);
     }
-    if ( mapFileExtention == ".imd" ) {
+    if ( mapExtension == ".IMD" ) {
         // IMD 使用 Rhythm Master 格式读取器。
         return loadRMMap(mapFilePath);
     }
-    if ( mapFileExtention == ".mmm" ) {
+    if ( mapExtension == ".MMM" ) {
         // 原生 MMM 格式保留编辑器扩展字段。
         return loadMMMMap(mapFilePath);
     }
     // 未知后缀不尝试按内容猜测，避免把任意资源误当谱面解析。
-    XWARN("Unsupport map file type: {}", mapFileExtention);
+    XWARN("Unsupport map file type: {}", mapExtension);
     return {};
 }
 
@@ -208,7 +207,8 @@ bool BeatMap::saveToFileInternal(std::filesystem::path mapFilePath,
                                  double* audioLeadInMilliseconds) const
 {
     // 保存不从当前来源格式推断目标，允许另存为完成格式转换。
-    std::string mapFileExtention = Config::pathToUtf8(mapFilePath.extension());
+    const auto mapExtension =
+        Bms::upper(Config::pathToUtf8(mapFilePath.extension()));
     // 节拍定义的派生域可能因后续 BPM 编辑而失效，保存消费最新红线副本。
     // 原生保存保留段落；外部保存仍经过同一个采样入口，不能单独沿用旧缓存。
     if ( std::any_of(
@@ -248,8 +248,7 @@ bool BeatMap::saveToFileInternal(std::filesystem::path mapFilePath,
                 return false;
         }
         // 原生 writer 可直接消费值容器，避免含拍域段落时递归准备同一副本。
-        if ( mapFileExtention == ".mmm" )
-            return saveMMMMap(prepared, mapFilePath);
+        if ( mapExtension == ".MMM" ) return saveMMMMap(prepared, mapFilePath);
         // 原生保存保留一个段落，只有外部格式展开独立点。
         // 展开后无段落，递归 writer 分派能安全终止。
         // 原生副本不能递归 saveToFile，避免无终止准备。
@@ -273,7 +272,7 @@ bool BeatMap::saveToFileInternal(std::filesystem::path mapFilePath,
                                           timing.m_timingEffect,
                                           timing.m_timingEffectParameter)) )
             return false;
-    if ( mapFileExtention != ".mmm" &&
+    if ( mapExtension != ".MMM" &&
          std::any_of(
              m_timings.begin(), m_timings.end(), [](const auto& timing) {
                  return timing.m_interpolation.has_value();
@@ -296,14 +295,12 @@ bool BeatMap::saveToFileInternal(std::filesystem::path mapFilePath,
         return sampled.saveToFileInternal(
             std::move(mapFilePath), malodyDocument, audioLeadInMilliseconds);
     }
-    if ( Bms::upper(mapFileExtention) == ".BMS" ||
-         Bms::upper(mapFileExtention) == ".BME" ||
-         Bms::upper(mapFileExtention) == ".BML" ||
-         Bms::upper(mapFileExtention) == ".PMS" ) {
+    if ( mapExtension == ".BMS" || mapExtension == ".BME" ||
+         mapExtension == ".BML" || mapExtension == ".PMS" ) {
         // 不可表达的效果由 writer 拒绝，不静默丢弃谱面内容。
         return Bms::save(*this, mapFilePath);
     }
-    if ( mapFileExtention != ".mmm" &&
+    if ( mapExtension != ".MMM" &&
          std::any_of(m_timings.begin(), m_timings.end(), [](const Timing& t) {
              return t.m_timingEffect == TimingEffect::STOP;
          }) ) {
@@ -312,27 +309,27 @@ bool BeatMap::saveToFileInternal(std::filesystem::path mapFilePath,
             "BMS.");
         return false;
     }
-    if ( mapFileExtention == ".osu" ) {
+    if ( mapExtension == ".OSU" ) {
         // 目标格式由后缀唯一决定，写出器负责必要的字段降级。
         return saveOSUMap(*this, mapFilePath);
     }
-    if ( mapFileExtention == ".mc" ) {
+    if ( mapExtension == ".MC" ) {
         if ( malodyDocument && audioLeadInMilliseconds )
             return buildMalodyMapDocument(
                 *this, *malodyDocument, *audioLeadInMilliseconds);
         // Malody 写出器生成 JSON `.mc` 文件。
         return saveMalodyMap(*this, mapFilePath);
     }
-    if ( mapFileExtention == ".imd" ) {
+    if ( mapExtension == ".IMD" ) {
         // Rhythm Master 写出可能丢弃原生扩展，结果由写出器返回值报告。
         return saveRMMap(*this, mapFilePath);
     }
-    if ( mapFileExtention == ".mmm" ) {
+    if ( mapExtension == ".MMM" ) {
         // 原生格式作为完整领域模型的默认持久化载体。
         return saveMMMMap(*this, mapFilePath);
     }
     // 未知扩展名在创建文件前拒绝，避免留下无法识别的空产物。
-    XWARN("Unsupport save map file type: {}", mapFileExtention);
+    XWARN("Unsupport save map file type: {}", mapExtension);
     return false;
 }
 
