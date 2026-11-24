@@ -663,6 +663,77 @@ static bool testWindowEventBaseDispatch()
     return require(ok && order == 4, "window mouse event base dispatch");
 }
 
+/// @brief 验证发布端不复制常量处理器，并保留旧快照的顺序和重入语义。
+/// @return 复制次数、重入顺序和旧可变回调行为全部符合契约时为真。
+/// @details 使用独立总线，订阅序列不受实际 UI 管理器或其他模块影响。
+/// 复制计数在登记完成后开始比较，初始化 std::function 时允许保存参数。
+/// 以同一类型控制嵌套路径，避免把不同类型的路由差异误认为快照失效。
+/// 可变回调必须在每次分发中从独立状态开始，保留现有 API 的语义。
+static bool testEventSubscriptionSnapshot()
+{
+    using namespace MMM::Event;
+    EventBus bus;
+    int      copies = 0;
+    int      calls  = 0;
+    struct Counted {
+        /// @brief 只记录函子复制和实际调用，不把计时作为判据。
+        int& copies;
+        /// @brief 测试线程持有的命中次数，两次发布都要实际完成。
+        int& calls;
+        Counted(int& copyCount, int& callCount)
+            : copies(copyCount), calls(callCount)
+        {
+        }
+        /// @brief 引用保持指向同一观测值，复制时增加可验证计数。
+        Counted(const Counted& other) : copies(other.copies), calls(other.calls)
+        {
+            ++copies;
+        }
+        /// @brief 外部记录保持引用语义，回调本身可借用常量对象调用。
+        void operator()(const BaseEvent&) const { ++calls; }
+    };
+    bus.subscribe<BaseEvent>(Counted{ copies, calls });
+    // 暂存第一次登记造成的副本，普通发布不再增加这一数值。
+    const int registeredCopies = copies;
+    bus.publish(BaseEvent{});
+    bus.publish(BaseEvent{});
+    if ( copies != registeredCopies || calls != 2 ) return false;
+
+    // 外层调用开始后才注销第二项，嵌套发布看到新表，外层仍使用旧分组。
+    // 先登记注销者，锁若覆盖回调，这里重入注销会阻塞测试。
+    SubscriptionID removed{};
+    bool           nested    = false;
+    bool           entered   = false;
+    int            outerLast = 0;
+    bus.subscribe<BaseEvent>([&](const BaseEvent& event) {
+        // 同一个订阅也出现在内层表中，门闩只允许外层触发一次嵌套发布。
+        if ( entered ) return;
+        entered = true;
+        bus.unsubscribe<BaseEvent>(removed);
+        // 嵌套发布在同一调用线程进行，不借助异步队列来改变快照顺序。
+        nested = true;
+        bus.publish(event);
+        nested = false;
+    });
+    removed = bus.subscribe<BaseEvent>(
+        [&](const BaseEvent&) { outerLast += nested ? 100 : 1; });
+    bus.publish(BaseEvent{});
+    if ( outerLast != 1 || calls != 4 || copies != registeredCopies )
+        return false;
+
+    // 已擦除的可变私有计数应保留原语义，每次发布从独立副本开始。
+    // 旧 mutable 捕获的独立计数每次从零开始，复用同一函数会得到 1+2。
+    int legacySum = 0;
+    bus.subscribe<BaseEvent>(
+        [counter = 0, &legacySum](const BaseEvent&) mutable {
+            legacySum += ++counter;
+        });
+    bus.publish(BaseEvent{});
+    bus.publish(BaseEvent{});
+    // 最后复核已注销对象不会被恢复，其他订阅增删也不复制原常量函子。
+    return legacySum == 2 && outerLast == 1 && copies == registeredCopies;
+}
+
 /// @brief 验证应用级方案、真实输入映射、动作权限、生命周期和配置兼容。
 /// @details 本用例由独立 CTest 进程运行，测试方案不会进入用户的生产注册表。
 /// 配置目录由 mmm_register_test_case 隔离，不读写真实用户的键位设置。
@@ -966,5 +1037,6 @@ int main(int argc, char** argv)
     ok &= testMenuHotkeysWithoutMenuBar(*observer);
     ok &= testMobileInputPolicy();
     ok &= testWindowEventBaseDispatch();
+    ok &= testEventSubscriptionSnapshot();
     return ok ? 0 : 1;
 }

@@ -5,7 +5,6 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
-#include <shared_mutex>
 #include <unordered_map>
 #include <utility>
 
@@ -33,24 +32,48 @@ uint64_t nextStaticTypeId()
 }  // namespace detail
 
 struct EventBus::Impl {
-    /// @brief 一条已类型擦除的订阅记录。
-    struct SubscriberInfo {
+    /// @brief 一条发布期间保持存活的类型擦除订阅。
+    struct Subscription {
         /// @brief 用于精确取消订阅的进程内编号。
         SubscriptionID id;
-        /// @brief 已类型擦除的同步回调。
+        /// @brief 已调整类型地址的同步回调。
         std::function<void(const void*)> callback;
+        /// @brief 已擦除或可变的旧回调继续在调用前复制。
+        bool copyOnPublish;
     };
 
-    /// @brief 按事件类型 ID 分组的订阅表。
-    std::unordered_map<uint64_t, std::vector<SubscriberInfo>> subscribers;
+    /// @brief 表与分组都是只读快照，修改时只复制受影响的分组。
+    /// @details 分组元素独立共享，写者复制分组时不触碰正在执行的函子。
+    /// 同一事件的多个父类均从同一张表查询，避免在分发途中混入后发布的订阅状态。
+    using Group = std::vector<std::shared_ptr<const Subscription>>;
+    using Table = std::unordered_map<uint64_t, std::shared_ptr<const Group>>;
 
-    /// @brief 保护订阅表结构和其中所有订阅记录的读写锁。
-    /// @note 发布只持有共享锁复制快照，增删订阅需要独占锁。
-    std::shared_mutex mutex;
+    /// @brief 仅在低频订阅增删阶段串行安排快照修改。
+    std::mutex writerMutex;
+    /// @brief 只保护顶层指针交换，不覆盖表查找、复制、销毁或回调。
+    std::mutex snapshotMutex;
+    /// @brief 当前已公开的所有订阅分组。
+    std::shared_ptr<const Table> subscribers = std::make_shared<const Table>();
+    /// @brief 只由持有 writerMutex 的线程推进，无需原子。
+    SubscriptionID nextId{ 0 };
 
-    /// @brief 所有订阅共享的自增 ID。
-    /// @note 仅要求唯一性，编号顺序不表达回调优先级。
-    std::atomic<SubscriptionID> nextId{ 0 };
+    /// @brief 获取同步发布所需的唯一快照所有权。
+    /// @warning 逐输入事件路径；复制一次所有权让任意嵌套分发保活旧表。
+    /// 锁内只有固定大小的指针复制，不会等待低频表构造。
+    std::shared_ptr<const Table> snapshot()
+    {
+        std::lock_guard lock(snapshotMutex);
+        return subscribers;
+    }
+
+    /// @brief 交换整个已完成的表，旧表在锁外释放。
+    /// @param next 写者在发布前已经构建完成的不可变快照。
+    /// @note 发布锁从不覆盖容器构造，也不覆盖用户捕获对象的析构。
+    void replace(std::shared_ptr<const Table> next)
+    {
+        std::lock_guard lock(snapshotMutex);
+        subscribers.swap(next);
+    }
 };
 
 /// @brief 创建拥有独立订阅表的事件总线。
@@ -68,75 +91,81 @@ EventBus& EventBus::instance()
     return evtBus;
 }
 
-/// @brief 将已类型擦除的回调登记到对应事件类型下。
-/// @param typeId 具体事件类型的进程内编号。
-/// @param callback 发布时同步调用的回调。
-/// @return 新订阅的唯一编号。
+/// @brief 创建订阅并发布含新增记录的快照。
+/// @warning 低频操作，分配与表构造不占用发布快照锁。
 SubscriptionID EventBus::subscribeImpl(
-    uint64_t typeId, std::function<void(const void*)> callback)
+    uint64_t typeId, std::function<void(const void*)> callback,
+    bool copyOnPublish)
 {
-    // 独占锁保证分组容器扩容和记录追加不会与发布快照竞争。
-    std::unique_lock lock(m_impl->mutex);
-    // 零值保留给无效令牌，因此首次生成的有效编号从一开始。
-    const SubscriptionID id = ++m_impl->nextId;
-    m_impl->subscribers[typeId].push_back({ id, std::move(callback) });
+    // 旧表在 writerMutex 解锁后才释放，捕获析构可以安全重入总线。
+    std::shared_ptr<const Impl::Table> oldTable;
+    std::unique_lock                   writer(m_impl->writerMutex);
+    oldTable            = m_impl->snapshot();
+    auto  next          = std::make_shared<Impl::Table>(*oldTable);
+    auto& previousGroup = (*next)[typeId];
+    auto  group = previousGroup ? std::make_shared<Impl::Group>(*previousGroup)
+                                : std::make_shared<Impl::Group>();
+    // 保留同组登记次序，零继续作为无效令牌。
+    const auto id = ++m_impl->nextId;
+    group->push_back(std::make_shared<const Impl::Subscription>(
+        Impl::Subscription{ id, std::move(callback), copyOnPublish }));
+    previousGroup = std::move(group);
+    m_impl->replace(std::move(next));
     return id;
 }
 
-/// @brief 从指定事件类型分组移除匹配订阅。
-/// @param typeId 订阅登记时使用的事件类型编号。
-/// @param id 需要移除的订阅编号。
+/// @brief 从后续发布的快照移除此订阅，在途发布继续保留旧快照。
+/// @param typeId 订阅登记时使用的类型编号。
+/// @param id 类型内要移除的订阅令牌，重复注销没有副作用。
+/// @note 支持回调注销自己或之后的回调。外层发布保持整批顺序，
+/// 从回调再次发布时则读取已经提交的新表。
 void EventBus::unsubscribeImpl(uint64_t typeId, SubscriptionID id)
 {
-    // 查找和擦除会改变订阅表，整个操作必须持有独占锁。
-    std::unique_lock lock(m_impl->mutex);
-    const auto       subscriberIt = m_impl->subscribers.find(typeId);
-    // 重复取消或类型不匹配视为空操作，便于 RAII 清理路径保持幂等。
-    if ( subscriberIt == m_impl->subscribers.end() ) return;
+    std::shared_ptr<const Impl::Table> oldTable;
+    std::unique_lock                   writer(m_impl->writerMutex);
+    oldTable         = m_impl->snapshot();
+    const auto entry = oldTable->find(typeId);
+    if ( entry == oldTable->end() ) return;
+    auto group = std::make_shared<Impl::Group>(*entry->second);
+    if ( std::erase_if(*group, [id](const auto& subscription) {
+             return subscription->id == id;
+         }) == 0 )
+        return;
 
-    auto& subscribers = subscriberIt->second;
-    // 同一编号理论上只出现一次，remove_if 同时防御重复记录。
-    subscribers.erase(std::remove_if(subscribers.begin(),
-                                     subscribers.end(),
-                                     [id](const Impl::SubscriberInfo& info) {
-                                         return info.id == id;
-                                     }),
-                      subscribers.end());
+    // 只复制目标分组，旧快照中回调的所有权不会被取消操作提前释放。
+    // 顶层只复制分组句柄。现有发布者可以继续读自己的表，直到返回。
+    auto next = std::make_shared<Impl::Table>(*oldTable);
+    // 空组从表中移除，使无订阅者的活跃事件只承担一次查找。
+    if ( group->empty() )
+        next->erase(typeId);
+    else
+        next->at(typeId) = std::move(group);
+    m_impl->replace(std::move(next));
 }
 
-/// @brief 向精确类型及其父类订阅者同步分发事件。
-/// @param routes 按具体类型到父类顺序排列的分发路由。
-/// @param eventPtr 在本次调用返回前保持有效的事件对象地址。
-/// @warning 输入热路径可能频繁调用；此处会复制回调快照，回调自身不得阻塞。
+/// @brief 按路线在锁外同步执行同一份不可变快照。
+/// @param routes 缓存的具体类型与父类次序。
+/// @param eventPtr 本轮发布借用的完整事件对象。
+/// @details 只在分组有匹配项时计算一次子对象地址，分享给该组的所有订阅。
+/// @warning 输入热路径：只获取一次表。常量处理器无堆分配与回调复制。
 void EventBus::publishImpl(const std::vector<DispatchRoute>& routes,
                            const void*                       eventPtr)
 {
-    // 快照让回调可以安全地订阅或取消，而不会在持锁状态下重入订阅表。
-    struct Invocation {
-        /// @brief 在释放锁后执行的回调副本。
-        std::function<void(const void*)> callback;
-        /// @brief 借用发布事件中的正确子对象，随发布结束失效。
-        const void* address;
-    };
-    std::vector<Invocation> subscribersToCall;
-    {
-        // 共享锁允许多个发布者并发收集快照，并阻止订阅表在复制时变化。
-        std::shared_lock lock(m_impl->mutex);
-        for ( const auto& route : routes ) {
-            const auto subscriberIt = m_impl->subscribers.find(route.typeId);
-            // 没有订阅者的父类分支无需创建空表项。
-            if ( subscriberIt == m_impl->subscribers.end() ) continue;
-
-            // 保持类型层级与各分组内部的登记顺序，不额外排序回调。
-            const auto* address = route.adjust(eventPtr);
-            for ( const auto& subscriber : subscriberIt->second )
-                subscribersToCall.push_back({ subscriber.callback, address });
+    // 顶层所有权保活所有分组，不再为每个订阅另建临时调用记录。
+    const auto table = m_impl->snapshot();
+    for ( const auto& route : routes ) {
+        const auto group = table->find(route.typeId);
+        if ( group == table->end() ) continue;
+        const auto* address = route.adjust(eventPtr);
+        for ( const auto& subscriber : *group->second ) {
+            // 兼容显式擦除及可变捕获，保持每次分发独立的私有状态。
+            if ( subscriber->copyOnPublish ) {
+                auto invocation = subscriber->callback;
+                invocation(address);
+            } else {
+                subscriber->callback(address);
+            }
         }
-    }
-
-    // 锁外执行用户回调，避免长回调阻塞其他线程增删订阅。
-    for ( const auto& subscriber : subscribersToCall ) {
-        subscriber.callback(subscriber.address);
     }
 }
 }  // namespace MMM::Event
