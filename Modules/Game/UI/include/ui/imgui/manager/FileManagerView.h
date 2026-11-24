@@ -11,8 +11,10 @@
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace MMM::Event
@@ -124,6 +126,18 @@ public:
 
         /// @brief 快照构建时是否启用目录优先。
         bool directoriesFirst{ true };
+
+        /// @brief 用户要求刷新此目录，等到下次读取时替换快照。
+        bool needsRefresh{ false };
+    };
+
+    /// @brief 桌面表格中的一行，按展开目录的先序排列。
+    struct FileTableRow {
+        /// @brief 借用目录快照的条目，快照替换前必须重建行索引。
+        const DirectoryEntryInfo* entry;
+
+        /// @brief 条目相对项目根的深度，用于裁剪父行后独立恢复缩进。
+        int depth;
     };
 
 private:
@@ -189,13 +203,25 @@ private:
     void renderActiveProjectView(LayoutContext& layoutContext,
                                  UIManager*     sourceManager);
 
-    /// @brief 递归绘制目录树节点。
-    /// @param path 当前要绘制的目录路径。
-    /// @param sourceManager 触发文件打开后需要切换子视图的 UI 管理器。
-    /// @warning UI 热路径：当前实现会随文件树展开状态遍历目录；
-    /// 后续应缓存目录快照。
-    void drawDirectoryRecursive(const std::filesystem::path& path,
-                                UIManager*                   sourceManager);
+    /// @brief 提交桌面表格中滚动范围内的行。
+    /// @warning UI 热路径：只在行索引失效时遍历展开目录。
+    void drawFileTable(float itemHeight, float indent,
+                       UIManager* sourceManager);
+
+    /// @brief 将当前展开的目录和子目录追加到桌面行索引。
+    /// @warning 仅在展开状态或目录快照变化后调用，可能读取文件系统。
+    void appendFileTableRows(const std::filesystem::path& path, int depth);
+
+    /// @brief 递归绘制保留完整文件名换行的触屏目录树。
+    /// @warning UI 热路径：遍历已展开目录，仅在快照失效时访问文件系统。
+    void drawTouchDirectory(const std::filesystem::path& path, float itemHeight,
+                            UIManager* sourceManager);
+
+    /// @brief 绘制单个文件或目录，并返回目录是否处于展开状态。
+    /// @warning UI 热路径：桌面仅为裁剪器选中的行处理文字和交互。
+    bool drawFileTableRow(const DirectoryEntryInfo& entry, float itemHeight,
+                          UIManager*          sourceManager,
+                          std::optional<bool> desktopOpen, float indent);
     /// @brief 获取指定目录的缓存快照，必要时低频重建。
     /// @param path 需要展示的目录路径。
     /// @return 当前排序设置下的目录快照。
@@ -203,7 +229,7 @@ private:
     const DirectorySnapshot& getDirectorySnapshot(
         const std::filesystem::path& path);
 
-    /// @brief 清空目录快照缓存。
+    /// @brief 标记目录快照失效，推迟到下次绘制前清空。
     void invalidateDirectoryCache();
 
     /// @brief 消费跨线程文件系统变更通知并刷新目录缓存。
@@ -345,6 +371,18 @@ private:
 
     /// @brief 按目录完整路径缓存的文件树快照。
     std::unordered_map<std::string, DirectorySnapshot> m_directoryCache;
+
+    /// @brief 桌面展开的目录路径，保留折叠父目录前的子目录状态。
+    std::unordered_set<std::string> m_expandedDirectories;
+
+    /// @brief 可滚动的桌面行索引，借用 m_directoryCache 中的条目。
+    std::vector<FileTableRow> m_fileTableRows;
+
+    /// @brief 展开状态或目录快照变化后，需要重建桌面行索引。
+    bool m_fileTableRowsDirty{ true };
+
+    /// @brief 绘制期间只标记失效，保留当前行和交互回调借用的条目。
+    bool m_directoryCacheDirty{ false };
 
     // --- 布局池 ---
     std::deque<CLayHBox> m_rows;
