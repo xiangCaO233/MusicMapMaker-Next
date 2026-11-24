@@ -851,6 +851,14 @@ mmm_add_test_executable(UI BmsTouchDialogTest tests/BmsTouchDialogTest.cpp)
 target_link_libraries(BmsTouchDialogTest PRIVATE UI Logic Log)
 mmm_register_test_case(NAME BmsTouchDialogTest COMMAND BmsTouchDialogTest)
 
+# 新建工程位置探测测试用同一个文件池验证录入、复核和错误状态。 隔离父目录写入构建树，文件池门闩只存在测试，不需要实际 ImGui 窗口。
+mmm_add_test_executable(UI NewProjectLocationTest
+                        tests/NewProjectLocationTest.cpp)
+target_link_libraries(NewProjectLocationTest PRIVATE UI Logic Runtime)
+# CTest 每次使用独立进程及应用文件池，避免共享其它用例的在途查询。
+mmm_register_test_case(NAME NewProjectLocationTest COMMAND
+                       NewProjectLocationTest)
+
 # 文件选择器回归使用原控件与真实输入队列，验证高键盘下焦点、几何及确认结果。
 mmm_add_test_executable(UI MobileFileDialogTest tests/MobileFileDialogTest.cpp)
 target_link_libraries(MobileFileDialogTest PRIVATE UI Logic Log)

@@ -4,7 +4,10 @@
 #include "ui/IUIView.h"
 #include "ui/imgui/SideBarUI.h"
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
+#include <future>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -34,6 +37,9 @@ public:
     void close();
 
 private:
+    /// @brief 回归测试通过实际探测入口注入隔离位置与 file pool 门闩。
+    friend struct NewProjectLocationTestAccess;
+
     /// @brief 向导步骤。
     enum class Step { ProjectInfo, Preferences, Location };
 
@@ -91,17 +97,26 @@ private:
     /// @return 当前步骤输入有效时返回 true。
     bool canAdvance() const;
 
-    /// @brief 当前保存位置是否有效。
-    /// @return 保存位置有效时返回 true。
-    bool hasValidTargetPath() const;
+    /// @brief 保存位置的只读探测状态，区分未查、已占用和无法读取。
+    enum class LocationStatus { Invalid, Available, ExistingProject };
 
-    /// @brief 获取当前项目目标目录。
-    /// @return 项目目标目录路径。
-    std::filesystem::path targetProjectPath() const;
+    /// @brief 文件线程返回规范路径及探测结论；只适用于发出时的请求编号。
+    struct LocationResult {
+        std::uint64_t         revision;  ///< 打开实例内的探测序号。
+        std::filesystem::path target;    ///< 确认后才提交的目标路径。
+        LocationStatus        status;    ///< 路径是否可用于创建工程。
+    };
 
-    /// @brief 判断目标目录中是否已有项目描述文件。
-    /// @return 已存在项目描述文件时返回 true。
-    bool targetHasProjectFile() const;
+    /// @brief 检查本轮录入位置，不访问向导实例或用户界面。
+    static LocationResult probeLocation(std::filesystem::path parent,
+                                        std::string           folder,
+                                        std::uint64_t         revision);
+
+    /// @brief 仅在输入改变或用户确认时探测，绘制帧只消费完成的结果。
+    void updateLocationValidation();
+
+    /// @brief 已复查的创建请求交给工程所有者。
+    void publishCreateRequest();
 
     /// @brief 根据标题刷新默认文件夹名。
     void refreshFolderNameFromTitle();
@@ -148,6 +163,19 @@ private:
 
     /// @brief 用户选择的项目保存父目录。
     std::filesystem::path m_parentDirectory;
+
+    /// @brief 最近请求的父目录，用于比较用户输入而无需访问文件系统。
+    std::filesystem::path m_probedParent;
+    /// @brief 最近请求的文件夹名。
+    std::string m_probedFolder;
+    /// @brief 已进入文件池的探测。packaged_task future 的析构不会阻塞 UI。
+    std::future<LocationResult> m_locationJob;
+    /// @brief 只在当前父目录、名称和编号一致时提供可用的创建路径。
+    std::optional<LocationResult> m_locationResult;
+    /// @brief 输入变化、再次打开、用户确认时递增，旧结果不会替换新输入。
+    std::uint64_t m_locationRevision{};
+    /// @brief 创建按钮点击后重新读取路径；修改输入或退回时取消这次提交。
+    bool m_confirmLocation{ false };
 
     /// @brief 最近一次保存位置选择失败时展示给用户的错误文本。
     std::string m_locationErrorText;

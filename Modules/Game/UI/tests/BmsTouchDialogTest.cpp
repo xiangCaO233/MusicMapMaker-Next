@@ -2,16 +2,24 @@
 #include "config/EditorSettings.h"
 #include "log/colorful-log.h"
 #include "logic/ProjectController.h"
+#include "runtime/AppThreadPool.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
 #include "ui/imgui/menu/package/BmsExportTouch.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
 #include "ui/workspace/MobileInputEditor.h"
 #include "ui/workspace/MobileTouchScroll.h"
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <future>
+#include <ice/thread/ThreadPool.hpp>
 #include <imgui_internal.h>
+#include <string_view>
+#include <thread>
 
 namespace
 {
@@ -243,6 +251,113 @@ void formats(bool package, bool narrow = false)
     ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true);
     f.frame([&] { action->renderDeferred(context); });
 }
+/// @brief 通过真实格式按钮触发候选任务，覆盖阻塞、取消及同路径换代。
+/// @param root 测试专用项目目录，正常扫描应看到一份可支持的音频。
+void candidateScan(const std::filesystem::path& root)
+{
+    // 复用工程控制器的公开接口打开、关闭和重开，保持真正的代次变化。
+    // 该场景始终采用 CPU 绘制，不打开原生文件对话框或输出任何资源包。
+    using MMM::Logic::ProjectController;
+    auto& pools = MMM::Runtime::AppThreadPool::instance();
+    pools.init();
+    // 使用当前应用实例的文件池，手工替身不能证明 UI 与生产扫描线程隔离。
+    auto* files = pools.getFileThreadPool();
+    if ( !files ) {
+        check(false, "file workers exist");
+        return;
+    }
+    // 文件池工作者全被门闩占用，强制候选工作停在提交后、真正扫描前。
+    // 后台只捕获共享状态，每个 worker 返回前不借用测试栈上的 promise。
+    std::promise<void>               release;
+    const auto                       gate = release.get_future().share();
+    std::array<std::future<void>, 4> blockers;
+    // 四份阻塞工作先入队，后续候选任务无法在界面检查前开始读取。
+    for ( auto& worker : blockers )
+        worker = files->enqueue([gate] { gate.wait(); });
+
+    // 桌面按钮直接属于父窗，定位实际控件 ID 不依赖窗口像素。
+    // 使用独立上下文，先前移动端场景不影响模态焦点或输入方式。
+    Fixture                  f(1, false);
+    auto                     action = MMM::UI::createPackBeatmapAction();
+    MMM::UI::MainMenuContext context{ f, nullptr, f.m_scale };
+    const auto               draw = [&] { action->renderDeferred(context); };
+    // 多次使用同一个动作实例，旧结果不能靠重建动作的状态清理掩盖。
+    const auto selectFormat = [&] {
+        f.frame([&] { action->execute(context, {}); });
+        for ( int frame = 0; frame < 4; ++frame ) f.frame(draw);
+        // 先确认读到格式模态，防止余留的候选模态碰巧接受同名激活。
+        auto* picker = ImGui::GetTopMostPopupModal();
+        if ( !picker || !std::string_view(picker->Name)
+                             .ends_with("PackageFormatPickerWindow") )
+            return false;
+        // ID 由生产弹窗生成，激活实际格式按钮，不能直接修改 action 状态。
+        ImGui::ActivateItemByID(picker->GetID("Malody Chart Package (.mcz)"));
+        // 候选在格式弹窗结束后的帧开启，测试不自行构造窗口或候选标志。
+        for ( int frame = 0; frame < 3; ++frame ) f.frame(draw);
+        // 确认新的模态已真实绘制，纯任务已提交不足以证明界面继续可用。
+        const auto* candidates = ImGui::GetTopMostPopupModal();
+        return candidates && std::string_view(candidates->Name)
+                                 .ends_with("PackageFileSelectionModal");
+    };
+
+    // 工作者未释放时保持等待状态；若 UI 同步等待，此调用将不能返回。
+    check(selectFormat(), "candidate modal opens while file pool is occupied");
+    // 候选未到达时仍可接收 Escape，且之后能够发起新的扫描。
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true);
+    f.frame(draw);
+    // 配对释放 Escape，后面的模态不继承持续按键或重复取消。
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, false);
+    f.frame(draw);
+    check(ImGui::GetTopMostPopupModal() == nullptr,
+          "queued scan cancels before worker runs");
+    // 仍保持工作队列被占用，第二个请求顺序只由取消与重新选择确定。
+    check(selectFormat(), "scan restarts after cancellation");
+
+    // 同路径重新打开也会改变项目身份，旧候选不能在新实例上完成。
+    // 关闭并重新打开完全相同的路径，防止仅比对根名的实现蒙混通过。
+    auto& controller = ProjectController::instance();
+    check(controller.closeProject().m_closed &&
+              controller.openProject(root).m_opened,
+          "fixture reopens same project root");
+    f.frame(draw);
+    // 旧任务仍在文件池中排队时就应结束弹窗，不能等实际扫描完成。
+    check(ImGui::GetTopMostPopupModal() == nullptr,
+          "project generation change dismisses the stale candidate window");
+
+    // 先解除门闩，确保测试失败也不会阻塞池的退出。
+    // 保留失败状态累计，但不使用提前返回使工作者永久等待。
+    release.set_value();
+    for ( auto& worker : blockers ) worker.get();
+    // 真实读取此时才允许开始。第三份请求必须获得当前工程的独立候选列表。
+    check(selectFormat(), "scan can run in the reopened project");
+    // 第一份确认只有在文件池恢复后才会从工作结果显示。
+    bool sawCandidates = false;
+    // 等待上限只属于测试，生产线程以帧为单位非阻塞轮询。
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(4);
+    do {
+        f.frame([&] {
+            // 使用 ImGui 的文本记录，验证正常候选确实到达业务弹窗。
+            ImGui::LogToBuffer();
+            draw();
+            // 从已绘制文本中匹配真实文件名，无需读取私有缓存或比较平台字形。
+            // 同一列表包含有效 WAV、排除 ZIP 才能验证筛选阶段确实生效。
+            const std::string_view rendered(GImGui->LogBuffer.c_str());
+            sawCandidates |=
+                rendered.find("valid-candidate.wav") !=
+                    std::string_view::npos &&
+                rendered.find("ignored-archive.zip") == std::string_view::npos;
+            // 每帧结束日志捕获，避免上一帧结果误入下一帧时序断言。
+            ImGui::LogFinish();
+        });
+        if ( !sawCandidates ) std::this_thread::yield();
+    } while ( !sawCandidates && std::chrono::steady_clock::now() < deadline );
+    // 超时必须失败，不能将测试中预设的扩展名当作业务列表验证。
+    check(sawCandidates,
+          "async result applies format filtering to the fixture");
+    // 测试清理只在门闩释放后执行；析构 action 不会加入任何 IO 同步等待。
+    pools.shutdown();
+}
 }  // namespace
 /// @brief 覆盖小屏、高 DPI、两种对齐含义以及桌面不放大的反例。
 int main()
@@ -255,14 +370,20 @@ int main()
     // 打包入口会冻结当前工程身份，先通过控制器打开隔离夹具。
     auto& controller = MMM::Logic::ProjectController::instance();
     // 临时工程只用来提供真实可打包身份，目录不需要任何谱面。
+    // 两个夹具文件内容不重要，格式筛选只使用其实际名称和普通文件状态。
     const auto root =
         std::filesystem::current_path() / "test_output/BmsTouchDialogTest";
     std::error_code error;
     std::filesystem::create_directories(root, error);
-    if ( error || !controller.openProject(root).m_opened ) return 1;
+    if ( error || !(std::ofstream(root / "valid-candidate.wav") << "audio") ||
+         !(std::ofstream(root / "ignored-archive.zip") << "archive") ||
+         !controller.openProject(root).m_opened )
+        return 1;
     formats(true);
     formats(false);
     formats(true, true);
+    // 同一隔离目录用于重开测试，跟在原有触摸场景之后保持初始焦点可预测。
+    candidateScan(root);
     // 通过生产关闭入口停止夹具的目录监听并撤下已发布快照。
     controller.closeProject();
     return failures ? 1 : 0;

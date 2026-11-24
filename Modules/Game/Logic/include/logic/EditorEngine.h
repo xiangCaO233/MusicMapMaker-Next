@@ -372,6 +372,11 @@ public:
     std::string makeBeatmapPathKeyForPath(
         const std::filesystem::path& beatmapPath) const;
 
+    /// @brief 文件工作者从不可变工程投影生成与会话一致的路径键。
+    /// @warning 低频文件路径，允许解析磁盘链接，不访问编辑器或会话状态。
+    static std::string makeBeatmapPathKeyForPath(
+        const Project& project, const std::filesystem::path& beatmapPath);
+
     /// @brief 更新指定主画布窗口在 UI 中的可见状态。
     /// @param cameraId 目标主画布 cameraId。
     /// @param isVisible 当前 ImGui 窗口是否真实可见。
