@@ -11,6 +11,7 @@
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectStorage.h"
+#include "runtime/AppThreadPool.h"
 #include "ui/UIManager.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIThemeUtils.h"
@@ -20,10 +21,13 @@
 #include <algorithm>
 #include <cctype>
 #include <cfloat>
+#include <chrono>
 #include <cstring>
+#include <ice/thread/ThreadPool.hpp>
 #include <nfd.h>
 #include <string>
 #include <system_error>
+#include <utility>
 
 namespace MMM::UI
 {
@@ -44,28 +48,6 @@ constexpr std::string_view PREFERENCES_NEXT_TARGET =
 /// @brief 保存位置页创建按钮的演练语义目标。
 constexpr std::string_view LOCATION_CREATE_TARGET =
     "new-project.location.create";
-
-/// @brief 尽量将路径转换为绝对规范路径。
-/// @param path 待规范化路径。
-/// @return 成功时返回绝对路径；失败时退回词法规范化路径。
-///
-/// 规范化只清理路径表达，不要求目标已经存在。文件系统查询使用 error_code，避免
-/// 无效路径、权限或平台差异通过异常逃离向导渲染流程。
-std::filesystem::path makeAbsoluteNormalizedPath(
-    const std::filesystem::path& path)
-{
-    // 空路径表示用户尚未选择父目录，不把它解析为当前工作目录。
-    if ( path.empty() ) return {};
-
-    // absolute 失败时仍保留词法结果，供界面展示并由后续有效性检查拒绝。
-    std::error_code filesystemError;
-    auto normalized = std::filesystem::absolute(path, filesystemError);
-    // 成功路径同时移除 `.` 和可消解的 `..` 段。
-    if ( !filesystemError ) return normalized.lexically_normal();
-
-    // 失败分支不继续触碰文件系统，避免覆盖原始错误上下文。
-    return path.lexically_normal();
-}
 
 /// @brief 判断字符是否适合保留在文件夹名中。
 /// @param ch 待检查字符。
@@ -173,7 +155,7 @@ const char* sidebarTabLabel(SideBarTab tab)
 /// @return 有效目录的 UTF-8 文本，无效时返回空字符串。
 ///
 /// 该结果只作为选择器初始目录，任何检查失败都应静默退回无默认路径，而不是阻止
-/// 用户打开选择器。最终创建位置仍由 `hasValidTargetPath` 独立验证。
+/// 用户打开选择器。最终创建位置仍由文件线程独立验证。
 std::string existingDirectoryPathToUtf8(const std::filesystem::path& path)
 {
     // 空输入不应被 absolute 解读成进程当前目录。
@@ -288,83 +270,123 @@ void NewProjectWizard::refreshFolderNameFromTitle()
                  makeFolderNameFromTitle(m_titleBuf));
 }
 
-/// @brief 组合当前父目录与文件夹名得到最终项目目录。
-/// @return 输入不完整时返回空路径，否则返回绝对词法规范路径。
-///
-/// 该函数只计算目标，不创建目录也不解析符号链接；验证与实际创建由后续流程负责。
-std::filesystem::path NewProjectWizard::targetProjectPath() const
+/// @brief 在文件线程检查父目录和项目入口，不创建任何目录。
+/// @param parent 已冻结的父目录输入。
+/// @param folder 已冻结的文件夹名称。
+/// @param revision 请求序号，供 UI 排除已经过期的结果。
+/// @return 路径预览和可提交状态，查询失败按不可用处理。
+NewProjectWizard::LocationResult NewProjectWizard::probeLocation(
+    std::filesystem::path parent, std::string folder, std::uint64_t revision)
 {
-    // 两个表单字段缺一不可，防止 `/` 或当前目录被误当目标。
-    if ( m_parentDirectory.empty() || m_folderNameBuf[0] == '\0' ) {
-        return {};
+    namespace fs = std::filesystem;
+    // 无效是默认结论。完成所有必要查询前不发布允许创建的状态。
+    // 保留请求序号以统一处理无效输入及后台返回。
+    LocationResult result{ revision, {}, LocationStatus::Invalid };
+    // 半空输入不会把当前目录带入不存在目标的判断。
+    if ( parent.empty() || folder.empty() ) return result;
+
+    // 权限或卷错误不能被解释成目录缺失；父目录必须可正常访问。
+    // 使用一次文件状态查询判断父路径，避免存在性与目录类型分两次读取。
+    // 文件系统错误和普通路径缺失都要在本次请求内结束。
+    std::error_code error;
+    if ( !fs::is_directory(parent, error) || error ) return result;
+    // worker 内执行 absolute，包括相对路径解析所需的当前目录查询。
+    // 词法规范只整理路径表示，不由 UI 解析链接或挂载点。
+    result.target = fs::absolute(parent / Config::utf8ToPath(folder), error)
+                        .lexically_normal();
+    if ( error ) return result;
+
+    // 查询目标本身，悬空链接属于既有对象，不能使用创建不存在目录的分支。
+    const auto target = fs::symlink_status(result.target, error);
+    // Windows 与 POSIX 可能返回 not_found 和错误码的不同组合。
+    // 只对明确不存在的目标容许创建，访问拒绝及循环链接均无此权限。
+    if ( target.type() == fs::file_type::not_found &&
+         (!error || error == std::errc::no_such_file_or_directory) ) {
+        result.status = LocationStatus::Available;
+        return result;
     }
-    // UTF-8 文件夹名先转换为平台路径，再与父目录组合并规范化。
-    return makeAbsoluteNormalizedPath(m_parentDirectory /
-                                      Config::utf8ToPath(m_folderNameBuf));
+    // 目标存在时只允许目录，包括已解析到普通目录的入口。
+    // 悬空链接通过这里返回无效，不能写入其指向的位置。
+    if ( error || !fs::is_directory(result.target, error) || error )
+        return result;
+
+    // 同一个路径可能在后台被外部进程创建项目，最后确认必须重新执行这里。
+    // 使用与存储层相同的入口；状态未知或非文件的占位也不能被覆盖。
+    for ( const auto& path :
+          { Logic::ProjectStorage::manifestPath(result.target),
+            Logic::ProjectStorage::legacyProjectFilePath(result.target) } ) {
+        // 探测项目文件本身，悬空链接也属于已占用的入口。
+        // 两种布局都必须检查，只有第一项明确不存在时才检查后一项。
+        const auto entry = fs::symlink_status(path, error);
+        if ( entry.type() == fs::file_type::not_found &&
+             (!error || error == std::errc::no_such_file_or_directory) )
+            continue;
+        // 查询失败的结论仍是 Invalid，不把权限问题显示成可覆盖项目。
+        if ( !error && fs::exists(entry) )
+            result.status = LocationStatus::ExistingProject;
+        return result;
+    }
+    // 已存在普通目录允许复用，但两个项目入口都必须明确缺失。
+    result.status = LocationStatus::Available;
+    return result;
 }
 
-/// @brief 判断当前目标目录是否已经包含项目配置。
-/// @return 检测到现有项目配置时返回 true。
-///
-/// 该检查用于禁止向现有项目目录重复创建；普通非项目目录仍可作为目标，由存储层在
-/// 提交后决定如何写入项目结构。
-bool NewProjectWizard::targetHasProjectFile() const
+/// @brief 比较输入键，非阻塞消费探测并按需要提交任务。
+/// @warning 位置页每帧调用。只检查 future 的就绪状态，不等待文件线程。
+void NewProjectWizard::updateLocationValidation()
 {
-    // 输入不完整时不能把空路径交给项目配置探测器。
-    const auto targetPath = targetProjectPath();
-    if ( targetPath.empty() ) return false;
-
-    return Logic::ProjectStorage::hasProjectConfiguration(targetPath);
-}
-
-/// @brief 验证当前父目录和目标目录是否适合提交创建请求。
-/// @return 父目录存在、目标非现有项目且路径状态可用时返回 true。
-///
-/// 已存在的空目录或普通目录允许使用，已有项目配置的目录拒绝。检查只读取文件系统，
-/// 不提前创建或修改目标，因此最终创建仍需处理检查后的竞态变化。
-bool NewProjectWizard::hasValidTargetPath() const
-{
-    // 表单字段不完整时直接失败，避免空路径的文件系统特殊语义。
-    if ( m_parentDirectory.empty() || m_folderNameBuf[0] == '\0' ) {
-        return false;
+    // 以两份用户输入而非规范路径为键；编辑帧无需触碰正在检查的文件系统。
+    // 只有输入真正改变才前进序号，静置帧不再排队。
+    if ( m_probedParent != m_parentDirectory ||
+         m_probedFolder != m_folderNameBuf ) {
+        // 挂起的提交只针对用户点击时的名称和目录，编辑会撤销它。
+        m_probedParent = m_parentDirectory;
+        m_probedFolder = m_folderNameBuf;
+        ++m_locationRevision;
+        m_confirmLocation = false;
+        m_locationResult.reset();
     }
-
-    // 父路径必须当前可访问且确实为目录。
-    std::error_code filesystemError;
-    if ( !std::filesystem::exists(m_parentDirectory, filesystemError) ||
-         filesystemError ||
-         !std::filesystem::is_directory(m_parentDirectory, filesystemError) ||
-         filesystemError ) {
-        return false;
+    // future 来自文件池的 packaged_task，不具备 std::async 析构等待语义。
+    // 只调用零时长轮询，再由就绪的任务清空槽；旧任务无需占用 UI 锁。
+    if ( m_locationJob.valid() && m_locationJob.wait_for(std::chrono::seconds(
+                                      0)) == std::future_status::ready ) {
+        auto result = m_locationJob.get();
+        // 更改目录、关闭或重新打开都可能早于后台返回。
+        // 槽释放后的发起阶段读取最新键，快速连续编辑只处理最新值。
+        if ( result.revision == m_locationRevision )
+            m_locationResult = std::move(result);
     }
-
-    // 规范化失败或已有项目配置时禁止覆盖。
-    const auto targetPath = targetProjectPath();
-    if ( targetPath.empty() || targetHasProjectFile() ) {
-        return false;
-    }
-
-    // 已存在目标只接受可访问的目录；普通文件或查询错误均无效。
-    if ( std::filesystem::exists(targetPath, filesystemError) ) {
-        if ( filesystemError ) return false;
-        return std::filesystem::is_directory(targetPath, filesystemError) &&
-               !filesystemError;
-    }
-    // 不存在目标可由项目创建流程建立。
-    return true;
+    // 无输入时也应消费已完成旧任务，但不能为占位路径发出查询。
+    // 已得到错误结果同样缓存，否则慢盘错误会在每次渲染重排。
+    if ( m_locationJob.valid() || m_locationResult || m_probedParent.empty() ||
+         m_probedFolder.empty() )
+        return;
+    // 只有当前请求可入队；快速键入期间始终最多一项在途探测。
+    // worker 只获得输入副本。关闭弹窗或销毁向导后它仍能安全返回。
+    if ( auto* files = Runtime::AppThreadPool::instance().getFileThreadPool() )
+        m_locationJob = files->enqueue(
+            probeLocation, m_probedParent, m_probedFolder, m_locationRevision);
+    // 启动或退出期间线程池可能拒绝任务，保持当前输入不可提交。
+    if ( !m_locationJob.valid() )
+        m_locationResult =
+            LocationResult{ m_locationRevision, {}, LocationStatus::Invalid };
 }
 
 /// @brief 判断当前步骤是否允许前进或提交。
 /// @return 当前步骤必填项满足时返回 true。
 ///
 /// 项目偏好全部有安全默认值；信息步骤只要求标题，位置步骤执行完整文件系统验证。
+/// @note 文件查询异步推进，此处只读取 UI 所属的最近一次完整验证。
 bool NewProjectWizard::canAdvance() const
 {
     // 每一步只验证本页负责的数据，避免尚未展示的位置页阻止信息页前进。
     switch ( m_currentStep ) {
     case Step::ProjectInfo: return m_titleBuf[0] != '\0';
     case Step::Preferences: return true;
-    case Step::Location: return hasValidTargetPath();
+    // 点击确认后必须等待新一轮结果，避免使用初次探测保存旧路径。
+    case Step::Location:
+        return !m_confirmLocation && m_locationResult &&
+               m_locationResult->status == LocationStatus::Available;
     }
     // 防御未来新增未覆盖枚举值。
     return false;
@@ -579,7 +601,16 @@ void NewProjectWizard::renderLocationStep()
     ImGui::Unindent();
 
     // 目标预览展示规范化后的完整路径，帮助用户在提交前确认落点。
-    const auto        targetPath = targetProjectPath();
+    // 先消费最新输入再显示路径。规范路径未返回时只展示词法组合。
+    // 未完成状态不会直接提交，因此预览字串不承担路径验证。
+    updateLocationValidation();
+    // 路径字符串也可作为等待期间的预览，它不参与提交门禁。
+    const auto targetPath =
+        m_locationResult
+            ? m_locationResult->target
+            : (m_parentDirectory.empty() || m_folderNameBuf[0] == '\0'
+                   ? std::filesystem::path{}
+                   : m_parentDirectory / Config::utf8ToPath(m_folderNameBuf));
     const std::string targetText =
         targetPath.empty() ? std::string("-") : Config::pathToUtf8(targetPath);
     ImGui::TextUnformatted(TR("ui.wizard.new_project.target").data());
@@ -587,14 +618,18 @@ void NewProjectWizard::renderLocationStep()
     ImGui::TextWrapped("%s", targetText.c_str());
     ImGui::Unindent();
 
-    if ( targetHasProjectFile() ) {
+    if ( m_locationResult &&
+         m_locationResult->status == LocationStatus::ExistingProject ) {
         // 已有项目是明确覆盖风险，使用高优先级错误提示。
         const ImVec4 dangerCol = Utils::UIThemeUtils::getDangerColor();
         ImGui::TextColored(
             dangerCol,
             "%s",
             TR("ui.wizard.new_project.folder_has_project").data());
-    } else if ( !hasValidTargetPath() ) {
+        // 工作池忙时继续展示位置布局，用户仍能更改名称、返回或取消。
+    } else if ( m_locationJob.valid() && !m_locationResult ) {
+        ImGui::TextDisabled("正在检查保存位置…");
+    } else if ( !canAdvance() ) {
         // 其他无效状态使用弱提示，引导用户补齐或更换位置。
         ImGui::TextDisabled(
             "%s", TR("ui.wizard.new_project.location_required").data());
@@ -649,7 +684,8 @@ void NewProjectWizard::renderFooter(UIManager* sourceManager)
             m_currentStep = Step::ProjectInfo;
         } else if ( m_currentStep == Step::Location ) {
             // 位置页返回偏好页并保留已经填写的路径。
-            m_currentStep = Step::Preferences;
+            m_currentStep     = Step::Preferences;
+            m_confirmLocation = false;
         }
     }
     ImGui::EndDisabled();
@@ -691,7 +727,7 @@ void NewProjectWizard::renderFooter(UIManager* sourceManager)
             // 最后一步发布请求，不在 UI 层直接建立项目目录。
             submitCreateRequest();
         }
-        if ( sourceManager )
+        if ( sourceManager && !isLastStep )
             // canAdvance 已验证当前页，状态切换或请求提交后才完成引导目标。
             sourceManager->walkthroughSpotlight().completeTarget(advanceTarget);
     }
@@ -854,19 +890,29 @@ bool NewProjectWizard::shouldSuppressFooterActionsThisFrame() const
     return m_suppressFooterActionFrames > 0;
 }
 
-/// @brief 组装并发布最终项目创建请求，然后关闭向导。
-///
-/// 提交前再次验证目标路径，防止表单状态在最后一次绘制后变化。事件携带值副本，
-/// UI 缓冲可在关闭或下次 reset 时安全复用。
+/// @brief 重新检查用户确认的路径，复核期间不阻塞当前帧。
 void NewProjectWizard::submitCreateRequest()
 {
-    // 无效路径保持向导打开，让用户修正位置。
-    if ( !hasValidTargetPath() ) return;
+    // 初次结果供调节按钮状态，确认后必须再读一次，防止外部随后创建工程。
+    // 编号先递增再复用同一任务入口；同步创建始终由项目所有者处理。
+    if ( !canAdvance() ) return;
+    ++m_locationRevision;
+    // 清空已知可用结果，确保再次激活确认按钮不会使用上轮探测。
+    m_locationResult.reset();
+    m_confirmLocation = true;
+    updateLocationValidation();
+}
 
+/// @brief 发布通过最新复核的创建请求并结束向导。
+/// @pre 结果与当前请求匹配且允许创建，逻辑层负责最终文件操作。
+/// @details 创建所有者收到完整值，不借用后台任务状态或 ImGui 缓冲。
+void NewProjectWizard::publishCreateRequest()
+{
     // 所有字段集中复制到一个事件，避免消费者读取向导生命周期内存。
     Event::ProjectCreateRequestedEvent event;
-    event.m_origin                 = m_openOrigin;
-    event.m_projectPath            = targetProjectPath();
+    event.m_origin = m_openOrigin;
+    // 发布文件线程确认的规范路径，不在点击同步线程重新解析。
+    event.m_projectPath            = m_locationResult->target;
     event.m_title                  = m_titleBuf;
     event.m_artist                 = m_artistBuf;
     event.m_mapper                 = m_mapperBuf;
@@ -960,6 +1006,20 @@ void NewProjectWizard::update(UIManager* sourceManager)
 
         // 页脚在滚动区之后保持固定位置。
         renderFooter(sourceManager);
+        // 先处理本帧的取消和后退操作。已取消的探测不会产生创建事件。
+        // 复查完成后再发布；切页、取消或改名都能在此之前作废请求。
+        // Back 或 Cancel 可能已在同一帧消费。只有仍在等待确认的流程可发布。
+        if ( m_isOpen && m_confirmLocation && m_locationResult ) {
+            m_confirmLocation = false;
+            // 失败不退出向导；用户可以看到最新状态并修改输入后重试。
+            if ( m_locationResult->status == LocationStatus::Available ) {
+                if ( sourceManager )
+                    sourceManager->walkthroughSpotlight().completeTarget(
+                        LOCATION_CREATE_TARGET);
+                // 演练完成与真实请求同步，不在仅排入文件探测时提前完成。
+                publishCreateRequest();
+            }
+        }
 
         // 浏览请求在触发按钮及页脚全部消费后处理，减少点击穿透风险。
         processPendingParentFolderPicker();
@@ -1031,6 +1091,11 @@ void NewProjectWizard::reset()
     refreshFolderNameFromTitle();
     // 清除上一轮可恢复错误和弹窗防穿透状态。
     m_locationErrorText.clear();
+    // 重复打开可能来自相同目录和标题，序号仍必须让上一轮的任务结果失效。
+    ++m_locationRevision;
+    // 向导重新打开时，旧文件任务可能已在相同路径完成，本轮不能接管其结论。
+    m_locationResult.reset();
+    m_confirmLocation            = false;
     m_suppressFooterActionFrames = 0;
     m_pendingParentFolderPicker  = false;
 
