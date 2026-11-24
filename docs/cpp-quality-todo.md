@@ -183,12 +183,12 @@
     | `Modules/Game/Logic/src/logic/session/BeatmapSession_TimingTable.cpp` | 38 | 84 | 31.15% |
     | `Modules/Game/Logic/tests/BrushPaletteSessionStateTest.cpp` | 369 | 861 | 30.00% |
 
-- [ ] **PERF-06 P3 离屏几何容量扩张在命令录制阶段等待全 GPU 空闲**
+- [x] **PERF-06 P3 离屏几何容量扩张在命令录制阶段等待全 GPU 空闲**
 
-  - `Modules/Game/Graphic/src/imguivk/VKOffScreenRenderer.cpp:134-147` 当前帧顶点/索引超过历史容量即调用 `device.waitIdle()`；`:154-160` 回收全部帧槽后重新分配，按 1.5 倍增长。
-  - 这是有注释、低频高水位分支，不能直接据此断言日常播放性能差；它也不是 acquire/present 必需同步点。首次复杂视野、突然增多的选择/特效/窗口可触发整设备停顿，且可从第 1 项并行录制任务内执行。
-  - 整改：先为 record/扩容埋点与真实场景取样；若尖峰明显，提前预估容量或按帧槽 fence 回收旧缓冲，不在录制回调释放全部飞行资源。不得取消同步后直接销毁 GPU 正在使用的 buffer。
-  - 验收：相同谱面、相同构建/用户配置的同一播放区间，分别测 CPU、锁等待、GPU busy、Fence/acquire/present 和扩容计数；确认常态帧无扩容等待，尖峰与具体容量变化关联，再判断是否值得改造。
+  - 离屏顶点和索引缓冲按帧槽保存容量。渲染器成功等待该槽的提交 fence 后，录制才可复用或扩张该槽；保留其他在途缓冲及固定大小 uniform。扩容记录槽、需要／原有／新增容量和分配耗时。
+  - Linux Clang 22 RelWithDebInfo 全量构建和 15 项图形、画布、播放 CTest 通过。在同一 Intel UHD ADL-S、X11 和用户配置下播放《骤雨の狭間》原谱前 15 秒。排除启动和加载，仅比较完整播放统计窗口，旧版／新版扩容均为 0 次。离屏平均 0.140／0.138 ms，fence 2.969／3.097 ms，acquire 0.020／0.021 ms，present 0.022／0.022 ms。进程 GPU render engine 占用 44.8%／46.4%；逻辑线程约占满一核，渲染线程用一核的 20.1%／22.3%，其 futex 等待为 2／3 个采样点。
+  - 在同一谱面副本加密集物件，确认两个离屏目标突破 81920 元素。旧版各目标一次扩大全部槽，新版各槽各扩张一次，单槽分配 0.119–0.249 ms；所测扩容窗口的离屏最大耗时 27.47／2.56 ms。该峰值比较仅覆盖录制阶段。Khronos 验证层复现了旧版同样两种已有 descriptor 诊断，未报告新的缓冲生命周期诊断。
+  - 注释／代码行数分别为 `VKOffScreenRenderer.h` 117/232、`VKOffScreenRenderer.cpp` 160/377、`VKOffScreenRendererRess.cpp` 277/626、`VKRendererRender.cpp` 333/771，均达到 30%。
 
 ## 平台适配
 

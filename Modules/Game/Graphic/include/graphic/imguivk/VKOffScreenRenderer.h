@@ -12,6 +12,7 @@
 #endif
 #include "vulkan/vulkan.hpp"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -42,7 +43,10 @@ public:
         return m_imguiGlowDescriptor;
     }
 
-    /// @brief 录制gpu指令
+    /// @brief 使用当前帧槽录制离屏 GPU 指令。
+    /// @param cmdBuf 已开始录制的主命令缓冲，当前任务独占。
+    /// @param frameIndex 已完成上一轮提交的帧槽索引。
+    /// @pre 主渲染器已成功等待 frameIndex 对应的提交 fence，且尚未提交本帧。
     /// @warning 热路径：每个可渲染 UI
     /// 视图在每帧命令录制阶段执行；禁止文件系统访问、完整排序、try/catch
     /// 和共享指针所有权复制。
@@ -391,8 +395,9 @@ private:
     // 逻辑设备引用
     vk::Device m_device{ VK_NULL_HANDLE };
 
-    // 缓存分配时的最大顶点数，用于动态扩容判断
-    size_t m_lastAllocatedCount{ 0 };
+    /// @brief 每个帧槽的几何元素容量，顶点和索引共享元素高水位。
+    /// @warning 热路径仅读写当前已完成 fence 的槽，其余槽仍可能正在提交中。
+    std::array<std::size_t, MAX_FRAMES_IN_FLIGHT> m_geometryCapacity{};
 
     // 物理设备句柄，用于动态扩容
     vk::PhysicalDevice m_physicalDevice{ VK_NULL_HANDLE };

@@ -4,6 +4,7 @@
 #include "log/colorful-log.h"
 #include "vulkan/vulkan.hpp"
 #include <glm/ext.hpp>
+#include <limits>
 
 namespace MMM::Graphic
 {
@@ -62,17 +63,18 @@ VKOffScreenRenderer::~VKOffScreenRenderer()
 /// glow 目标，再经 ping-pong 全屏模糊，最后加法合成回主图像；覆盖层在所有后
 /// 处理之后追加。空几何仍执行一次清除 pass，防止沿用上一帧图像。
 ///
-/// 顶点、索引、descriptor 和 uniform 都按 frameIndex 分槽。容量不足时现有实现会
-/// 等待 device idle 并一次性扩展所有帧槽，这必须保持为低频高水位路径。
+/// 顶点、索引、descriptor 和 uniform 都按 frameIndex 分槽。容量不足时只
+/// 扩展已退役帧槽的两个几何缓冲，其余在途帧槽及固定大小 uniform 保持有效。
+/// 提交 fence 涵盖本槽全部离屏命令，包括独立任务录制的命令缓冲。
 ///
 /// 本函数不 begin/end 外层 command buffer，也不自行 submit；主渲染器负责把串行
 /// 录制内容或独立离屏 command buffer 按正确顺序提交。每个内部 render pass 都在
 /// 返回前闭合，调用方可以随后继续录制主交换链 pass。
 ///
 /// @param cmdBuf 当前帧独占且已 begin 的 primary command buffer。
-/// @param frameIndex 当前并发帧槽索引。
-/// @warning 热路径：每帧离屏命令录制时执行；扩容分支会 waitIdle 并阻塞
-/// GPU，必须保持为容量不足时的低频路径。禁止文件 I/O、异常和常态分配。
+/// @param frameIndex 已由调用方等待提交 fence 的当前帧槽。
+/// @warning 热路径：每帧离屏命令录制时执行。只允许在容量突破时分配当前帧槽的
+/// 缓冲，禁止文件 IO、异常和额外等待其他帧槽。
 void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
                                      uint32_t           frameIndex)
 {
@@ -131,65 +133,58 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
         return;
     }
 
-    // 顶点与索引共用一个元素容量高水位，取较大者保证两个上传都不会越界。
-    size_t neededCount = std::max(vertices.size(), indices.size());
-    if ( neededCount > m_lastAllocatedCount ) {
-        XWARN(
-            "VKOffScreenRenderer: Buffer size insufficient ({} > {}), "
-            "reallocating...",
-            neededCount,
-            m_lastAllocatedCount);
-
-        // 所有帧槽缓冲可能仍被 GPU 使用，清空 owning pointers 前必须全设备
-        // idle。
-        // 这里选择一次性同步而不是逐缓冲追踪 fence，是因为扩容会同时替换全部
-        // 帧槽；正常帧依靠容量高水位完全绕过这条同步路径。
-        (void)m_device.waitIdle();
-
-        // 预留 50% 增长空间，连续小幅增加几何时不会每帧重新创建缓冲。
-        size_t newCount = static_cast<size_t>(neededCount * 1.5f);
-
-        // 三类 per-frame 缓冲作为一组替换；descriptor 绑定由资源创建流程管理，
-        // 本扩容分支只替换缓冲所有者，不在热路径重建 descriptor pool。
-        m_vertexBuffers.clear();
-        m_indexBuffers.clear();
-        m_uniformBuffers.clear();
-
-        // 当前实现以顶点跨度统一分配顶点和索引缓冲，索引缓冲因此可能留有额外
-        // 字节，但容量一定不小于 uint32_t 索引需求。
-        size_t bufferSize = sizeof(Vertex::VKBasicVertex) * newCount;
-        for ( int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
-            // HostVisible + HostCoherent 支持每帧 CPU 直接上传，无需显式
-            // flush。
-            m_vertexBuffers.push_back(std::make_unique<VKMemBuffer>(
-                m_physicalDevice,
-                m_device,
-                bufferSize,
-                vk::BufferUsageFlagBits::eVertexBuffer,
-                vk::MemoryPropertyFlagBits::eHostVisible |
-                    vk::MemoryPropertyFlagBits::eHostCoherent));
-
-            m_indexBuffers.push_back(std::make_unique<VKMemBuffer>(
-                m_physicalDevice,
-                m_device,
-                bufferSize,
-                vk::BufferUsageFlagBits::eIndexBuffer,
-                vk::MemoryPropertyFlagBits::eHostVisible |
-                    vk::MemoryPropertyFlagBits::eHostCoherent));
-
-            // 每帧独立 uniform 缓冲避免 CPU 更新覆盖仍在执行的另一帧数据。
-            m_uniformBuffers.push_back(std::make_unique<VKMemBuffer>(
-                m_physicalDevice,
-                m_device,
-                sizeof(float),
-                vk::BufferUsageFlagBits::eUniformBuffer,
-                vk::MemoryPropertyFlagBits::eHostVisible |
-                    vk::MemoryPropertyFlagBits::eHostCoherent));
+    // 顶点与索引共用元素高水位；字节分配仍按两种元素的实际跨度计算。
+    const auto neededCount = std::max(vertices.size(), indices.size());
+    auto&      capacity    = m_geometryCapacity[frameIndex];
+    if ( neededCount > capacity ) {
+        constexpr auto MAX_GEOMETRY_COUNT =
+            std::numeric_limits<std::size_t>::max() /
+            std::max(sizeof(Vertex::VKBasicVertex), sizeof(std::uint32_t));
+        if ( neededCount > MAX_GEOMETRY_COUNT ) {
+            XERROR(
+                "VKOffScreenRenderer: geometry exceeds addressable buffer "
+                "size");
+            return;
         }
 
-        m_lastAllocatedCount = newCount;
-        XDEBUG("VKOffScreenRenderer: Reallocated buffers with capacity: {}",
-               newCount);
+        // 增长 50%，整数运算避免几何很大时转换为浮点造成容量舍入。
+        const auto newCapacity =
+            neededCount +
+            std::min(neededCount / 2U, MAX_GEOMETRY_COUNT - neededCount);
+        const auto     growthStarted = std::chrono::steady_clock::now();
+        constexpr auto HOST_UPLOAD_MEMORY =
+            vk::MemoryPropertyFlagBits::eHostVisible |
+            vk::MemoryPropertyFlagBits::eHostCoherent;
+        auto vertexBuffer = std::make_unique<VKMemBuffer>(
+            m_physicalDevice,
+            m_device,
+            sizeof(Vertex::VKBasicVertex) * newCapacity,
+            vk::BufferUsageFlagBits::eVertexBuffer,
+            HOST_UPLOAD_MEMORY);
+        auto indexBuffer =
+            std::make_unique<VKMemBuffer>(m_physicalDevice,
+                                          m_device,
+                                          sizeof(std::uint32_t) * newCapacity,
+                                          vk::BufferUsageFlagBits::eIndexBuffer,
+                                          HOST_UPLOAD_MEMORY);
+
+        // 调用方已等待该槽上一轮提交完成，本帧命令又尚未引用新几何。
+        // 在这个边界替换所有者即可，其他槽的 GPU 进度与本次替换无关。
+        m_vertexBuffers[frameIndex] = std::move(vertexBuffer);
+        m_indexBuffers[frameIndex]  = std::move(indexBuffer);
+        const auto growthMs =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - growthStarted)
+                .count();
+        XINFO(
+            "OffscreenGeometryGrowth slot={} required={} previous={} "
+            "capacity={} allocationMs={:.4f}",
+            frameIndex,
+            neededCount,
+            capacity,
+            newCapacity,
+            growthMs);
+        capacity = newCapacity;
     }
 
     // uniform 内容在任何本帧 draw 前上传；具体 descriptor 是否引用该缓冲由资源

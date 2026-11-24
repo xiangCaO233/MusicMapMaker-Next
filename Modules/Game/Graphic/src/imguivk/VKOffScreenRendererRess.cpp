@@ -568,10 +568,11 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
         (VkImageView)m_glowImageView,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-    // 初始缓冲按 maxVertexCount 建立高水位；recordCmds 发现实际几何超过容量时会
-    // 同步扩容。索引缓冲复用同一字节数，VKBasicVertex 大于 uint32_t
-    // 时有足够空间。
-    size_t bufferSize = sizeof(Vertex::VKBasicVertex) * maxVertexCount;
+    // 初始缓冲按 maxVertexCount 建立每个槽的高水位。后续某一槽的几何
+    // 超量时只扩展该槽。索引的元素跨度更小，分配独立的字节数。
+    const auto vertexBufferSize =
+        sizeof(Vertex::VKBasicVertex) * maxVertexCount;
+    const auto indexBufferSize = sizeof(std::uint32_t) * maxVertexCount;
 
     // releaseResources 已清空旧 owning pointers，此处再次清空保持重建函数可独立
     // 维持容器后置条件。
@@ -585,7 +586,7 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
         m_vertexBuffers.push_back(std::make_unique<VKMemBuffer>(
             phyDevice,
             m_device,
-            bufferSize,
+            vertexBufferSize,
             vk::BufferUsageFlagBits::eVertexBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible |
                 vk::MemoryPropertyFlagBits::eHostCoherent));
@@ -593,7 +594,7 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
         m_indexBuffers.push_back(std::make_unique<VKMemBuffer>(
             phyDevice,
             m_device,
-            bufferSize,
+            indexBufferSize,
             vk::BufferUsageFlagBits::eIndexBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible |
                 vk::MemoryPropertyFlagBits::eHostCoherent));
@@ -620,11 +621,11 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
     m_glowWidth  = glowCreationW;
     m_glowHeight = glowCreationH;
 
-    // 容量值必须与本轮 bufferSize 对应；清脏使用 relaxed 即可，因为 Vulkan 资源
+    // 每个容量值与对应槽的真实缓冲大小一致；清脏可用 relaxed，因为 Vulkan 资源
     // 可见性由调用线程和外层渲染同步保证，原子只传递重建请求状态。
     // 先发布尺寸和容量、最后清除脏位，保证下一次 recordCmds 观察到的成员属于
     // 同一轮完整资源集合。
-    m_lastAllocatedCount = maxVertexCount;
+    m_geometryCapacity.fill(maxVertexCount);
     m_need_reCreate.store(false, std::memory_order_relaxed);
 
     XDEBUG(
@@ -986,7 +987,7 @@ void VKOffScreenRenderer::releaseResources()
         m_pongDescriptorSets.clear();
         m_glowDescriptorSets.clear();
         // 下一次创建必须重新建立真实容量，不能沿用已释放缓冲的高水位。
-        m_lastAllocatedCount = 0;
+        m_geometryCapacity.fill(0U);
     }
 }
 
