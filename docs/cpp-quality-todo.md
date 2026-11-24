@@ -403,7 +403,7 @@
 
 以下使用 cloc 2.08 的 comment / (comment + code)，按文件独立计算。比例只用于检查项目门槛。长期任务应按职责分批补充实现约束，避免用逐句翻译提高比例。
 
-本次取得 1478 份逐文件计数，另有 5 个零字节头文件不适用。低于 30% 的 69 个文件如下。包含资源中的 Lua 与文档中的可运行 Lua 示例，外部谱面样例脚本应先认定维护归属再决定是否修改。
+以主仓 `081b8e7b` 加 R30 注释修改及 ICE `568bc7f` 为基线，有效计数 1537 项，低于 30% 的 72 项如下。保留原有翻译 Lua 统计口径，外部谱面样例脚本排除。
 
 | 待办文件 | 注释行 | 代码行 | 比例 |
 |---|---:|---:|---:|
@@ -438,6 +438,7 @@
 | `3rdpty/cmake/modules/Findusrsctp.cmake` | 2 | 44 | 4.35% |
 | `3rdpty/cmake/modules/Findzlib.cmake` | 1 | 38 | 2.56% |
 | `3rdpty/cmake/modules/PrebuiltLayout.cmake` | 33 | 430 | 7.13% |
+| `3rdpty/sources/IonCachyEngine/tests/StreamingDecoderLengthTest.cpp` | 90 | 225 | 28.57% |
 | `3rdpty/sources/cmake/GLFW.cmake` | 5 | 17 | 22.73% |
 | `3rdpty/sources/cmake/ImGuiFileDialog.cmake` | 2 | 24 | 7.69% |
 | `3rdpty/sources/cmake/PatchLuaJITMsvcRuntime.cmake` | 1 | 25 | 3.85% |
@@ -453,29 +454,31 @@
 | `3rdpty/sources/cmake/sol2.cmake` | 7 | 24 | 22.58% |
 | `3rdpty/sources/cmake/stb.cmake` | 0 | 2 | 0.00% |
 | `Modules/Config/tests/PastePositionConfigTest.cpp` | 3 | 27 | 10.00% |
-| `Modules/Game/Logic/CMakeLists.txt` | 144 | 338 | 29.88% |
 | `Modules/Game/Logic/src/logic/AudioBatchExportService.cpp` | 43 | 468 | 8.41% |
 | `Modules/Game/Logic/src/logic/BmsPackageExportService.cpp` | 180 | 522 | 25.64% |
-| `Modules/Game/Logic/src/logic/ProjectResourceService.cpp` | 867 | 2093 | 29.29% |
-| `Modules/Game/Logic/src/logic/session/BeatmapSession_Commands.cpp` | 1349 | 3204 | 29.63% |
+| `Modules/Game/Logic/src/logic/ProjectResourceService.cpp` | 867 | 2090 | 29.32% |
 | `Modules/Game/Logic/tests/AudioBatchExportServiceTest.cpp` | 10 | 153 | 6.13% |
 | `Modules/Game/Logic/tests/BmsPackageExportServiceTest.cpp` | 299 | 776 | 27.81% |
 | `Modules/Game/Logic/tests/CanvasCameraTest.cpp` | 2601 | 6219 | 29.49% |
+| `Modules/Game/UI/src/ui/imgui/audio/AudioSpectrumView.cpp` | 462 | 1079 | 29.98% |
 | `Modules/Game/UI/src/ui/imgui/manager/BuiltinSettingsSearch.h.in` | 2 | 5 | 28.57% |
+| `Modules/Game/UI/src/ui/imgui/manager/SettingsView.cpp` | 396 | 925 | 29.98% |
+| `Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp` | 147 | 615 | 19.29% |
 | `Modules/Game/UI/src/ui/imgui/menu/actions/file/PackBeatmapAction.cpp` | 860 | 2032 | 29.74% |
 | `Modules/Game/UI/src/ui/plugin/BuiltinToolPlugins.h.in` | 2 | 7 | 22.22% |
 | `Modules/Game/UI/src/ui/plugin/ToolPluginView.cpp` | 483 | 1287 | 27.29% |
-| `Modules/MMM/src/beatmap/BeatMap.cpp` | 118 | 277 | 29.87% |
+| `Modules/Game/UI/tests/SettingsResourceRenameTest.cpp` | 188 | 496 | 27.49% |
+| `Modules/MMM/src/beatmap/BeatMap.cpp` | 119 | 280 | 29.82% |
 | `Modules/MMM/src/beatmap/BmsFormat.hpp` | 138 | 416 | 24.91% |
 | `Modules/MMM/src/beatmap/LoadMMMMap.hpp` | 318 | 748 | 29.83% |
-| `Modules/MMM/src/beatmap/SaveBmsMap.hpp` | 137 | 518 | 20.92% |
+| `Modules/MMM/src/beatmap/SaveBmsMap.hpp` | 137 | 520 | 20.85% |
+| `Modules/MMM/src/beatmap/SaveOSUMap.hpp` | 130 | 305 | 29.89% |
 | `Modules/MMM/tests/BmsFormatTest.cpp` | 254 | 746 | 25.40% |
-| `Modules/Network/Collaboration/src/BeatmapDocumentCodec.cpp` | 687 | 1604 | 29.99% |
+| `Modules/MMM/tests/MetadataCompatibilityTest.cpp` | 496 | 1188 | 29.45% |
 | `assets/plugins/tools/audio.lua` | 97 | 297 | 24.62% |
-| `assets/translations/en_us.lua` | 20 | 1823 | 1.09% |
-| `assets/translations/zh_cn.lua` | 20 | 1823 | 1.09% |
+| `assets/translations/en_us.lua` | 20 | 1824 | 1.08% |
+| `assets/translations/zh_cn.lua` | 20 | 1824 | 1.08% |
 | `docs/plugin/examples/ivm.lua` | 12 | 111 | 9.76% |
-| `tests/data/ma/驟雨の狭間/r.lua` | 6 | 475 | 1.25% |
 
 ## 2026-11-24 复查追加待办
 
@@ -717,13 +720,15 @@
 
 ### P3 · R30 · 更新逐文件注释率清单
 
-cloc 2.08 逐文件计数 1520 项，68 项低于 30%，其中 3 项原表未列。其余既有欠项参见本页的注释率逐文件待办。统计包含自维护构建和打包脚本、头模板、资源脚本与文档中的 Lua 示例，排除外部测试谱面附带的 Lua、预编译内容、生成的 SPIR-V 和空文件。翻译 Lua 仍沿用原清单口径。
+- [x] 补齐以下三个文件的实现约束并逐文件复算。
 
-- [ ] 按职责补充这些文件缺少的说明并逐文件复算。此次新增如下。
+  已验证。Linux RelWithDebInfo 全量构建和 4 项音频、渲染相关 CTest 通过。三个文件仅修改注释，逐文件复算均达到 30%。已按 cloc 2.08 刷新 1,537 个有效文件的统计，欠项表保留 72 个低于 30% 的文件。
 
-- `Modules/Audio/src/AudioTimelineMixerNode.cpp`，432 行注释、1012 行代码，29.92%。
-- `Modules/Audio/tests/AudioOriginAlignmentServiceTest.cpp`，58 行注释、137 行代码，29.74%。
-- `Modules/Game/Graphic/src/imguivk/VKOffScreenRenderer.cpp`，160 行注释、377 行代码，29.80%。
+本项补充上次复查新增的三个注释率欠项，并按同一范围刷新上面的逐文件待办表。统计自维护构建和打包脚本、头模板、资源脚本与文档中的 Lua 示例，排除外部谱面样例、预编译内容、生成的 SPIR-V 及未计入分母的空文件。
+
+- `Modules/Audio/src/AudioTimelineMixerNode.cpp`，434 行注释、1012 行代码，30.01%。
+- `Modules/Audio/tests/AudioOriginAlignmentServiceTest.cpp`，60 行注释、137 行代码，30.46%。
+- `Modules/Game/Graphic/src/imguivk/VKOffScreenRenderer.cpp`，162 行注释、377 行代码，30.06%。
 
 ## 验收边界
 

@@ -151,6 +151,8 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
         const auto newCapacity =
             neededCount +
             std::min(neededCount / 2U, MAX_GEOMETRY_COUNT - neededCount);
+        // 上传缓冲仅在本槽的同步点替换；使用主机可见且一致的内存，
+        // 使本帧写入可直接用于录制后的提交，避免另行管理暂存复制批次。
         const auto     growthStarted = std::chrono::steady_clock::now();
         constexpr auto HOST_UPLOAD_MEMORY =
             vk::MemoryPropertyFlagBits::eHostVisible |

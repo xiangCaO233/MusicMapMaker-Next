@@ -1472,6 +1472,8 @@ void AudioTimelineMixerNode::mixSegment(ice::AudioBuffer& output,
                       schedule.sourceScratch, sourceStart, requestedFrames)
                 : clip.audio->read(
                       schedule.sourceScratch, sourceStart, requestedFrames);
+        // 设备位置由调度器决定。短读只缩短该片段的可混合前缀，
+        // 不能借用 scratch 的尾部或改变后续片段在设备块中的位置。
         const auto readFrames = std::min(copiedFrames, requestedFrames);
         // span.outputStartFrame 相对本段，外层偏移把它映射到整个设备 block。
         const auto destinationStart =

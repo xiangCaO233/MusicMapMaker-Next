@@ -111,6 +111,8 @@ bool verifyAlignmentPcm(const std::filesystem::path& path,
          decoder->read(pcm.raw_ptrs(), totalFrames + 1U) != totalFrames )
         return false;
 
+    // 测试同时核对相位处理后的长度与过渡处样本。只有长度正确仍可能把
+    // 正相位误作尾部裁剪，或在负相位之后从错误的源帧开始拼接。
     // 使用 PCM16 的满量程，使归一化值与夹具中的整数样本逐一对应。
     constexpr float PCM16_SCALE = 32768.0F;
     for ( std::size_t frame = 0; frame < totalFrames; ++frame ) {
