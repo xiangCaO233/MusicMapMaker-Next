@@ -336,7 +336,19 @@
 - [x] **HDR-03 · P2 · 用真实消费者验收会话拆分。** SessionContext 对应 73 个对象、EditorEngine 对应 96 个；PERF-05 列出 UI 直接取锁访问的实例。先迁移批注读模型或交互状态，再对照活动对象清单；降低直接 include 个数不足以证明扇出下降。 批注表已改用窄接口。同一 Linux Debug Ninja 构建树中，按活动对象与实际依赖记录交集统计，SessionContext.h 从 72 降至 71，EditorEngine.h 从 98 降至 97。AnnotationTableData.cpp 的编译记录仅保留批注发布头作为 Logic 依赖。
 - [x] **DOC-01 · P2 · 修订失真的契约说明。** `Modules/MMM/include/mmm/SafeParse.h:141` 的旧 stod 兼容描述需写明前导加号、消费长度和平台语法；`Modules/Game/include/game/GlobDefs.h:79` 的 UTF-8 声明需以初始化结果为准；对照 PERF-03 更正时间格式化调用频率。每条用相应输入或调用链验收。 已分别注明浮点前缀的空白、符号、消费长度与平台差异，启动 C locale 设置的失败语义，以及热路径使用快照索引。确认三处非注释代码一致。Linux 全量构建和 LC_ALL=C 下 6 项相关 CTest 通过；独立探针验证八个解析断言及本机 .UTF-8 失败后保留 C locale，并对照状态栏、预览、时间线及音频视图调用链。注释／代码为 SafeParse.h 49/102、GlobDefs.h 43/95、TimeFormatUtils.cpp 90/196，逐文件均达 30%。
 - [x] **DOC-02 · P3 · 让函数体注释解释选择依据。** `Modules/Game/Graphic/src/imguivk/context/VKContextDebugFeats.cpp:15–33` 中多条注释逐词复述 eError、eWarning、eGeneral 等枚举。保留需要解释的筛选理由、回调生存期和不可重入约束；无需为显然枚举逐项写释义。修订后逐文件检查 cloc 和函数体关键实现。 已说明实例创建与运行期共用的过滤配置、调用线程及并发进入、数据借用寿命和不可重入约束。前后非注释代码 token 一致。Linux RelWithDebInfo 全量构建，以及 VulkanHandleFwdTest、CanvasCameraTest、ComparisonCanvasTest 通过。VKContextDebugFeats.cpp 注释／代码 39/87 行（30.95%）。
-- [ ] **STACK-01 · P3 · 补齐不定长栈分配的编译器证据。** 1,242 文件文本扫描未命中显式 alloca、_alloca、_malloca 或 __builtin_alloca 调用；主仓常见声明模式未定位 VLA。模板、别名和宏展开仍需以各平台编译器诊断确认。用支持的 GCC/Clang 配置开启 VLA 诊断并检查平台分支；对 `ProjectController.cpp:815`、`BeatmapSession_Commands.cpp:880` 等固定 64 KiB 局部缓冲用栈使用报告核对同一调用链峰值和工作线程栈预算。固定数组、对象成员与输入决定长度的栈分配要分别判断。
+- [x] **STACK-01 · P3 · 补齐不定长栈分配的编译器证据。** 1,242 文件文本扫描未命中显式 alloca、_alloca、_malloca 或 __builtin_alloca 调用；主仓常见声明模式未定位 VLA。模板、别名和宏展开仍需以各平台编译器诊断确认。用支持的 GCC/Clang 配置开启 VLA 诊断并检查平台分支；对 `ProjectController.cpp:815`、`BeatmapSession_Commands.cpp:880` 等固定 64 KiB 局部缓冲用栈使用报告核对同一调用链峰值和工作线程栈预算。固定数组、对象成员与输入决定长度的栈分配要分别判断。
+
+  - 在 `c87ab1b4` 启用 `-Werror=vla -Werror=alloca` 检查当前构建启用的自维护 C++ 编译命令，包含自维护 ICE 源码和已注册测试的生成入口。Linux Clang 22 为 611 个，Windows MSVC ABI clang-cl 为 613 个，macOS AppleClang ARM64（部署目标 11.0）为 612 个，Android ARM64 NDK 为 416 个，均通过。
+  - 以 RelWithDebInfo 优化参数重编相关五个翻译单元并生成 `-fstack-usage` 报告。哈希路径依次经过编辑循环、会话更新和保存或加载命令，临时谱包解压由项目打开路径准备。两个固定数组位于不同调用链，所核对的项目静态帧分别计入各自路径。数据为编译器报告及线程预算对照，未测量第三方调用或整进程运行时高水位。
+
+    | 平台 | 读谱包的含缓冲静态帧 | 文件哈希静态帧 | 工作线程栈预算 |
+    | --- | ---: | ---: | --- |
+    | Linux x86_64 | 66,744 B | 66,120 B | 8 MiB，本机线程探针 |
+    | Windows x64 | 66,232 B | 65,912 B | 1 MiB，PE 保留值与 Wine 线程探针 |
+    | macOS ARM64 | 66,752 B | 66,208 B | 536,576 B，Mac Runner 线程探针 |
+    | Android ARM64 | 66,560 B | 65,984 B | AOSP Bionic 默认 992 KiB，未在 Android 设备上采样 |
+
+  - Linux 上临时谱包、Unicode 路径、IMD/BMS 导出、保存反馈及会话流程共 8 项 CTest 通过。Android 的默认栈大小依据 [AOSP Bionic 源码](https://android.googlesource.com/platform/bionic/+/d4c94194416f0c3727bdae51163932694dccca24/libc/bionic/pthread_internal.h)。
 
 ## 注释率逐文件待办
 
