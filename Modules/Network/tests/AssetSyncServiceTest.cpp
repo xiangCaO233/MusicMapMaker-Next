@@ -3,9 +3,16 @@
  * @brief 资源同步服务单元测试，覆盖清单解析、差异判断与 zip 安全解压。
  * @details 全部远端输入由本机 file URL 或内存字符串提供，不访问公网服务。
  * 每个文件系统用例创建独立临时根并在结束前递归清理。
+ *
+ * 解析断言只验证声明，安装断言读取最终文件，二者不能互相代替。
+ * 并行下载场景以生产进度事件同步，两个任务拥有不同根、制品和取消状态。
+ * 下载完成与发布完成之间故意留出交错窗口，保证回归在固定暂存名下可重现。
+ * ZIP 与增量安装均写入隔离目录，链接目标也位于测试树中。
+ * Linux 的文件大小限制只用于本地进程内的目标卷复制，退出前会恢复。
  */
 
 #include "network/AssetSyncService.h"
+#include "config/StagedFile.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 
@@ -15,13 +22,22 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iterator>
 #include <miniz.h>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
+
+#if defined(__linux__)
+#    include <csignal>
+#    include <sys/resource.h>
+#    include <sys/stat.h>
+#endif
 
 using namespace MMM::Network;
 
@@ -1305,6 +1321,307 @@ int testCancelDuringAssetSha256()
     return fail;
 }
 
+/// @brief 为单个资源生成本地清单，摘要和长度来自独立的实际下载源。
+/// @param path 测试同步所访问的 file URL 对应的清单。
+/// @param download 文件来源，与待保护的安装目录不同。
+/// @param relative 清单中的相对安装路径；路径用来构造链接场景。
+/// @param archive 可选的首次安装 ZIP，提供时必须包含真实摘要。
+/// @return 清单及其引用的制品都准备成功才为真。
+/// @details 冷启动也要求合法的非空文件清单，不能依靠错误回退完成测试。
+/// URL 总是指向 fixture 中预先完成的磁盘文件。
+/// 强制读回实际散列，可检出创建归档失败或重复使用上一次测试下载。
+/// 需要验证安装位置时，将哨兵文件与下载源路径分开传入。
+bool writeSingleFileManifest(const std::filesystem::path& path,
+                             const std::filesystem::path& download,
+                             std::string_view             relative,
+                             const std::filesystem::path& archive = {})
+{
+    const auto      digest = AssetSyncService::sha256File(download);
+    std::error_code error;
+    const auto      size = std::filesystem::file_size(download, error);
+    if ( digest.empty() || error ) return false;
+    // 使用正式清单键构建数据。JSON 序列化保留路径中的引号或非 ASCII 内容，
+    // 所以测试不依赖手工拼接字符串在各个平台上的正确转义。
+    auto manifest = nlohmann::json{ { "version", "asset-test" },
+                                    { "files",
+                                      nlohmann::json::array(
+                                          { { { "path", relative },
+                                              { "url", fileUrlFor(download) },
+                                              { "sha256", digest },
+                                              { "size", size } } }) } };
+    if ( !archive.empty() ) {
+        // 让冷启动必须先通过生产摘要校验，再命中解压前的屏障。
+        const auto checksum = AssetSyncService::sha256File(archive);
+        if ( checksum.empty() ) return false;
+        // 包和文件各自散列，防止用增量摘要意外校验 ZIP。
+        // URL 选择和摘要读取都随后由生产 sync 路径完成。
+        manifest["package"] = { { "url", fileUrlFor(archive) },
+                                { "sha256", checksum } };
+    }
+    return writeTextFile(path, manifest.dump());
+}
+
+/// @brief 在第一份下载结束后发起第二份，确认取消只影响第二份的内容。
+/// @param fullPackage 是否验证 ZIP 分支；否则使用清单中的单个增量文件。
+/// @return CTest 累计的断言失败数。
+/// @details 完整包在摘要通过后暂停，增量在摘要之前暂停，覆盖两个共享名
+/// 原本发生竞争的时机。第二份内容与第一份不同，以检出串用和错误清理。
+/// 两个线程使用不同安装根和下载源，唯一共同状态是实现选择的系统下载暂存根。
+/// 第一个任务成功与否由最终安装字节和正式状态共同判断，避免 Ready
+/// 降级误报通过。
+int testConcurrentDownloads(bool fullPackage)
+{
+    std::error_code error;
+    const auto      temporary = std::filesystem::temp_directory_path(error);
+    if ( error ) return 1;
+    const MMM::Config::ScopedTemporaryDirectory root(temporary,
+                                                     "mmm-asset-test-");
+    if ( root.error() ) return 1;
+
+    // 两根均用 assets 作为最后一级，因为完整包依赖归档里的固定顶层名。
+    // 每组配置在线程启动前固定：第一组回调等待信号，第二组回调负责取消。
+    // 两组内容长度也不同，即使覆盖只发生在前缀，最终字节比较仍会发现。
+    std::array<AssetSyncOptions, 2>  options;
+    const std::array<std::string, 2> content{ "first asset", "another asset" };
+    for ( std::size_t i = 0; i < options.size(); ++i ) {
+        const auto parent         = root.path() / std::to_string(i);
+        const auto download       = parent / "download.txt";
+        options[i].assetsRootPath = parent / "assets";
+        options[i].manifestUrl    = fileUrlFor(parent / "manifest.json");
+        // 下载源字节各自写在安装树之外；只有下载和发布能使内容到达目标。
+        // 写入原件即使在完整包用例中也必要；合法远端清单不能只有包字段。
+        if ( !writeTextFile(download, content[i]) ) return 1;
+        std::filesystem::path archive;
+        if ( fullPackage ) {
+            // 冷启动时保留 assets 不存在，强制进入 ZIP 下载决策。
+            // 归档项使用与增量相同的资源名，只改变下载以及校验流程。
+            archive = parent / "fixture.zip";
+            if ( !writeZipFile(archive, { { "assets/test.txt", content[i] } }) )
+                return 1;
+        } else {
+            // 真实安装根存在但文件缺失，强制走清单检查和逐文件下载。
+            // 已安装但缺文件的目录让模拟更新无需伪造本地版本。
+            // 对应 manifest 只有单个文件，下载次数不会因为重试剩余项而变化。
+            std::filesystem::create_directories(options[i].assetsRootPath,
+                                                error);
+            if ( error ) return 1;
+        }
+        if ( !writeSingleFileManifest(
+                 parent / "manifest.json", download, "test.txt", archive) )
+            return 1;
+    }
+
+    // 两个任务用相同的进度节点：这保证观察的竞争发生于
+    // 共同的校验阶段，而不是互不相干的清单读取。
+    const auto reachedBarrier = [fullPackage](
+                                    const AssetSyncProgress& progress) {
+        // file:// 写完才发送正字节进度；完整包使用只有摘要后才触发的解压阶段。
+        return fullPackage ? progress.stage ==
+                                 AssetSyncProgressStage::kExtractingPackage
+                           : progress.stage ==
+                                     AssetSyncProgressStage::kDownloadingFile &&
+                                 progress.currentBytes > 0;
+    };
+    // 测试用 promise 同步生产回调，避免迁就不确定的文件大小和系统调度。
+    // 持有的选项和响应在 join 前一直存活，回调不会访问测试函数外的状态。
+    std::promise<void> paused;
+    std::promise<void> resume;
+    auto               pauseSignal  = paused.get_future();
+    auto               resumeSignal = resume.get_future();
+    // 标志只在第一份同步的线程访问。它防止同一下载进度信号触发多次 pause。
+    bool waiting                = false;
+    options[0].progressCallback = [&](const AssetSyncProgress& progress) {
+        if ( !waiting && reachedBarrier(progress) ) {
+            waiting = true;
+            // 先通知控制线程，再停住本轮；通知发生时下载文件已由下载器关闭。
+            paused.set_value();
+            resumeSignal.wait();
+        }
+    };
+
+    // 主线程只在 join 后使用 first，线程终止同步使状态和落盘操作均已完成。
+    AssetSyncResult first;
+    std::jthread    worker([&] { first = AssetSyncService::sync(options[0]); });
+    // 如果下载没有到达屏障，固定的超时用于退出测试，不能依赖工作线程完成通知。
+    // 被测服务只执行文件同步，等待发生在测试回调自身。
+    const bool started = pauseSignal.wait_for(std::chrono::seconds(5)) ==
+                         std::future_status::ready;
+    // 第二个任务从控制线程同步执行，这个位不跨线程共享。
+    bool            cancelled = false;
+    AssetSyncResult second;
+    if ( started ) {
+        // 取消位只被本线程查询。第一份仍暂停在自己下载结束的阶段。
+        options[1].progressCallback = [&](const AssetSyncProgress& progress) {
+            if ( reachedBarrier(progress) ) cancelled = true;
+        };
+        options[1].cancellationCallback = [&] { return cancelled; };
+        // 等其取消清理全部返回才释放第一轮，避免两者脱离临时名竞争区间。
+        second = AssetSyncService::sync(options[1]);
+    }
+    // 即使超时或文件准备失败也释放等待，防止测试退出时卡在 join。
+    resume.set_value();
+    worker.join();
+    // 记录实际同步诊断，让 fixture 配置问题与两份制品互相覆盖可区分。
+    if ( !started || !first.errorMessage.empty() )
+        XERROR("First download did not reach successful publication: {}",
+               first.errorMessage);
+    // 除读回第一份的精确字节外，还检查被取消目录没有正式文件。
+    // ZIP 分支需要验证阶段之后发生重叠，否则旧实现可能先遇到摘要不匹配而
+    // 无法检出验证后被替换的文件。增量分支则故意选择源校验之前交错。
+    // 本地 file URL 的进度在完整文件关闭后触发，因此无需外网或时序猜测。
+    // 完整包和增量使用各自的成功状态，不能把降级就绪当成更新已完成。
+    return expectTrue(
+        started && cancelled &&
+            first.status == (fullPackage ? AssetSyncStatus::kDownloaded
+                                         : AssetSyncStatus::kUpdated) &&
+            second.status == AssetSyncStatus::kCancelled &&
+            readTextFile(options[0].assetsRootPath / "test.txt") ==
+                content[0] &&
+            !std::filesystem::exists(options[1].assetsRootPath / "test.txt",
+                                     error) &&
+            !error,
+        fullPackage ? "parallel full download cancellation is isolated"
+                    : "parallel incremental download cancellation is isolated");
+}
+
+#if defined(__linux__)
+/// @brief 完整包和增量必须同样拒绝已存在的目录链接，外部旧字节不能改变。
+/// @return 任一入口接受链接或修改根外文件时累计一次失败。
+/// @details 外部文件与请求内容不同，确保没有触发摘要相同的无操作路径。
+/// 用链接作为父级而不是最终文件，测试必须拒绝在该目录下建立暂存。
+int testRedirectedAssetDestination()
+{
+    const auto root   = createTempRoot();
+    const auto assets = root / "install" / "assets";
+    // 外部哨兵只在相对安装根的意义上位于外部；仍留在本次 fixture 中。
+    const auto outside  = root / "outside";
+    const auto download = root / "download.txt";
+    if ( !writeTextFile(outside / "file.txt", "external original") ||
+         !writeTextFile(download, "incoming content") ||
+         !writeSingleFileManifest(
+             root / "manifest.json", download, "link/file.txt") ||
+         !writeZipFile(root / "fixture.zip",
+                       { { "assets/link/file.txt", "zip content" } }) )
+        return 1;
+    std::error_code error;
+    std::filesystem::create_directories(assets, error);
+    if ( error ) return 1;
+    // 让同一链接可被完整包和增量检查共享，两个请求都瞄准同一个哨兵。
+    std::filesystem::create_directory_symlink(outside, assets / "link", error);
+    if ( error ) return 1;
+
+    AssetSyncOptions options;
+    options.assetsRootPath = assets;
+    options.manifestUrl    = fileUrlFor(root / "manifest.json");
+    const auto  result     = AssetSyncService::sync(options);
+    std::string zipError;
+    // 完整包的常规入口直接解压到配置父目录，不能只断言本地 ZIP 导入拒绝链接。
+    const bool extracted = AssetSyncService::extractZipArchive(
+        root / "fixture.zip", assets.parent_path(), zipError);
+    // 增量保留旧安装启动能力，但必须报告目标拒绝并保持相同字节。
+    const auto fail = expectTrue(
+        result.status == AssetSyncStatus::kReady &&
+            result.errorMessage.find("Unsafe asset destination") !=
+                std::string::npos &&
+            !extracted &&
+            zipError.find("Unsafe asset package destination") !=
+                std::string::npos &&
+            readTextFile(outside / "file.txt") == "external original",
+        "linked parents are rejected by both asset entry points");
+    // remove_all 对 fixture
+    // 中的链接本身执行移除，外部哨兵属于测试根下的另一棵子树。
+    std::filesystem::remove_all(root, error);
+    return fail;
+}
+
+/// @brief 跨卷复制时注入短写，确认校验过的下载不能在复制失败后破坏旧文件。
+/// @return 确认短写留在安装卷暂存区且不影响正式文件时返回零。
+/// @details 系统临时目录与安装目录设备号不同，通过文件大小限制使目标卷
+/// 拒绝继续写已校验文件。不能只把一个路径命名为另一个卷模拟这一行为。
+int testCrossVolumeAssetCopyFailure()
+{
+    std::error_code error;
+    const auto      temporary = std::filesystem::temp_directory_path(error);
+    if ( error ) return 1;
+    // 设备号以真实挂载为准，避免 TMPDIR 本身位于共享内存时误报跨卷。
+    struct stat sourceVolume{};
+    struct stat assetVolume{};
+    // 没有独立 tmpfs 时仍由同卷并行和目录检查用例覆盖正常行为。
+    if ( stat(temporary.c_str(), &sourceVolume) != 0 ||
+         stat("/dev/shm", &assetVolume) != 0 ||
+         sourceVolume.st_dev == assetVolume.st_dev )
+        return 0;
+
+    const MMM::Config::ScopedTemporaryDirectory root(temporary,
+                                                     "mmm-asset-test-");
+    // 与真实下载目录不同的挂载点只存放安装目标，确保复验和发布针对同一设备。
+    const MMM::Config::ScopedTemporaryDirectory target("/dev/shm",
+                                                       "mmm-asset-test-");
+    if ( root.error() || target.error() ) return 1;
+    // 先成功安装旧版本，用完全不同的长度识别可能发生的覆盖或截断。
+    const auto original = target.path() / "file.txt";
+    const auto download = root.path() / "download.txt";
+    const auto manifest = root.path() / "manifest.json";
+    if ( !writeTextFile(original, "installed original") ||
+         !writeTextFile(download, std::string(64 * 1024, 'd')) ||
+         !writeSingleFileManifest(manifest, download, "file.txt") )
+        return 1;
+
+    // 文件限额在进程范围内生效。本用例在并行下载线程全部结束后运行，
+    // 信号处理只在注入期间改变，下一用例仍能正常写任意大小的夹具。
+    struct rlimit limit{};
+    if ( getrlimit(RLIMIT_FSIZE, &limit) != 0 ) return 1;
+    const auto previousSignal = std::signal(SIGXFSZ, SIG_IGN);
+    if ( previousSignal == SIG_ERR ) return 1;
+    bool             limited = false;
+    AssetSyncOptions options;
+    options.assetsRootPath   = target.path();
+    options.manifestUrl      = fileUrlFor(manifest);
+    options.progressCallback = [&](const AssetSyncProgress& progress) {
+        if ( progress.stage == AssetSyncProgressStage::kDownloadingFile &&
+             progress.currentBytes > 0 ) {
+            // 下载已关闭，限额只会影响将完整文件复制到安装卷的后续阶段。
+            // 只修改软限制，避免故障发生后普通进程无法恢复原限额。
+            // 限额少于有效数据量，但允许创建部分文件以覆盖真实中途写失败。
+            auto testLimit     = limit;
+            testLimit.rlim_cur = 4096;
+            limited            = setrlimit(RLIMIT_FSIZE, &testLimit) == 0;
+        }
+    };
+    const auto result = AssetSyncService::sync(options);
+    // 先撤销故障再读结果，保留错误的源头由同步诊断区分。
+    const bool restored = setrlimit(RLIMIT_FSIZE, &limit) == 0;
+    std::signal(SIGXFSZ, previousSignal);
+    // 明确要求复制阶段的错误文本；只有旧内容不变不足以证明走到跨卷安装。
+    // 此时正式资源仍能读取，版本文件也不能提前写成远端版本。
+    // 故障条件包括实际限额是否生效、恢复是否成功以及确切的暂存写入失败；
+    // 若是下载文件本身没有落盘、下载地址错误或文件早在本地就相同，都不能通过。
+    const auto failure = expectTrue(
+        limited && restored && result.status == AssetSyncStatus::kReady &&
+            result.errorMessage.find("Could not stage asset file") !=
+                std::string::npos &&
+            readTextFile(original) == "installed original" &&
+            !std::filesystem::exists(target.path() / ".mmm-assets-version",
+                                     error) &&
+            !error,
+        "cross-volume staging copy failure preserves installed bytes");
+    if ( failure ) return failure;
+
+    // 恢复后用同一个安装根与清单重试。先前短文件不能污染当前内容，
+    // 旧版本保留也不能让后续同步误以为目标资产已经安装。
+    options.progressCallback = {};
+    const auto retry         = AssetSyncService::sync(options);
+    const auto digest        = AssetSyncService::sha256File(download);
+    // 摘要比较核对实际跨卷复制及发布的结果；非空检查防止两个失败值相等。
+    // 重试从完整清单校验开始，故意不传入第一次的下载或暂存路径。
+    // 已成功发布的新文件必须计入更新计数，避免单纯依赖磁盘读回造成误报。
+    return expectTrue(retry.status == AssetSyncStatus::kUpdated &&
+                          retry.updatedFileCount == 1 && !digest.empty() &&
+                          AssetSyncService::sha256File(original) == digest,
+                      "cross-volume asset retry publishes verified bytes");
+}
+#endif
+
 }  // namespace
 
 /// @brief 依次运行全部本地资源同步场景并汇总失败数。
@@ -1345,6 +1662,13 @@ int main(int argc, char** argv)
     fail += testSyncSkipsPreciseCheckWhenVersionMatches();
     fail += testSyncForcePreciseCheckRepairsMissingFile();
     fail += testSyncReportsPreciseCheckProgress();
+    fail += testConcurrentDownloads(true);
+    fail += testConcurrentDownloads(false);
+#if defined(__linux__)
+    // 这两项分别需要真实目录链接和独立暂存卷，放在跨平台的并行下载测试之后。
+    fail += testRedirectedAssetDestination();
+    fail += testCrossVolumeAssetCopyFailure();
+#endif
     fail += testImportLocalPackageDefersVerification();
     fail += testImportLocalPackageOffline();
     // 取消用例最后执行，证明默认 options 无需 fixture 即可安全退出。

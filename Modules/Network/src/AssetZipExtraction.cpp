@@ -1,11 +1,11 @@
 #include "network/AssetSyncService.h"
 
 #include "AssetPathSafety.h"
+#include "config/StagedFile.h"
 #include "config/Utf8Path.h"
 
 #include <miniz.h>
 
-#include <chrono>
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
@@ -176,29 +176,13 @@ bool extractAssetZipEntry(mz_zip_archive& zip, mz_uint index,
         return false;
     }
 
-    // 暂存名称不取自归档。只清理经 create_directory 确认由本次操作创建的目录。
-    // 如果另一个任务已占用候选目录，创建必须失败，当前调用不能接管其内容。
-    const auto stamp =
-        std::chrono::steady_clock::now().time_since_epoch().count();
-    const auto staging = parent / (".mmm-zip-entry-" + std::to_string(stamp));
-    if ( !std::filesystem::create_directory(staging, ec) ) {
-        error =
-            ec ? ec.message() : "Asset entry staging directory already exists";
+    // 每个 ZIP 条目独占同卷暂存，名称既不取自归档也不被其他任务接管。
+    const Config::ScopedTemporaryDirectory staging(parent, ".mmm-zip-entry-");
+    if ( staging.error() ) {
+        error = staging.error().message();
         return false;
     }
-    /// @brief 回收本次操作独占的目录，作用域短于 destination 的使用期。
-    struct RemoveZipStaging {
-        const std::filesystem::path& m_path;  ///< 当前条目私有暂存目录。
-        /// @brief 校验、写入失败或发布成功后均清理暂存目录。
-        ~RemoveZipStaging()
-        {
-            std::error_code ignored;
-            std::filesystem::remove_all(m_path, ignored);
-        }
-    } cleanup{ staging };
-
-    // 保持暂存文件名固定，让归档只影响汇合后的最终路径。
-    const auto    temporary = staging / "entry";
+    const auto    temporary = staging.path() / "entry";
     std::ofstream file(temporary, std::ios::binary);
     if ( !file ) {
         error = "Failed to open staging file for asset package entry";
@@ -235,7 +219,7 @@ bool extractAssetZipEntry(mz_zip_archive& zip, mz_uint index,
 
 /// @brief 检查资源 ZIP 的条目和展开总量，将各文件分块解压到目标根下。
 /// @details 读取器只按需读取 ZIP 区间。先预检所有条目大小，再处理路径和输出。
-/// 条目名经过原有相对路径和词法包含检查。单条文件经 CRC 校验后才替换同名资源。
+/// 条目名经过相对路径检查及真实祖先检查，单条文件经 CRC 校验后才替换同名资源。
 /// @param zipPath 已下载或用户选中的 ZIP 文件。
 /// @param destinationRoot 归档相对路径的唯一写入根。
 /// @param errorMessage 接收取消、格式、路径、预算或写入错误。
@@ -311,6 +295,14 @@ bool AssetSyncService::extractZipArchive(
         totalSize += fileStat.m_uncomp_size;
     }
 
+    std::error_code rootError;
+    // 用户选定的解压根可以经由配置链接到另一个卷。只信任解析后的根，
+    // 归档提供的相对条目不应再次引入重定向。
+    const auto root = AssetPaths::resolveRoot(destinationRoot, rootError);
+    if ( rootError ) {
+        errorMessage = rootError.message();
+        return false;
+    }
     // 通过全部规模限制后再写入，使用原归档顺序维护同名条目的覆盖语义。
     // 逐次读取目录项避免另存一份条目向量或路径副本。
     for ( mz_uint index = 0; index < fileCount; ++index ) {
@@ -334,13 +326,14 @@ bool AssetSyncService::extractZipArchive(
             errorMessage = "Unsafe path in asset package: " + archiveName;
             return false;
         }
-        const auto destination =
-            (destinationRoot / Config::utf8ToPath(archiveName))
-                .lexically_normal();
-        // 与根组合后再检查词法包含关系，不能让规范化结果指向根本身。
-        if ( !AssetPaths::isPathInsideRoot(destinationRoot, destination) ) {
-            errorMessage =
-                "Asset package path escapes destination: " + archiveName;
+        // 相对名称已经按 ZIP 的分隔符协议验证，实际文件系统仍接收原生编码。
+        const auto relative    = Config::utf8ToPath(archiveName);
+        const auto destination = root / relative;
+        // 完整包和增量检查同一套真实目标规则，已有链接不会成为安装入口。
+        if ( !AssetPaths::isUnredirectedDestination(
+                 root, relative, rootError) ) {
+            errorMessage = "Unsafe asset package destination: " + archiveName +
+                           ": " + rootError.message();
             return false;
         }
 
