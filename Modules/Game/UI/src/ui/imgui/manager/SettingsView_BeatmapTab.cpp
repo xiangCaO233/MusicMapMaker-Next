@@ -19,6 +19,7 @@
 #include <future>
 #include <limits>
 #include <memory>
+#include <string>
 #include <string_view>
 
 #include <utility>
@@ -268,13 +269,24 @@ void SettingsView::drawBeatmapSettings()
         m_editingMeta.bgxoffset       = currentMeta.bgxoffset;
         m_editingMeta.bgyoffset       = currentMeta.bgyoffset;
     }
-    // 文本草稿与外部结构字段同步完成后，所有控件读取同一份 m_editingMeta。
-    // 后续控件统一编辑草稿引用，changed 决定是否提交完整元数据命令。
-    // changed 初始为 false，纯展示、折叠和资源悬浮不会触发命令。
-    // 文件任务完成后只替换后台结果，控件仍在同一帧读写稳定草稿。
-    // 缓存恢复前继续显示最近一次已完成候选，避免编辑时下拉内容闪空。
-    auto& meta    = m_editingMeta;
-    bool  changed = false;
+    auto& meta = m_editingMeta;
+    // 基线属于本帧显示的草稿，不属于可能晚于输入返回的后台快照。
+    // 在首个真实写入之前保存它，后续同帧编辑继续共用原始字段值。
+    // 只读绘制、折叠与悬浮不构造元数据副本，也不取得共享所有权。
+    std::shared_ptr<const BaseMapMeta> baseline;
+    /// @brief 在修改草稿之前保留本帧初值，供消费端按字段合并。
+    /// @note 草稿可含尚未反映在已发布快照上的前一帧编辑，不能借用快照替代。
+    const auto beginMetadataEdit = [&] {
+        // 用户可能在同帧变更多个值；不能以第二次写入前的草稿覆盖基线。
+        if ( !baseline ) baseline = std::make_shared<const BaseMapMeta>(meta);
+    };
+
+    // 单选组把整数直接交给布局回调写入。独立保存枚举值，让下方资源行
+    // 当帧读到新类型，并等到统一提交时才把它写进元数据草稿。
+    // 枚举不以 int 引用别名读写，以免绕过草稿基线并依赖对象底层表示。
+    int           coverType        = static_cast<int>(meta.cover_type);
+    bool          coverTypeChanged = false;
+    constexpr int videoCoverType   = static_cast<int>(CoverType::VIDEO);
 
     // 文件描述随快照发布；本帧刚改过的引用先显示原文，稍后的结果再补足状态。
     const auto displayPath = [](const Logic::BeatmapSettingsPath& known,
@@ -291,11 +303,6 @@ void SettingsView::drawBeatmapSettings()
     const bool mediaReady =
         m_beatmapSettingsMedia &&
         m_beatmapSettingsMedia->projectRoot == snapshot.projectRoot;
-    // 草稿初值与后续修改只在本帧内比较，作为差量命令基线。
-    // 这样本次编辑不会把所有其它字段强行写回到异步捕获时的值。
-    // 文件状态展示仍引用已发布快照，最近一次改名可先显示草稿中的路径。
-    auto baseline = meta;
-
     // IMD 检测只依据当前谱面文件扩展名，用于控制格式不支持的编辑项。
     // 这些限制只依赖源文件格式，不以工程资源是否扫描成功为前提。
     bool isImd = false;
@@ -446,7 +453,7 @@ void SettingsView::drawBeatmapSettings()
                 rowIndex,
                 labelPtr,
                 maxLabelW,
-                [labelPtr, &valRef = valRef, &changed, enabled](
+                [labelPtr, &valRef = valRef, &beginMetadataEdit, enabled](
                     Clay_BoundingBox r, bool) {
                     // 可见标签建立独立 ID 作用域，内部统一复用 `##Input`。
                     ImGui::PushID(labelPtr);
@@ -461,9 +468,9 @@ void SettingsView::drawBeatmapSettings()
                     // 输入框占满 Clay 分配的值列宽度。
                     ImGui::SetNextItemWidth(r.width);
                     if ( ImGui::InputText("##Input", buf, sizeof(buf)) ) {
+                        // 输入框只修改栈上缓冲，保留原始长字符串后才回写。
+                        beginMetadataEdit();
                         valRef = buf;
-                        // 文本实际改变时才触发元数据命令。
-                        changed = true;
                     }
                     if ( !enabled ) {
                         // 与当前控件的 BeginDisabled 严格配对。
@@ -576,26 +583,25 @@ void SettingsView::drawBeatmapSettings()
             maxLabelW,
             { { TR_CACHE("ui.settings.beatmap.cover_type.image").data(), 0 },
               { TR_CACHE("ui.settings.beatmap.cover_type.video").data(), 1 } },
-            (int&)meta.cover_type,
-            changed);
-        // 单选 helper 只改草稿枚举与 changed，不立即刷新背景资源。
+            coverType,
+            coverTypeChanged);
 
-        if ( meta.cover_type == MMM::CoverType::VIDEO ) {
+        if ( coverType == videoCoverType ) {
             // 视频起始时间只在视频背景语义下显示，切回图片时保留原值。
-            addSettingItem(*sec,
-                           rowIndex,
-                           TR_CACHE("ui.settings.beatmap.video_start").data(),
-                           maxLabelW,
-                           [&](Clay_BoundingBox r, bool) {
-                               // InputInt
-                               // 直接编辑元数据整数单位，消费者负责时间解释。
-                               ImGui::SetNextItemWidth(r.width);
-                               if ( ImGui::InputInt("##VideoStart",
-                                                    &meta.video_starttime) ) {
-                                   // 实际输入变化才提交完整元数据命令。
-                                   changed = true;
-                               }
-                           });
+            addSettingItem(
+                *sec,
+                rowIndex,
+                TR_CACHE("ui.settings.beatmap.video_start").data(),
+                maxLabelW,
+                [&](Clay_BoundingBox r, bool) {
+                    // 暂存控件值，提交前保留原时间基线。
+                    int videoStart = meta.video_starttime;
+                    ImGui::SetNextItemWidth(r.width);
+                    if ( ImGui::InputInt("##VideoStart", &videoStart) ) {
+                        beginMetadataEdit();
+                        meta.video_starttime = videoStart;
+                    }
+                });
         }
 
         addSettingItem(
@@ -608,10 +614,10 @@ void SettingsView::drawBeatmapSettings()
                 int offsets[2] = { meta.bgxoffset, meta.bgyoffset };
                 ImGui::SetNextItemWidth(r.width);
                 if ( ::MMM::UI::FeedbackDragInt2("##BgOffset", offsets) ) {
-                    // 两个方向作为一次交互共同提交，避免中间不一致。
+                    // 两个方向共用写入前的基线，避免只保留后一个轴的差量。
+                    beginMetadataEdit();
                     meta.bgxoffset = offsets[0];
                     meta.bgyoffset = offsets[1];
-                    changed        = true;
                 }
             });
 
@@ -643,9 +649,9 @@ void SettingsView::drawBeatmapSettings()
                 ImGui::SetNextItemWidth(r.width);
                 if ( ::MMM::UI::FeedbackDragFloat(
                          "##BPM", &bpm, 0.1f, -1.0f, 1000.0f, "%.2f") ) {
-                    meta.preference_bpm = (double)bpm;
                     // -1 保留格式约定中的未指定语义，上限限制异常输入。
-                    changed = true;
+                    beginMetadataEdit();
+                    meta.preference_bpm = (double)bpm;
                 }
                 if ( isImd ) {
                     // 禁用作用域只包围 BPM 控件，不影响可编辑轨道字段。
@@ -653,20 +659,23 @@ void SettingsView::drawBeatmapSettings()
                 }
             });
 
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.beatmap.tracks").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                // 主轨数仍是元数据字段，由统一 CmdUpdateBeatmapMetadata
-                // 提交。
-                ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::InputInt("##Tracks", &meta.track_count) ) {
-                    // 具体有效性和结构同步由逻辑命令处理，本页只记录输入变化。
-                    changed = true;
-                }
-            });
+        addSettingItem(*sec,
+                       rowIndex,
+                       TR_CACHE("ui.settings.beatmap.tracks").data(),
+                       maxLabelW,
+                       [&](Clay_BoundingBox r, bool) {
+                           // 主轨数仍是元数据字段，由统一
+                           // CmdUpdateBeatmapMetadata 提交。
+                           // 保持统一的提交顺序，ImGui
+                           // 不能先在元数据对象内写入键数。
+                           int trackCount = meta.track_count;
+                           ImGui::SetNextItemWidth(r.width);
+                           if ( ImGui::InputInt("##Tracks", &trackCount) ) {
+                               // 具体有效性和结构同步由逻辑命令处理，本页只记录输入变化。
+                               beginMetadataEdit();
+                               meta.track_count = trackCount;
+                           }
+                       });
 
         // 简化编辑不展示隐藏辅助区的数量编辑；既有轨道与数据继续保留。
         if ( Config::AppConfig::instance()
@@ -739,7 +748,7 @@ void SettingsView::drawBeatmapSettings()
                            const auto lengthText =
                                MMM::UI::Utils::formatCanvasDuration(
                                    meta.map_length / 1000.0);
-                           // 时长为只读派生信息，不设置 changed。
+                           // 时长取自只读派生值，无需捕获编辑基线。
                            ImGui::SetCursorScreenPos({ r.x, r.y });
                            ImGui::TextUnformatted(lengthText.c_str());
                        });
@@ -785,7 +794,7 @@ void SettingsView::drawBeatmapSettings()
         /// @note 目标枚举区分同名的封面与背景“导入图片”按钮。
         // 回调执行在本帧结束前，工程和值身份由同一不可变快照保持。
         const auto drawResourceImportButton =
-            [this, project, &snapshot, importButtonWidth, &meta](
+            [this, project, &snapshot, importButtonWidth, &coverType](
                 const char*                  label,
                 BeatmapResourceTarget        target,
                 const std::filesystem::path& resourcePath) {
@@ -817,7 +826,7 @@ void SettingsView::drawBeatmapSettings()
                     // 保存点击时的媒体类型，跨帧选择器不能随草稿变动串绑。
                     m_importBackgroundVideo =
                         target == BeatmapResourceTarget::Background &&
-                        meta.cover_type == CoverType::VIDEO;
+                        coverType == videoCoverType;
                     // 保留点击时的载图实例；同路径重载后也不能接收旧结果。
                     m_resourceImportSource = m_beatmapSettings;
                     m_beatmapResourceImportError.clear();
@@ -928,12 +937,13 @@ void SettingsView::drawBeatmapSettings()
                     if ( drawClearReference(audioHint.empty()) &&
                          (!audioHint.empty() ||
                           !meta.song_file_hint_cleared) ) {
+                        // 两处历史引用及显式清除标记须一起参与命令差量。
+                        beginMetadataEdit();
                         meta.song_file_hint.clear();
                         meta.main_audio_path.clear();
                         // 持久化这次显式选择，保存时不从别的 Main BGM
                         // 自动填回。
                         meta.song_file_hint_cleared = true;
-                        changed                     = true;
                     }
                     if ( project ) {
                         // 只列出后台复制的 Main 候选，不借用工程资源容器。
@@ -944,11 +954,11 @@ void SettingsView::drawBeatmapSettings()
                             if ( ::MMM::UI::FeedbackSelectable(
                                      (res.id + "##" + res.path).c_str(),
                                      isSelected) ) {
+                                beginMetadataEdit();
                                 meta.song_file_hint = res.selection;
                                 // 选择提示字段后清空旧主音频路径，消除双重来源歧义。
                                 meta.main_audio_path.clear();
                                 meta.song_file_hint_cleared = false;
-                                changed                     = true;
                             }
                             // 打开弹窗时将键盘焦点定位到当前资源。
                             if ( isSelected ) ImGui::SetItemDefaultFocus();
@@ -1004,8 +1014,8 @@ void SettingsView::drawBeatmapSettings()
                     }
                     if ( drawClearReference(meta.cover_path.empty()) &&
                          !meta.cover_path.empty() ) {
+                        beginMetadataEdit();
                         meta.cover_path.clear();
-                        changed = true;
                     }
                     // IsWindowAppearing 只在候选 popup 打开的首帧产生边沿。
                     // 保持下拉打开时借用已扫描结果，无需周期性重扫整个工程。
@@ -1024,9 +1034,9 @@ void SettingsView::drawBeatmapSettings()
                             if ( ::MMM::UI::FeedbackSelectable(
                                      (imgPath + "##" + imgPath).c_str(),
                                      isSelected) ) {
-                                meta.cover_path = Config::utf8ToPath(imgPath);
                                 // 只更新草稿，函数末尾统一提交元数据命令。
-                                changed = true;
+                                beginMetadataEdit();
+                                meta.cover_path = Config::utf8ToPath(imgPath);
                             }
                             if ( isSelected ) ImGui::SetItemDefaultFocus();
                         }
@@ -1081,8 +1091,8 @@ void SettingsView::drawBeatmapSettings()
                     }
                     if ( drawClearReference(meta.main_cover_path.empty()) &&
                          !meta.main_cover_path.empty() ) {
+                        beginMetadataEdit();
                         meta.main_cover_path.clear();
-                        changed = true;
                     }
                     // IsWindowAppearing 只在候选 popup 打开的首帧产生边沿。
                     // 保持下拉打开时借用已扫描结果，无需周期性重扫整个工程。
@@ -1092,7 +1102,7 @@ void SettingsView::drawBeatmapSettings()
                         m_beatmapSettingsScanRequested;
                     if ( project && mediaReady ) {
                         const auto& backgroundResources =
-                            meta.cover_type == CoverType::VIDEO
+                            coverType == videoCoverType
                                 ? m_beatmapSettingsMedia->videos
                                 : m_beatmapSettingsMedia->images;
 
@@ -1107,15 +1117,16 @@ void SettingsView::drawBeatmapSettings()
                                 auto chosenPath =
                                     Config::utf8ToPath(backgroundPath);
                                 // 选择只写元数据草稿，不在 UI 回调中加载背景。
+                                // 先记住旧封面及旧背景，后续可能一次选图写入两个字段。
+                                beginMetadataEdit();
                                 meta.main_cover_path = chosenPath;
-                                changed              = true;
 
                                 // 如果背景是图片且封面为空，则自动沿用同一张图片。
                                 // 已有封面始终保留，避免隐式覆盖用户显式选择。
                                 // 两种候选在扫描时已按当前背景类型互斥分组，
                                 // 可直接判断选中项是不是图片，无需在 UI
                                 // 重查后缀。
-                                if ( meta.cover_type != CoverType::VIDEO ) {
+                                if ( coverType != videoCoverType ) {
                                     if ( meta.cover_path.empty() ) {
                                         // 使用同一工程相对路径维持封面与背景可迁移性。
                                         meta.cover_path = chosenPath;
@@ -1130,7 +1141,7 @@ void SettingsView::drawBeatmapSettings()
                 // 未打开弹窗时恢复预览阶段可能压入的警告颜色。
                 if ( bgPushed ) ImGui::PopStyleColor();
                 drawResourceImportButton(
-                    TR(meta.cover_type == CoverType::VIDEO
+                    TR(coverType == videoCoverType
                            ? "ui.settings.beatmap.import_video"
                            : "ui.settings.beatmap.import_image")
                         .data(),
@@ -1161,18 +1172,19 @@ void SettingsView::drawBeatmapSettings()
                            m_beatmapResourceImportError.c_str());
     }
 
-    if ( changed ) {
+    if ( coverTypeChanged && coverType != static_cast<int>(meta.cover_type) ) {
+        // 单选可以独立触发更新，也可以与资源字段合并为同一命令。
+        // 点击已选项不改值，只有类型真正变更时才需要保存元数据。
+        beginMetadataEdit();
+        meta.cover_type = static_cast<CoverType>(coverType);
+    }
+    if ( baseline ) {
         // 一帧内所有元数据字段变化合并成一个逻辑命令，保持原子更新语义。
-        // 草稿初值用于提取实际变化字段，后台快照到达前已经发生的外部修改
-        // 继续由逻辑线程按消费时的最新值保留。
-        // 专用轨道数量命令不设置 changed，避免与完整元数据命令重复处理。
-        // 只有编辑发生才为差量基线分配所有权，普通绘制不增加引用计数。
+        // 逻辑线程保留消费前发生的外部修改；专用轨道命令不参与这份差量。
         Logic::submitBeatmapSettingsCommand(
             snapshot,
             Logic::CmdUpdateBeatmapMetadata{
-                .baseMeta = meta,
-                .settingsBaseline =
-                    std::make_shared<const BaseMapMeta>(std::move(baseline)) });
+                .baseMeta = meta, .settingsBaseline = std::move(baseline) });
     }
 }
 

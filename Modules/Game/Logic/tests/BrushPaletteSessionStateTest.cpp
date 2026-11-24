@@ -1476,6 +1476,12 @@ bool testBeatmapSettingsSnapshot(const std::filesystem::path& outputRoot)
     pool.init();
     auto map                     = std::make_shared<BeatMap>();
     map->m_baseMapMetadata.title = "original";
+    // 长字符串越过小字符串优化阈值，让后续差量检查也覆盖完整字符串的保留。
+    // 这两个字段独立于背景和标题；长内容无需参与设置页本次提交。
+    const std::string album(4093, 'A');
+    const std::string artist(4099, 'B');
+    map->m_baseMapMetadata.album          = album;
+    map->m_baseMapMetadata.artist_unicode = artist;
     // 重载前会冲刷尾随保存。提供同一条可写 .mmm 路径，避免把保存失败
     // 当成旧设置成功拦截，也不会在仓库根目录留下无名测试文件。
     map->m_baseMapMetadata.map_path    = root / "same-chart.mmm";
@@ -1596,14 +1602,22 @@ bool testBeatmapSettingsSnapshot(const std::filesystem::path& outputRoot)
         // 恢复工程能力后，后续合法设置与重载仍应成功，拒绝行为不应污染队列。
         currentProject.m_isTemporaryProject = false;
 
-        // 在设置草稿捕获之后先排队外部改名，再从旧草稿修改标题。
-        // 消费时仅应用标题差量，已经发生的作者修改不得被完整元数据覆盖。
-        auto external   = normal->metadata;
-        external.author = "external-edit";
+        // 先入队外部更新，再以同一帧基线提交多字段设置。
+        // 作者和长专辑内容在草稿中都未编辑；消费时必须保留较新的外部值。
+        // 新旧专辑长度不同，也能识别错误保留草稿容量但只回写一部分的实现。
+        const std::string latestAlbum(8191, 'C');
+        auto              external = normal->metadata;
+        external.author            = "external-edit";
+        external.album             = latestAlbum;
         session->pushCommand(
             Logic::CmdUpdateBeatmapMetadata{ .baseMeta = external });
-        auto edit  = normal->metadata;
-        edit.title = "settings-edit";
+        auto edit    = normal->metadata;
+        edit.title   = "settings-edit";
+        edit.version = "new difficulty";
+        // 给两轴不同符号，避免同步时互换坐标仍通过回归。
+        edit.bgxoffset = 23;
+        edit.bgyoffset = -17;
+        // 两个偏移和两段文本一起提交；每个字段都按同一份写入前初值比较。
         Logic::submitBeatmapSettingsCommand(
             *normal,
             Logic::CmdUpdateBeatmapMetadata{
@@ -1611,11 +1625,15 @@ bool testBeatmapSettingsSnapshot(const std::filesystem::path& outputRoot)
                 .settingsBaseline =
                     std::make_shared<const BaseMapMeta>(normal->metadata) });
         session->update(0, engine.getEditorConfig(), true);
-        // 两条命令按入队顺序消费，与用户在两个界面先后编辑的行为一致。
         const auto& live =
             session->getContext().currentBeatmap->m_baseMapMetadata;
+        // 第三个长字段既没有外部修改，也没有表单修改，仍须逐字完整。
+        // 合并一次后立即读取会话状态，谱面序列化不会掩盖遗漏的字段。
         editsPreserved =
-            live.title == "settings-edit" && live.author == "external-edit";
+            live.title == "settings-edit" && live.version == "new difficulty" &&
+            live.bgxoffset == 23 && live.bgyoffset == -17 &&
+            live.author == "external-edit" && live.album == latestAlbum &&
+            live.artist_unicode == artist;
 
         // 重载保持会话和谱面路径不变，必须靠模型身份丢弃旧命令；保留源引用
         // 让提交阶段无法借助 weak_ptr 过期提前返回，确实走到消费阶段检查。

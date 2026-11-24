@@ -661,7 +661,9 @@
 
 ### P3 · R23 · 设置页每帧复制整份元数据基线
 
-- [ ] 含多个字符串和路径的 BaseMapMeta 在表单静置时也复制，仅提交时用到。按实际编辑保留原字段；用长元数据核对空闲帧分配和多字段合并。
+- [x] 含多个字符串和路径的 BaseMapMeta 在表单静置时也复制，仅提交时用到。按实际编辑保留原字段；用长元数据核对空闲帧分配和多字段合并。
+
+  已验证。Linux RelWithDebInfo 全量构建和 3 项相关 CTest 通过。真实设置页无 GPU 探针测量 32 个静置绘制帧，8 个长文本对应的分配由 256 次降到 0 次。并发元数据回归覆盖四字段同帧提交，同时保留更新的外部字段和未编辑的长字符串。
 
 [Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapTab.cpp:290](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapTab.cpp#L290) [Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapTab.cpp:1162](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapTab.cpp#L1162)
 
