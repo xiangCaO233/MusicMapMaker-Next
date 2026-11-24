@@ -1,3 +1,4 @@
+#include "common/LogicCommands.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"

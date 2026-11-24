@@ -1,7 +1,8 @@
 #pragma once
 
-#include "common/LogicCommands.h"
+#include "common/LogicCommandFwd.h"
 #include "event/project/ProjectOpenOrigin.h"
+#include "mmm/beatmap/MalodyMode.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 
 #include <filesystem>
@@ -19,6 +20,7 @@ class MenuUtil
 {
 public:
     /// @brief 发布逻辑命令事件。
+    /// @note 完整命令类型只由实现及需要构造命令的调用者包含。
     /// @param cmd 需要分发给逻辑层的命令。
     static void dispatchCommand(const Logic::LogicCommand& cmd);
 

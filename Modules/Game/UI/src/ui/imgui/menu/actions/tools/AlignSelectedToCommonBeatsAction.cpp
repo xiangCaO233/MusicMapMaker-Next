@@ -1,3 +1,4 @@
+#include "common/LogicCommands.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuToolsActions.h"
@@ -22,6 +23,7 @@ public:
     {
         return "alignSelected";
     }
+    /// @brief 操作目录用此 ID 绑定菜单项和快捷键。
     std::string_view operationId() const override
     {
         return "AlignSelectedToCommonBeatsAction";
