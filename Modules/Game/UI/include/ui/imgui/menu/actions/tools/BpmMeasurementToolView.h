@@ -231,6 +231,9 @@ private:
         /// @brief 本次分析是否失败。
         bool failed{ false };
 
+        /// @brief 探测发现路径不可读或已经消失。
+        bool sourceMissing{ false };
+
         /// @brief 新音轨的内嵌标记读取快照，普通重新分析不覆盖手工测量。
         std::optional<Audio::AudioMarkerReadResult> markers;
     };
@@ -525,10 +528,14 @@ private:
     /// @param autoMeasure 是否在分析完成后自动估算 BPM 和 offset。
     void requestAnalyzeSelectedTrack(bool autoMeasure = false);
 
+    /// @brief 没有活动任务时把最新请求交给文件工作池。
+    /// @warning UI 路径，只提交任务，不探测文件或等待上轮解码。
+    void startPendingAnalysis();
+
     /// @brief 从后台线程发布一次分析失败结果。
     /// @param autoMeasure 本次任务是否属于自动 BPM/offset 测量。
     /// @warning 后台线程路径：只写入受互斥锁保护的待消费结果和原子状态。
-    void publishAnalysisFailure(bool autoMeasure);
+    void publishAnalysisFailure(bool autoMeasure, bool sourceMissing = false);
 
     /// @brief 请求自动测量当前选择的音频轨道。
     void requestAutoMeasureSelectedTrack();
@@ -677,14 +684,12 @@ private:
     /// @brief 后台分析线程执行体。
     /// @param stopToken 线程停止令牌。
     /// @param track 待分析音频轨道，后台线程持有共享所有权。
-    /// @param duration 音频时长，单位为秒。
     /// @param autoMeasure 是否在频谱分析后继续执行自动 BPM/offset 测量。
     /// @param spectrumProfile 计算时捕获的全局频谱精细度参数。
     /// @warning 后台耗时路径：执行完整音频解码和 FFT；不在
     /// UI/渲染热路径中运行。
     void analyzeTrack(std::stop_token                  stopToken,
-                      std::shared_ptr<ice::AudioTrack> track, double duration,
-                      bool                          autoMeasure,
+                      std::shared_ptr<ice::AudioTrack> track, bool autoMeasure,
                       Config::SpectrumDetailProfile spectrumProfile,
                       const std::filesystem::path&  markerInput);
 
@@ -947,6 +952,24 @@ private:
 
     /// @brief 频谱对数频率映射偏置。
     double m_logFrequencyBias{ 6.91 };
+
+    /// @brief 请求发出时冻结的分析来源与参数，仅在 UI 线程访问。
+    struct AnalysisRequest {
+        /// @brief 已按项目根解析的音频路径。
+        std::filesystem::path path;
+        /// @brief 选择身份，用于丢弃换曲之后才就绪的结果。
+        std::string key;
+        /// @brief 当前配置的频谱分辨率。
+        Config::SpectrumDetailProfile spectrumProfile;
+        /// @brief 是否在分析后估算 BPM 和首拍。
+        bool autoMeasure;
+    };
+
+    /// @brief 等待独占结果槽的最新请求，连续切换覆盖旧请求。
+    std::optional<AnalysisRequest> m_analysisRequest;
+
+    /// @brief 当前后台任务的身份，只由 UI 在派发和消费时访问。
+    std::string m_activeAnalysisKey;
 
     /// @brief 后台分析在线程池中的任务句柄。
     /// @warning 生命周期路径：仅由重新分析或窗口销毁触发写入；任务体不在 UI

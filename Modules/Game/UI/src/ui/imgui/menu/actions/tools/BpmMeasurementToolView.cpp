@@ -43,6 +43,7 @@
 #include <fmt/format.h>
 #include <ice/config/config.hpp>
 #include <ice/manage/AudioBuffer.hpp>
+#include <ice/manage/AudioPool.hpp>
 #include <ice/manage/AudioTrack.hpp>
 #include <ice/thread/ThreadPool.hpp>
 #include <imgui_internal.h>
@@ -801,7 +802,7 @@ PlaybackTimelineState readPlaybackTimelineState(BpmPlaybackRoute route)
     state.visualTime = state.audioTime + state.visualOffset;
     state.totalTime  = getPlaybackTotalTime(route, audioManager);
     state.isPlaying  = getPlaybackStatus(route, audioManager) ==
-                       Audio::PlaybackStatus::Playing;
+                      Audio::PlaybackStatus::Playing;
 
     if ( route != BpmPlaybackRoute::SynchronizedWithEditor ) {
         // audition 路由到此已经获得完整状态，无需查询画布同步缓冲。
@@ -1072,6 +1073,7 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
         if ( m_backgroundAutomaticMeasurement ) {
             // acquire 与发布结果的 release 配对，确保结果可见后再判断结束。
             const bool analysisPending =
+                m_analysisRequest.has_value() || m_analysisFuture.valid() ||
                 m_analysisRunning.load(std::memory_order_relaxed) ||
                 m_analysisFinished.load(std::memory_order_acquire);
             if ( !analysisPending ) {
@@ -1311,10 +1313,40 @@ void BpmMeasurementToolView::reloadTextures(vk::PhysicalDevice& physicalDevice,
 
 /// @brief 尝试消费后台分析结果，并把完整快照转移到 UI 状态。
 /// @warning UI 热路径：每帧轮询一个原子标志；仅在任务完成时短暂加锁并迁移容器。
-/// @details 普通分析只更新波形、频谱和状态；自动分析还会建立首个
+/// @details 活动请求独占结果槽。切换音轨只保存最新请求和停止旧任务，
+/// 不在 UI 上等待磁盘或解码。回收旧 future 后才能重用同一个槽位。
+/// 即使旧任务在取消之前写入了结果，也要先检查停止令牌和来源身份。
+/// 普通分析只更新波形、频谱和状态；自动分析还会建立首个
 /// Timing 段、移动视图中心、重置节拍器，并按调用环境选择直接导出或确认弹窗。
 void BpmMeasurementToolView::consumePendingAnalysis()
 {
+    if ( m_analysisFuture.valid() ) {
+        // 结果槽在工作者完全返回之前不可重用。普通 UI 帧只做零超时轮询。
+        if ( m_analysisFuture.wait_for(std::chrono::seconds::zero()) !=
+             std::future_status::ready )
+            return;
+        // 就绪表示后台已退出，即使它提前写过 running=false，也不能更早重用。
+        m_analysisFuture = {};
+        // stop 也覆盖同一音轨的显式重载，比较身份只能识别跨音轨的切换。
+        if ( m_analysisStopSource.stop_requested() ||
+             m_activeAnalysisKey != m_selectedAudioSyncKey ) {
+            // 取消可能发生在旧任务发布前一刻，因此必须等返回后再丢弃它的结果。
+            std::lock_guard lock(m_pendingResultMutex);
+            m_pendingResult.reset();
+            // 旧工作者已返回，无须 release 再向其发布状态，下一任务由 UI 提交。
+            m_analysisFinished.store(false, std::memory_order_relaxed);
+            m_analysisRunning.store(false, std::memory_order_relaxed);
+        }
+    }
+    if ( m_analysisRequest ) {
+        // 最新请求拥有唯一交付槽，选中资源已经消失时直接丢弃排队请求。
+        if ( m_analysisRequest->key == m_selectedAudioSyncKey )
+            startPendingAnalysis();
+        else
+            m_analysisRequest.reset();
+        return;
+    }
+
     // acquire 确保能观察到后台线程在发布标志前完成的结果写入。
     if ( !m_analysisFinished.load(std::memory_order_acquire) ) {
         return;
@@ -1355,12 +1387,27 @@ void BpmMeasurementToolView::consumePendingAnalysis()
 
     if ( result->failed ) {
         // 自动测量与普通加载使用不同提示，便于调用方区分失败阶段。
-        m_statusText = result->autoTimingRequested
+        m_statusText = result->sourceMissing
+                           ? TR("ui.tools.bpm_measure.file_missing").data()
+                       : result->autoTimingRequested
                            ? TR("ui.tools.bpm_measure.auto_failed").data()
                            : TR("ui.tools.bpm_measure.load_failed").data();
+        // 失败结果已经消费，保留错误文本供自动与手动入口共用。
         m_analysisFinished.store(false, std::memory_order_release);
         return;
     }
+
+    // 首拍与当前视野限幅依赖刚提交的实际 PCM 时长。
+    const auto duration = playbackCanvasDuration();
+    m_firstBeatTime =
+        clampFirstBeatTime(m_firstBeatTime, m_beatLengthSeconds, duration);
+    m_viewCenter =
+        std::clamp(result->autoTimingRequested ? m_firstBeatTime : m_viewCenter,
+                   0.0,
+                   std::max(0.0, duration));
+    // 只有接受结果后才记录已尝试导入，取消后重载同一首歌仍有机会恢复标记。
+    // 无内嵌标记也是一次完成的读取。只要返回了读取结果，就无需重复打开原文件。
+    if ( result->markers ) m_markerImportKey = m_activeAnalysisKey;
 
     // 嵌入的精确 BPM 优先于自动猜测，章节独立恢复。
     // 已保存的首拍和多段 BPM 比自动估算更精确，优先采用。
@@ -3184,8 +3231,8 @@ void BpmMeasurementToolView::updateMetronomePlayback()
         std::abs(m_metronomeScheduledBeatLength - activeBeatLength) > 1e-9;
     // 超过两拍或逆向移动视为 seek，不能沿用连续播放游标。
     const double jumpThreshold = std::max(0.25, activeBeatLength * 2.0);
-    const bool   jumped = audioTime + 1e-4 < m_lastMetronomeAudioTime ||
-                          audioTime - m_lastMetronomeAudioTime > jumpThreshold;
+    const bool   jumped        = audioTime + 1e-4 < m_lastMetronomeAudioTime ||
+                        audioTime - m_lastMetronomeAudioTime > jumpThreshold;
     // 修改视觉偏移使未来预约失效，不能让旧时间的一拍与新时间的一拍同时响。
     // 只清除本工具的两个音效池，不改动歌曲 transport 或其他编辑器音效。
     if ( m_metronomeScheduleInitialized && (gridChanged || jumped) ) {
@@ -3288,7 +3335,7 @@ bool BpmMeasurementToolView::ensureMetronomeSoundEffects()
     // 皮肤可分别覆盖普通拍和重拍音效；缺项时回退内置资源路径。
     const auto& skinData         = Config::SkinManager::instance().getData();
     auto        resolveAudioPath = [&](const char*                  key,
-                                       const std::filesystem::path& fallback) {
+                                const std::filesystem::path& fallback) {
         if ( const auto it = skinData.audioPaths.find(key);
              it != skinData.audioPaths.end() ) {
             // 皮肤表记录的路径已经由 SkinManager 解析为文件系统路径。
@@ -3567,9 +3614,9 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
             const double intersectStart = std::max(texStart, pixelStart);
             const double intersectEnd   = std::min(texEnd, pixelEnd);
             const float  uv0x = static_cast<float>((intersectStart - texStart) /
-                                                   texture->width());
+                                                  texture->width());
             const float  uv1x = static_cast<float>((intersectEnd - texStart) /
-                                                   texture->width());
+                                                  texture->width());
             const float  screenX0 =
                 imageMin.x + static_cast<float>((intersectStart - pixelStart) /
                                                 pixelWidth * size.x);
@@ -4089,8 +4136,8 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(
     };
 
     // 命中扫描保留距离最近的线，解决高缩放下多个候选半径重叠。
-    const bool   touch = !workspaceAllowsHoverFeedback() &&
-                         Interaction::activeProfile().touchGestures();
+    const bool touch = !workspaceAllowsHoverFeedback() &&
+                       Interaction::activeProfile().touchGestures();
     const ImVec2 mousePos =
         touch ? m_mobilePlotResult.m_point : ImGui::GetMousePos();
     // 移动拍点模式整条竖线保留至少 48dp 命中宽度，不改变细线外观。
@@ -4548,8 +4595,8 @@ void BpmMeasurementToolView::handlePlaybackCursorDrag(
         // 限制单帧时间跨度，避免窗口恢复或调试暂停后一次越过过长距离。
         const double frameSeconds = std::clamp<double>(io.DeltaTime, 0.0, 0.1);
         const double scrollDelta  = static_cast<double>(edgeDistance) *
-                                    edgeScrollSensitivity * frameSeconds;
-        m_viewCenter              = std::clamp<double>(
+                                   edgeScrollSensitivity * frameSeconds;
+        m_viewCenter = std::clamp<double>(
             m_viewCenter + scrollDelta, 0.0, playbackCanvasDuration());
         // 边缘滚动属于用户视野选择，需要纳入持久化偏好。
         markUserPreferencesChanged(false, true);
@@ -5269,120 +5316,121 @@ void BpmMeasurementToolView::setPlaybackState(bool shouldPlay)
     }
 }
 
-/// @brief 请求重新分析当前选择的音频轨道。
+/// @brief 记录用户最新的分析请求，撤销旧任务的结果交付资格。
 /// @param autoMeasure 是否在分析完成后自动估算 BPM 和 offset。
-/// @warning 用户触发的低频路径：会停止旧任务、检查文件并提交后台解码任务。
-/// @details 请求流程遵循以下状态顺序：
-/// - 清除身份脏位并等待上一任务退出；
-/// - 保留 GPU 纹理到安全重载点，同时清空 CPU 分析数据；
-/// - 验证资源路径并创建仅供分析使用的 AudioTrack；
-/// - 在 UI 线程预计算时长和初始视野；
-/// - 捕获不可变任务参数后提交到应用线程池；
-/// - 后台线程通过待消费槽位发布一个完整结果。
+/// @warning UI 路径只复制选择和参数，不等解码器或检查磁盘。
 void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
 {
-    // 当前请求已经承接身份变化，无论成败都不在下一帧自动重复启动。
     m_selectedAudioIdentityNeedsAnalysis = false;
-    // 单槽结果模型不允许两个分析任务并发写入，先停止上一任务。
-    stopAnalysisWorker();
-    // 新请求不能继续展示旧音轨的波形和频谱元数据。
+    // 旧任务仍可安全收尾。UI 不等待退出，只在下次消费时清理旧结果。
+    if ( m_analysisFuture.valid() ) m_analysisStopSource.request_stop();
+    m_analysisRequest.reset();
     clearAnalysisData();
+    // 等待 PCM 期间时长暂不可用。后续同一批结果会同时交付长度、波形和频谱。
+    m_duration = 0.0;
 
+    // 这里只通过资源 ID 组合路径，文件存在性由工作者使用错误码查询。
     auto path = selectedAudioAbsolutePath();
     if ( !path ) {
-        // 项目或选择在请求前失效时回到选择提示。
+        // 选择已撤销，保留空的请求槽，旧任务只允许收尾而不得再次启动。
         m_statusText = TR("ui.tools.bpm_measure.select_track").data();
         return;
     }
 
-    std::error_code ec;
-    if ( !std::filesystem::exists(*path, ec) || ec ) {
-        // 避免异常文件 API；访问错误和不存在均不启动后台任务。
-        m_statusText = TR("ui.tools.bpm_measure.file_missing").data();
-        return;
-    }
-
-    // 音频管理器接口使用 UTF-8 字符串，路径转换集中在边界处。
-    const std::string pathString = Config::pathToUtf8(*path);
-    auto              track =
-        Audio::AudioManager::instance().loadTrackForAnalysis(pathString);
-    if ( !track ) {
-        // 解码器创建失败时尚未启动后台线程，可直接更新 UI 状态。
-        m_statusText = TR("ui.tools.bpm_measure.load_failed").data();
-        return;
-    }
-
-    // 分析轨采用引擎内部格式，帧数可据固定采样率换算时长。
-    const double sampleRate =
-        static_cast<double>(ice::ICEConfig::internal_format.samplerate);
-    m_duration = sampleRate > 0.0
-                     ? static_cast<double>(track->num_frames()) / sampleRate
-                     : 0.0;
-    // 新时长可能缩短合法首拍和视图范围，启动前统一裁切。
-    m_firstBeatTime = clampFirstBeatTime(
-        m_firstBeatTime, m_beatLengthSeconds, playbackCanvasDuration());
-    m_viewCenter =
-        std::clamp<double>(autoMeasure ? m_firstBeatTime : m_viewCenter,
-                           0.0,
-                           std::max(0.0, playbackCanvasDuration()));
-    // 自动测量包含额外 BPM 检测阶段，使用独立进度提示。
     m_statusText = autoMeasure
                        ? TR("ui.tools.bpm_measure.auto_analyzing").data()
                        : TR("ui.tools.bpm_measure.analyzing").data();
-    // 进度仅作显示；完成标志负责结果内存可见性的同步。
-    m_analysisProgress.store(0.0f, std::memory_order_relaxed);
-    m_analysisFinished.store(false, std::memory_order_release);
-    m_analysisRunning.store(true, std::memory_order_relaxed);
+    // 保存选择时的路径和配置，后台文件打开不需要借用项目或音频管理器。
+    m_analysisRequest = AnalysisRequest{ std::move(*path),
+                                         m_selectedAudioSyncKey,
+                                         Config::spectrumDetailProfile(
+                                             Config::AppConfig::instance()
+                                                 .getVisualConfig()
+                                                 .spectrumDetailLevel),
+                                         autoMeasure };
+    // 已有工作者时把派发推迟到消费阶段，任意数量的切歌只保留最后一次请求。
+    if ( !m_analysisFuture.valid() ) startPendingAnalysis();
+}
 
-    // 任务启动时冻结频谱细节配置，本次分析过程中不响应配置变化。
-    const auto spectrumProfile = Config::spectrumDetailProfile(
-        Config::AppConfig::instance().getVisualConfig().spectrumDetailLevel);
-
-    auto* appThreadPool = MMM::Runtime::AppThreadPool::instance().get();
-    if ( !appThreadPool ) {
-        // 应用线程池是生命周期前置条件，缺失时回滚运行标志并记录诊断。
+/// @brief 将最近请求交给文件池，完整解码在另一线程池执行。
+/// @note 文件池先于解码池关闭，后台可借用解码池直至任务返回。
+/// @pre 请求槽有值，上一工作者已退出或从未启动。
+/// @details 文件工作者打开媒体并等待通用线程池准备 PCM，随后在文件池做 FFT。
+/// 不向通用池提交等待该池内其他任务的协调任务，避免线程耗尽时循环等待。
+/// 同时避开全局 AudioManager 先于视图关闭导致的缓存生命周期倒置。
+void BpmMeasurementToolView::startPendingAnalysis()
+{
+    auto request = std::move(*m_analysisRequest);
+    m_analysisRequest.reset();
+    auto& workers = Runtime::AppThreadPool::instance();
+    // 应用初始化同时建立两个池，关闭阶段的空指针只能产生失败反馈。
+    auto* filePool   = workers.getFileThreadPool();
+    auto* decodePool = workers.get();
+    if ( !filePool || !decodePool ) {
         m_analysisRunning.store(false, std::memory_order_relaxed);
         m_statusText = TR("ui.tools.bpm_measure.load_failed").data();
         XERROR("AppThreadPool is not initialized before BPM analysis.");
         return;
     }
 
-    // 每个任务使用新的停止源，旧任务的取消状态不能泄漏到新任务。
-    m_analysisStopSource            = std::stop_source{};
-    const std::stop_token stopToken = m_analysisStopSource.get_token();
-    // track 的共享所有权移动到任务，保证整个解码期间资源存活。
-    m_analysisFuture = appThreadPool->enqueue(
-        [this,
-         stopToken,
-         track    = std::move(track),
-         duration = m_duration,
-         autoMeasure,
-         spectrumProfile,
-         markerInput = m_markerImportKey != m_selectedAudioSyncKey
-                           ? *path
-                           : std::filesystem::path{}]() {
-            analyzeTrack(stopToken,
-                         track,
-                         duration,
-                         autoMeasure,
-                         spectrumProfile,
-                         markerInput);
+    // 同一来源的常规重算不能覆盖用户已手工修改的节拍标记。
+    // 只用 UI 已验收的标记身份决定本次任务是否读取内嵌数据。
+    // 选择可能在工作者排队期间切换。捕获布尔值后，工作者无需读取 UI 身份。
+    const bool importMarkers = m_markerImportKey != request.key;
+    m_activeAnalysisKey      = request.key;
+    m_analysisProgress.store(0.0f, std::memory_order_relaxed);
+    m_analysisFinished.store(false, std::memory_order_relaxed);
+    m_analysisRunning.store(true, std::memory_order_relaxed);
+    // 每个任务拥有独立停止状态，旧请求取消不会泄漏到下一个工作者。
+    // 恢复独立的停止状态，不能把上一条请求的取消传播给新音轨。
+    m_analysisStopSource = {};
+    m_analysisFuture =
+        filePool->enqueue([this,
+                           request = std::move(request),
+                           importMarkers,
+                           decodePool,
+                           stop = m_analysisStopSource.get_token()]() {
+            // 在队列等待时被替换的任务直接退出，避免探测已无关的文件。
+            if ( stop.stop_requested() ) return;
+            std::error_code error;
+            if ( !std::filesystem::exists(request.path, error) || error ) {
+                // 缺失与解码失败分开报告，两个结果都由 UI 线程选择本地化提示。
+                publishAnalysisFailure(request.autoMeasure, true);
+                return;
+            }
+
+            // 独立音轨不占用播放器缓存或访问已可能关闭的 AudioManager。
+            ice::AudioPool analysisPool;
+            auto           track = analysisPool
+                             .get_or_load(*decodePool,
+                                          Config::pathToUtf8(request.path),
+                                          ice::CachingStrategy::CACHY)
+                             .lock();
+            // 打开阶段可能跨越换曲点，检查停止状态后再查帧数或扫描标记。
+            if ( stop.stop_requested() ) return;
+            analyzeTrack(
+                stop,
+                std::move(track),
+                request.autoMeasure,
+                request.spectrumProfile,
+                importMarkers ? request.path : std::filesystem::path{});
         });
-    // 身份在任务提交后记住，重复分析不会读回旧文件覆盖当前测量。
-    m_markerImportKey = m_selectedAudioSyncKey;
 }
 
 /// @brief 从后台线程发布一次分析失败结果。
 /// @param autoMeasure 本次任务是否属于自动 BPM/offset 测量。
+/// @param sourceMissing 打开前是否发现源文件已经移除或不可查询。
 /// @warning 后台线程路径：只写入受互斥锁保护的待消费结果和原子状态。
 /// @details 结果对象先在互斥区写入，随后以 release 发布完成标志；
 /// UI 线程使用 acquire 读取完成标志后才能移动该结果。
-void BpmMeasurementToolView::publishAnalysisFailure(bool autoMeasure)
+void BpmMeasurementToolView::publishAnalysisFailure(bool autoMeasure,
+                                                    bool sourceMissing)
 {
     // 失败结果仍记录任务种类，使 UI 选择对应的本地化提示。
     AnalysisResult result;
     result.autoTimingRequested = autoMeasure;
     result.failed              = true;
+    result.sourceMissing       = sourceMissing;
 
     {
         // 单槽覆盖是安全的，因为请求入口保证上一任务已经退出。
@@ -5458,11 +5506,14 @@ std::string BpmMeasurementToolView::defaultAudioTrackId() const
 
 /// @brief 停止并等待当前后台分析任务。
 /// @warning
-/// 不可中断低频路径：会等待后台线程退出，只能在关闭窗口或重新选择音轨时执行。
-/// @details 停止令牌由波形、频谱和完整单声道读取循环定期检查；wait 保证
+/// 不可中断低频路径：会等待后台线程退出，只在析构时执行。
+/// @details 待发请求没有工作者，可在析构入口直接丢弃。
+/// 停止令牌由波形、频谱和完整单声道读取循环定期检查；wait 保证
 /// future 任务不再访问成员后才允许清理缓存或析构本对象。
 void BpmMeasurementToolView::stopAnalysisWorker()
 {
+    // 析构不再派发排队的请求，只等待仍可能访问成员的工作者退出。
+    m_analysisRequest.reset();
     if ( m_analysisFuture.valid() ) {
         // 先发协作式停止请求，让解码循环在下一个检查点尽快退出。
         m_analysisStopSource.request_stop();
@@ -5507,7 +5558,6 @@ void BpmMeasurementToolView::clearAnalysisData()
 /// @brief 后台分析线程执行体。
 /// @param stopToken 线程停止令牌。
 /// @param track 待分析音频轨道，后台线程持有共享所有权。
-/// @param duration 音频时长，单位为秒。
 /// @param autoMeasure 是否在频谱分析后继续执行自动 BPM/offset 测量。
 /// @warning 后台耗时路径：执行完整音频解码和 FFT；不在 UI/渲染热路径中运行。
 /// @details 分析分为四个阶段：
@@ -5518,9 +5568,8 @@ void BpmMeasurementToolView::clearAnalysisData()
 /// 任一失败由守卫发布统一失败结果；取消只清理运行状态，不覆盖新请求状态。
 void BpmMeasurementToolView::analyzeTrack(
     std::stop_token stopToken, std::shared_ptr<ice::AudioTrack> track,
-    double duration, bool autoMeasure,
-    Config::SpectrumDetailProfile spectrumProfile,
-    const std::filesystem::path&  markerInput)
+    bool autoMeasure, Config::SpectrumDetailProfile spectrumProfile,
+    const std::filesystem::path& markerInput)
 {
     if ( !track ) {
         // 防御异步捕获为空，使用统一失败发布路径。
@@ -5530,12 +5579,17 @@ void BpmMeasurementToolView::analyzeTrack(
 
     const double sampleRate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
+    // 完整缓存的帧数查询会等解码，必须留在文件工作任务中。
     const size_t totalFrames = track->num_frames();
-    if ( duration <= 0.0 || sampleRate <= 0.0 || totalFrames == 0 ) {
+    if ( stopToken.stop_requested() ) return;
+    if ( sampleRate <= 0.0 || totalFrames == 0 ) {
         // 无有效时间域时波形和频谱都无法建立。
         publishAnalysisFailure(autoMeasure);
         return;
     }
+
+    // 由内部采样格式换算真实解码长度。分析与最终 UI 交付使用同一时间域。
+    const double duration = static_cast<double>(totalFrames) / sampleRate;
 
     /// @brief 后台分析失败兜底，避免早退后 UI 长期停在分析状态。
     /// @details 守卫区分失败与协作取消：失败需要通知 UI，取消只结束运行位。
@@ -5803,7 +5857,7 @@ void BpmMeasurementToolView::analyzeTrack(
                 // 使用模平方比较避免循环内重复开方。
                 const double magSq = fftOutput[i][0] * fftOutput[i][0] +
                                      fftOutput[i][1] * fftOutput[i][1];
-                maxMagnitude       = std::max(maxMagnitude, magSq);
+                maxMagnitude = std::max(maxMagnitude, magSq);
             }
             // 仅峰值确定后开方并归一化到 FFT 大小，再转换为 dB。
             const double db =
