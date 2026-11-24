@@ -33,6 +33,8 @@
 #include "graphic/imguivk/VKTexture.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectController.h"
+#include "logic/ProjectUiState.h"
 #include "mmm/project/Project.h"
 #include <algorithm>
 #include <array>
@@ -53,7 +55,7 @@ glm::mat4 Basic2DCanvas::getCanvasProjectionMatrix()
     // 空会话没有轨道场景，Logo 占位仍使用二维投影而非实验摄像机。
     const auto& visual   = canvasVisualConfig();
     const bool  hasScene = m_currentSnapshot && m_currentSnapshot->hasBeatmap &&
-                          (!m_layoutEditor || m_layoutEditor->cameraMode());
+                           (!m_layoutEditor || m_layoutEditor->cameraMode());
     // 元素布局临时回到二维，退出后恢复当前视口独立的自由相机。
     // 视口局部参数仍走完整投影模型，轨道横移与厚度补偿沿用已有几何。
     if ( hasScene && visual.canvasCameraPoseEnabled ) {
@@ -204,7 +206,9 @@ std::filesystem::path resolveCanvasCjkFontPath(Config::SkinManager& skin)
 std::vector<std::uint32_t> collectProjectAudioLabelCodepoints()
 {
     std::vector<std::uint32_t> result;
-    const auto* project = Logic::EditorEngine::instance().getCurrentProject();
+    // 同一份投影覆盖本轮资源标签与谱面名，图集可以在工程切换后安全结束。
+    const auto  snapshot = Logic::ProjectController::instance().uiSnapshot();
+    const auto* project  = snapshot ? snapshot->m_details.get() : nullptr;
     if ( !project ) {
         return result;
     }

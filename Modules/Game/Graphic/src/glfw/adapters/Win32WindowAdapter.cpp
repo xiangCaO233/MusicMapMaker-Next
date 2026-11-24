@@ -4,6 +4,7 @@
 #    include "config/AppPaths.h"
 #    include "config/Utf8Path.h"
 #    include "event/core/EventBus.h"
+#    include "event/ui/UpdateDragAreaEvent.h"
 #    include "log/colorful-log.h"
 #    include <GLFW/glfw3.h>
 #    define GLFW_EXPOSE_NATIVE_WIN32
@@ -17,10 +18,12 @@
 #    include <fstream>
 #    include <iterator>
 #    include <memory>
+#    include <mutex>
 #    include <shlobj.h>
 #    include <string>
 #    include <system_error>
 #    include <type_traits>
+#    include <vector>
 #    include <windowsx.h>
 
 // 部分旧 SDK 尚未提供 Windows 11 的圆角枚举，保留既有的 DWM 属性号。
@@ -328,6 +331,16 @@ void minimizeTaskbarWindowGroup(HWND mainWindow)
 
 }  // namespace
 
+/// @brief 保存同一布局代次的允许区与排除区。
+struct Win32WindowAdapter::DragAreaState {
+    /// @brief 序列化事件发布与窗口命中测试；锁内只交换或读取矩形。
+    std::mutex mutex;
+    /// @brief 允许移动窗口的矩形。
+    std::vector<Event::DragArea> areas;
+    /// @brief 优先判定为客户区的控件矩形。
+    std::vector<Event::DragArea> blockedAreas;
+};
+
 /// @brief 为 GLFW 主窗口安装 Win32 子类过程并配置无边框系统能力。
 ///
 /// 构造取得 HWND、订阅 UI 拖拽区域、恢复可缩放/最小化/最大化 style，并向 DWM
@@ -336,7 +349,10 @@ void minimizeTaskbarWindowGroup(HWND mainWindow)
 /// @param window 已创建且使用 Win32 backend 的 GLFW 主窗口。
 /// @warning 窗口初始化低频路径：会修改 HWND style、class icon 和 DWM 属性，只能
 /// 在窗口创建线程调用。
-Win32WindowAdapter::Win32WindowAdapter(GLFWwindow* window) : m_window(window)
+/// @warning 拖拽区域回调每帧发布，必须锁定独立状态才能跨在途析构；不借用
+/// 适配器指针。矩形在短锁外复制，互斥区只交换已经完整的两个数组。
+Win32WindowAdapter::Win32WindowAdapter(GLFWwindow* window)
+    : m_window(window), m_dragAreaState(std::make_shared<DragAreaState>())
 {
     // 原生 HWND 是后续 subclass 和 DWM 操作的稳定身份。
     m_hwnd = glfwGetWin32Window(m_window);
@@ -344,8 +360,20 @@ Win32WindowAdapter::Win32WindowAdapter(GLFWwindow* window) : m_window(window)
     m_lastKnownMaximized = IsZoomed(m_hwnd) != FALSE;
 
     // UI 布局通过事件发布标题栏允许区和控件排除区，供 WM_NCHITTEST 实时查询。
-    Event::EventBus::instance().subscribe<Event::UpdateDragAreaEvent>(
-        [this](Event::UpdateDragAreaEvent e) { this->onUpdateDragArea(e); });
+    m_dragAreaSubscription =
+        Event::EventBus::instance().subscribe<Event::UpdateDragAreaEvent>(
+            [mailbox = std::weak_ptr{ m_dragAreaState }](
+                const Event::UpdateDragAreaEvent& event) {
+                // 已发布的快照可能晚于注销才执行；旧窗口没有收件状态时直接退出。
+                if ( const auto state = mailbox.lock() ) {
+                    auto areas        = event.areas;
+                    auto blockedAreas = event.blockedAreas;
+                    // 区域对同时生效，旧矩形的内存也在释放短锁后回收。
+                    const std::lock_guard lock(state->mutex);
+                    state->areas.swap(areas);
+                    state->blockedAreas.swap(blockedAreas);
+                }
+            });
 
     // 子类过程保留 GLFW 原始 WndProc，并通过 DefSubclassProc 继续默认消息链。
     SetWindowSubclass(m_hwnd, WindowProc, 0, (DWORD_PTR)this);
@@ -387,6 +415,9 @@ Win32WindowAdapter::Win32WindowAdapter(GLFWwindow* window) : m_window(window)
 /// subclass 关联，并删除临时最大化恢复标志。
 Win32WindowAdapter::~Win32WindowAdapter()
 {
+    // 停止新分发；已经取走的回调最多更新旧窗口的独立收件状态。
+    Event::EventBus::instance().unsubscribe<Event::UpdateDragAreaEvent>(
+        m_dragAreaSubscription);
     // HWND 可能已由宿主销毁，空句柄时不调用 Win32 属性或 subclass API。
     if ( m_hwnd ) {
         setRestoreMaximizedProperty(m_hwnd, false);
@@ -567,16 +598,6 @@ bool Win32WindowAdapter::handleClientCursorPos(double cursorX, double cursorY)
     (void)cursorX;
     (void)cursorY;
     return false;
-}
-
-/// @brief 用 UI 最新发布的标题栏允许区和控件排除区替换命中缓存。
-/// @param e 同一布局快照中的 drag/blocked 矩形集合。
-/// @warning UI 事件路径：复制 vector，事件应只在布局区域变化时发布。
-void Win32WindowAdapter::onUpdateDragArea(const Event::UpdateDragAreaEvent& e)
-{
-    // WindowProc 始终先检查 blocked，再检查 drag，使按钮等交互控件优先。
-    m_dragAreas        = e.areas;
-    m_blockedDragAreas = e.blockedAreas;
 }
 
 /// @brief 结合即时缩放状态与 WINDOWPLACEMENT 判断最大化意图。
@@ -994,7 +1015,9 @@ LRESULT CALLBACK Win32WindowAdapter::WindowProc(HWND hWnd, UINT uMsg,
         // UI 上报的 blocked
         // 区域优先，用于从标题栏拖动范围扣除按钮和标签交互区。
         if ( adapter ) {
-            for ( const auto& area : adapter->m_blockedDragAreas ) {
+            auto&                 regions = *adapter->m_dragAreaState;
+            const std::lock_guard lock(regions.mutex);
+            for ( const auto& area : regions.blockedAreas ) {
                 // 忽略布局未完成或折叠控件产生的退化矩形。
                 if ( area.w <= 0.0f || area.h <= 0.0f ) {
                     continue;
@@ -1008,7 +1031,7 @@ LRESULT CALLBACK Win32WindowAdapter::WindowProc(HWND hWnd, UINT uMsg,
             }
 
             // 只有未命中任何 blocked 区域时才扫描允许拖拽的标题栏片段。
-            for ( const auto& area : adapter->m_dragAreas ) {
+            for ( const auto& area : regions.areas ) {
                 if ( area.w <= 0.0f || area.h <= 0.0f ) {
                     continue;
                 }

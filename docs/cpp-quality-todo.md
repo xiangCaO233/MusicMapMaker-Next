@@ -114,11 +114,13 @@
 
 保留审查时的风险等级与编号，便于按独立问题验收。
 
-- [ ] **R45 · P1 · 侧栏、工程音频和打包仍直接借用可替换的工程**
+- [x] **R45 · P1 · 侧栏、工程音频和打包仍直接借用可替换的工程**
 
   控制器返回 unique_ptr.get()，逻辑线程换工程时可移走所有权。侧栏直接改工作区字段再保存，音频工具将字段地址交给控件，打包还跨目录扫描借用工程信息。事先查询过切换标志不能保证随后访问的寿命。R03 的快照修复没有覆盖这些入口。 目录与图集读者拿带工程代次的值快照；设置写入交给所有者按代次核对的字段命令。覆盖读取和关闭交错、同目录重开、旧 UI 写入被拒绝，新工程配置保持原值。
 
   [ProjectController.cpp L1248](../Modules/Game/Logic/src/logic/ProjectController.cpp#L1248)、[SideBarUI.cpp L215](../Modules/Game/UI/src/ui/imgui/SideBarUI.cpp#L215)、[ProjectAudioToolView.cpp L1971](../Modules/Game/UI/src/ui/imgui/manager/ProjectAudioToolView.cpp#L1971)、[Basic2DCanvas_Rendering.cpp L212](../Modules/Game/Canvas/src/Basic2DCanvas_Rendering.cpp#L212)、[OpenProjectDirectoryAction.cpp L37](../Modules/Game/UI/src/ui/imgui/menu/actions/file/OpenProjectDirectoryAction.cpp#L37)、[PackBeatmapAction.cpp L2305](../Modules/Game/UI/src/ui/imgui/menu/actions/file/PackBeatmapAction.cpp#L2305)
+
+  已验证。侧栏、工程音频、资源目录、图集和打包使用不可变工程快照；设置和延迟打包按打开代次校验。回归覆盖同路径重开、旧快照寿命和旧设置拒绝。
 
 - [ ] **R46 · P1 · Windows 窗口适配器析构后仍有拖拽区域订阅**
 
@@ -126,23 +128,31 @@
 
   [Win32WindowAdapter.cpp L347](../Modules/Game/Graphic/src/glfw/adapters/Win32WindowAdapter.cpp#L347)、[UIManager.cpp L775](../Modules/Game/UI/src/ui/UIManager.cpp#L775)
 
-- [ ] **R47 · P1 · 皮肤翻译迁移可能删除皮肤根之外的同名文件**
+  修复与测试已落地。适配器析构注销订阅，在途回调只访问独立状态；Windows x64 探针在 Wine 下验证旧窗口销毁、重建以及新旧命中区域。原生 Win10 CTest 待验收。
+
+- [x] **R47 · P1 · 皮肤翻译迁移可能删除皮肤根之外的同名文件**
 
   启动清理仅检查皮肤条目本身，随后通过 resources/lang 等中间目录删除旧文件。用户以目录链接共享资源时，删除会作用于链接指向的位置。 限定迁移操作可达的真实父目录，处理目录链接及 Windows 重解析点，无法确认归属时保留文件。正常旧翻译可清理；共享目录中的哨兵文件保留，失败后可重试。
 
   [TranslationResourceMigration.cpp L119](../Modules/Config/src/skin/TranslationResourceMigration.cpp#L119)、[main.cpp L598](../Modules/Main/src/main.cpp#L598)
 
-- [ ] **R48 · P1 · 插件倍速导出失败可截断已有目标音频**
+  已验证。逐级检查皮肤父目录，拒绝目录链接和 Windows 目录重解析点。Linux 回归验证外部哨兵保留且修复目录后可重试；Win32 实现通过交叉编译检查。
+
+- [x] **R48 · P1 · 插件倍速导出失败可截断已有目标音频**
 
   单文件插件接口直接传最终路径，编码器以写模式打开后仍可能失败。只防输入输出同文件不足以保护上一次成功导出的目标。 在目标卷创建唯一且保留原扩展名的暂存文件，编码、排空、关闭全部成功后再替换。已有目标、中途写失败、关闭失败均保留原字节，同时验证正常覆盖和暂存清理。
 
   [ToolPluginView.cpp L1197](../Modules/Game/UI/src/ui/plugin/ToolPluginView.cpp#L1197)、[AudioSpeedExportService.cpp L400](../Modules/Audio/src/AudioSpeedExportService.cpp#L400)、[FFmpegFileReceiver.cpp L830](../3rdpty/sources/IonCachyEngine/src/ice/out/io/FFmpegFileReceiver.cpp#L830)
 
-- [ ] **R49 · P2 · 文件管理器注销订阅后，在途回调仍可写已销毁对象**
+  已验证。倍速导出先在目标卷编码，结束并关闭后才替换目标；Linux 写入故障回归和独立关闭故障探针均确认原文件字节保留，正常覆盖和暂存清理通过。
+
+- [x] **R49 · P2 · 文件管理器注销订阅后，在途回调仍可写已销毁对象**
 
   工程保存事件可从其他线程发布。解除订阅只影响后续发布，已取得的订阅快照仍持有捕获 this 的回调。 参照新谱面向导的独立收件箱，回调只持有安全的收件状态；UI 线程负责消费。用同步屏障停在发布已取快照之后，销毁视图再放行，旧回调安全结束。
 
   [FileManagerView.cpp L72](../Modules/Game/UI/src/ui/imgui/manager/FileManagerView.cpp#L72)、[ProjectController_DirectoryRefresh.cpp L145](../Modules/Game/Logic/src/logic/ProjectController_DirectoryRefresh.cpp#L145)
+
+  已验证。文件管理器回调只写独立收件箱；测试在事件总线取快照后销毁视图并放行在途回调。
 
 - [ ] **R50 · P2 · 新建工程向导静置时反复查询目录，部分查询错误判为可用**
 

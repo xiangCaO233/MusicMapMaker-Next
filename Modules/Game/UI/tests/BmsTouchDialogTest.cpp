@@ -1,6 +1,7 @@
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
 #include "log/colorful-log.h"
+#include "logic/ProjectController.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
 #include "ui/imgui/menu/package/BmsExportTouch.h"
@@ -8,6 +9,7 @@
 #include "ui/workspace/MobileInputEditor.h"
 #include "ui/workspace/MobileTouchScroll.h"
 #include <cmath>
+#include <filesystem>
 #include <functional>
 #include <imgui_internal.h>
 
@@ -183,7 +185,7 @@ void formats(bool package, bool narrow = false)
     MMM::Config::AppConfig::instance().getEditorSettings().filePickerStyle =
         MMM::Config::FilePickerStyle::Native;
     // 工厂拥有跨帧动作状态；创建新动作不能替代同一弹窗的连续帧验证。
-    // 此处跳过菜单 enabled 门禁仅为了无项目展示，不执行候选扫描或打包。
+    // 打包使用真实隔离工程的代次；这里只操作格式弹窗，不触发目录扫描。
     auto action = package ? MMM::UI::createPackBeatmapAction()
                           : MMM::UI::createSaveBeatmapAsAction();
     MMM::UI::MainMenuContext context{ f, nullptr, f.m_scale };
@@ -250,8 +252,18 @@ int main()
     options(1, false, true);
     options(2.7625f, true, true);
     options(1, false, false);
+    // 打包入口会冻结当前工程身份，先通过控制器打开隔离夹具。
+    auto& controller = MMM::Logic::ProjectController::instance();
+    // 临时工程只用来提供真实可打包身份，目录不需要任何谱面。
+    const auto root =
+        std::filesystem::current_path() / "test_output/BmsTouchDialogTest";
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    if ( error || !controller.openProject(root).m_opened ) return 1;
     formats(true);
     formats(false);
     formats(true, true);
+    // 通过生产关闭入口停止夹具的目录监听并撤下已发布快照。
+    controller.closeProject();
     return failures ? 1 : 0;
 }

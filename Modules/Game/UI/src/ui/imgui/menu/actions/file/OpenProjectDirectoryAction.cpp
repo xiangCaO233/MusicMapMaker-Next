@@ -4,8 +4,8 @@
 #include <string_view>
 
 #include "config/skin/translation/Translation.h"
-#include "logic/EditorEngine.h"
-#include "mmm/project/Project.h"
+#include "logic/ProjectController.h"
+#include "logic/ProjectUiState.h"
 #include "ui/utils/DesktopPathUtils.h"
 
 namespace MMM::UI
@@ -33,8 +33,7 @@ public:
     bool isEnabled(const MainMenuContext& context) const override
     {
         (void)context;
-        const auto* project =
-            Logic::EditorEngine::instance().getCurrentProject();
+        const auto project = Logic::ProjectController::instance().uiSnapshot();
         return project && !project->m_projectRoot.empty();
     }
 
@@ -47,8 +46,7 @@ public:
                  const MainMenuItemActivation& activation) override
     {
         (void)activation;
-        const auto* project =
-            Logic::EditorEngine::instance().getCurrentProject();
+        const auto project = Logic::ProjectController::instance().uiSnapshot();
         // false 表示选择目录本身而非请求打开其中某个文件。
         if ( !project || project->m_projectRoot.empty() ||
              !DesktopPathUtils::openInFileManager(project->m_projectRoot,

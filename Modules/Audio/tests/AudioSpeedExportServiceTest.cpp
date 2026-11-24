@@ -24,6 +24,11 @@
 #include <string_view>
 #include <vector>
 
+#if defined(__linux__)
+#    include <csignal>
+#    include <sys/resource.h>
+#endif
+
 namespace
 {
 
@@ -841,6 +846,73 @@ int main(int argc, char* argv[])
                 "same-path source bytes preserved");
     // 即使没有创建目标，输入仍须能通过后续基准场景完整读取。
     // 测试目录与用户配置隔离，结束时由测试统一清理。
+
+    // 已有目标用真实文件作哨兵，成功时必须替换而非留下旧内容。
+    // 目标位于同一测试目录，正常覆盖和失败保护因此使用相同的卷与权限。
+    // 哨兵是有效 WAV，失败时逐字节比较，避免只检查存在但内容被截短。
+    const auto oldOutput = root / "previous.wav";
+    ok &= check(writeFixtureWav(oldOutput, 128, 48000),
+                "previous output fixture");
+    // 持有首次写入的内容作为基准，各失败场景不得更新这份基准。
+    std::vector<unsigned char> previousBytes, afterFailure;
+    ok &= check(readFile(oldOutput, previousBytes), "read previous output");
+#if defined(__linux__)
+    // 限制进程文件尺寸并忽略相应信号，迫使 FFmpeg 在打开后报告 I/O 失败。
+    // 短输入覆盖容器排空附近的错误，长输入则会在编码途中触及限制。
+    // 只降低软限制，保留当前进程重新恢复原值的能力。
+    // 信号单独保存原处理动作，不能影响本进程后续的导出基准。
+    struct rlimit    previousLimit{};
+    struct sigaction ignored{}, previousSignal{};
+    // 将 SIGXFSZ 转为编码器可感知的写入失败，不能让测试进程被信号杀掉。
+    ignored.sa_handler = SIG_IGN;
+    sigemptyset(&ignored.sa_mask);
+    // 读取原进程设置失败时直接报告注入未生效，不尝试猜测原限制。
+    const bool haveLimit = getrlimit(RLIMIT_FSIZE, &previousLimit) == 0;
+    const bool signalSet = sigaction(SIGXFSZ, &ignored, &previousSignal) == 0;
+    // 上限足以打开容器并写一小段数据，但有意低于任一完整输出。
+    auto shortLimit = previousLimit;
+    // 选择固定字节预算，故障触发独立于设备空间和内核调度时序。
+    shortLimit.rlim_cur = 1024;
+    if ( haveLimit && signalSet && setrlimit(RLIMIT_FSIZE, &shortLimit) == 0 ) {
+        // 两个输入复用同一目标，连续失败也必须保留最近的成功产物。
+        for ( const auto& source : { inputPath, longInputPath } ) {
+            const auto failed = MMM::Audio::AudioSpeedExportService::exportWav({
+                .inputPath  = source,
+                .outputPath = oldOutput,
+            });
+            // 写盘失败必须沿实际编码调用链返回，不能只靠暂存清理推断结果。
+            ok &= check(!failed.success && readFile(oldOutput, afterFailure) &&
+                            afterFailure == previousBytes,
+                        "output I/O failure preserves existing file bytes");
+        }
+        // 即使某轮断言失败也恢复，便于其余属性给出独立的失败诊断。
+        ok &= check(setrlimit(RLIMIT_FSIZE, &previousLimit) == 0,
+                    "restore file limit");
+    } else {
+        ok &= check(false, "install file size limit for encoder failure");
+    }
+    // 即便限制设置失败，已变更的信号处理器仍应恢复。
+    if ( signalSet )
+        ok &= check(sigaction(SIGXFSZ, &previousSignal, nullptr) == 0,
+                    "restore file limit signal handling");
+#endif
+    // 解除注入后用同一目标验证可重试，排除修复只会拒绝覆盖的情况。
+    // 输出采用不同帧数，完整编码完成时字节内容必须与哨兵不同。
+    const auto overwritten = MMM::Audio::AudioSpeedExportService::exportWav({
+        .inputPath  = inputPath,
+        .outputPath = oldOutput,
+        .speed      = 2.0,
+    });
+    ok &= check(overwritten.success && readFile(oldOutput, afterFailure) &&
+                    afterFailure != previousBytes,
+                "complete output replaces existing file");
+    // 唯一目录仅为编码阶段服务，无论写出成功或失败都应回收。
+    // 遍历真实目录，检查失败或成功遗留的 staging，而非内部标志。
+    for ( const auto& entry : std::filesystem::directory_iterator(root) ) {
+        ok &= check(
+            !entry.path().filename().string().starts_with(".mmm-audio-export-"),
+            "staged audio directory removed");
+    }
 
     // 基准 WAV 场景使用不保音高图，2 倍速度理论长度精确减半。
     MMM::Audio::AudioSpeedExportOptions options;

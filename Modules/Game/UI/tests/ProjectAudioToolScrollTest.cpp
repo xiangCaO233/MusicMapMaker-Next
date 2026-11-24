@@ -10,6 +10,7 @@
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectController.h"
+#include "logic/ProjectUiState.h"
 #include "mmm/project/Project.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/UIManager.h"
@@ -27,6 +28,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -172,6 +174,17 @@ void drawFrame(MMM::UI::UIManager& manager, MMM::UI::ProjectAudioToolView& view,
     }
     // 即使无 GPU，也要结束帧并完成滚动范围及窗口悬停状态的发布。
     ImGui::Render();
+    // 测试没有逻辑后台线程，帧结束后按生产顺序应用设置并发布新快照。
+    // 在绘制结束后提交，保留 UI 帧不直接持有工程写锁的分工。
+    // 使用生产控制器同时观察真实保存通知和下一帧的缓存重建。
+    auto&           controller = MMM::Logic::ProjectController::instance();
+    std::lock_guard lock(
+        MMM::Logic::EditorEngine::instance().getSessionMutex());
+    // 使用生产逻辑的设置合并结果，测试不直接写入被 UI 冻结的选择快照。
+    // 保存通知的发出时机也是下方换行和弹窗断言的一部分。
+    if ( controller.hasPendingUiSettingsEdit() &&
+         controller.applyPendingUiSettingsEdit() && !controller.saveProject() )
+        XERROR("Project audio tool fixture could not persist settings");
 }
 
 /// @brief 构造超过视口的资源列，并保留横向溢出的独立资源。
@@ -281,6 +294,8 @@ bool checkRapidPreview(MMM::UI::UIManager&            manager,
     auto& workspace = project->m_settings.m_workspace;
     auto& audio     = MMM::Audio::AudioManager::instance();
     workspace.m_projectAudioToolPreviewEffectOnSelection = true;
+    if ( !MMM::Logic::ProjectController::instance().saveProject() )
+        return false;
     // 两种模式使用相同独立池键；切换模式不能掩盖既有暂停状态。
     for ( bool tableMode : { false, true } ) {
         // 先稳定模式切换和表格测量；首次创建时的隐藏帧不属于点击序列。
@@ -399,6 +414,8 @@ bool checkVolumePopup(MMM::UI::UIManager&            manager,
     if ( !project ) return false;
     project->m_settings.m_workspace.m_projectAudioToolPreviewEffectOnSelection =
         false;
+    if ( !MMM::Logic::ProjectController::instance().saveProject() )
+        return false;
     // 夹具第一张卡片固定为 140x100，位于逻辑坐标 24,24。
     for ( int frame = 0; frame < 4; ++frame ) drawFrame(manager, view, false);
     auto* canvas = findCanvas();
@@ -538,8 +555,8 @@ bool checkSnapToggle(MMM::UI::UIManager&            manager,
         prepareResources(*project);
         workspace.m_projectAudioToolSnapEnabled =
             scenario != 1 && scenario != 4;
-        MMM::Event::EventBus::instance().publish(
-            MMM::Event::ProjectSavedEvent{});
+        if ( !MMM::Logic::ProjectController::instance().saveProject() )
+            return false;
         for ( int frame = 0; frame < 4; ++frame )
             drawFrame(manager, view, false);
         auto* canvas = findCanvas();
@@ -565,7 +582,14 @@ bool checkSnapToggle(MMM::UI::UIManager&            manager,
         if ( scenario == 2 ) {
             // 保持鼠标不动来关闭开关，旧滞回锁不应继续决定下一帧位置。
             // 与单独开始一轮禁用状态相比，这还能检出参考线残留的状态错误。
-            workspace.m_projectAudioToolSnapEnabled = false;
+            // 不把测试绕回可变工作区；同代设置走正常队列。
+            auto& controller = MMM::Logic::ProjectController::instance();
+            controller.queueUiSettingsEdit({
+                .m_generation    = controller.uiSnapshot()->m_generation,
+                .m_audioToolSnap = false,
+            });
+            // 先消费设置，再由下一帧使用已发布值处理原手势。
+            at(target);
             at(target);
         }
         ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
@@ -605,8 +629,7 @@ bool checkSnapToggle(MMM::UI::UIManager&            manager,
     // 所有按下事件已经配对释放，后续弹层与滚轮不继承活动拖动。
     workspace.m_projectAudioToolSnapEnabled = true;
     prepareResources(*project);
-    MMM::Event::EventBus::instance().publish(MMM::Event::ProjectSavedEvent{});
-    return true;
+    return MMM::Logic::ProjectController::instance().saveProject();
 }
 
 /// @brief 验证浮动、停靠、后台标签恢复及横向溢出的实际滚动结果。
@@ -757,8 +780,9 @@ bool checkMouseSelection(MMM::UI::UIManager&            manager,
         item.m_x   = 24 + i * 185;
         item.m_y   = 24;
     }
-    // 通过正式项目事件使缓存标脏，不能直接给私有 m_items 填入假选择状态。
-    MMM::Event::EventBus::instance().publish(MMM::Event::ProjectSavedEvent{});
+    // 保存同时发布新资源快照并使工具缓存标脏。
+    if ( !MMM::Logic::ProjectController::instance().saveProject() )
+        return false;
     Interaction::synchronizeProfile("mouse-only", true);
     Interaction::synchronizeProfile("mouse-only", true);
     // 右侧控件探针需要独立可见区域，不以缩小生产字体来挤压真实单选框。
@@ -913,9 +937,9 @@ bool checkMouseSelection(MMM::UI::UIManager&            manager,
     // 恢复原大资源集，后续表格滚动和搜索测试仍覆盖视口外的数据。
     // 通过项目事件重建，不把三个资源的小夹具泄漏给原有测试。
     prepareResources(*project);
-    MMM::Event::EventBus::instance().publish(MMM::Event::ProjectSavedEvent{});
+    const bool saved = MMM::Logic::ProjectController::instance().saveProject();
     ImGui::GetIO().DisplaySize = savedDisplay;
-    return passed;
+    return passed && saved;
 }
 /// @brief 通过真实多级菜单验证字段排序与排序重置，不直接调用表格排序 API。
 /// @param manager 真实工具依赖的 UI 管理器。
@@ -1076,6 +1100,8 @@ bool checkTableView(MMM::UI::UIManager&            manager,
     workspace.m_projectAudioToolPreviewEffectOnSelection = false;
     // 清空持久选择，不能让上次测试保存的值掩盖本次行点击没有生效。
     workspace.m_projectAudioToolSelectedResourceId.clear();
+    if ( !MMM::Logic::ProjectController::instance().saveProject() )
+        return false;
     const auto original = workspace.m_projectAudioToolPlacements;
     // 先保留布局，再切换；重建表格不能以新布局覆盖用来比较的基线。
     view.setTableView(true);
@@ -1425,7 +1451,8 @@ int main()
     if ( error || !controller.openProject(root).m_opened ) return 1;
     // 开放控制器接口提供生产视图的数据源，不改私有状态或使用测试替身。
     prepareResources(*controller.currentProject());
-    if ( !writePreviewFixture(root) ) return 1;
+    // 初始化夹具后发布一次完整资源投影，首次绘制即可读到音频文件。
+    if ( !writePreviewFixture(root) || !controller.saveProject() ) return 1;
     // CTest 显式选择 dummy 驱动；真实音频图用于验证源游标复位。
     auto& audioSettings =
         MMM::Config::AppConfig::instance().getEditorSettings();

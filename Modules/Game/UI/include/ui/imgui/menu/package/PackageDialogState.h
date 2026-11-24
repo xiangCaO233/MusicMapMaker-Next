@@ -71,6 +71,8 @@ struct PackageBeatmapMetadataEdit {
 
 /// @brief 主菜单打包流程的全部 UI 状态。
 struct PackageDialogState {
+    /// @brief 候选扫描与后续导出都绑定打开打包流程时的工程实例。
+    std::uint64_t projectGeneration{};
     /// @brief 是否在下一帧打开打包格式选择弹窗。
     bool showFormatPicker{ false };
 

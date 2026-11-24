@@ -5,10 +5,12 @@
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "event/project/ProjectEvents.h"
 #include "event/ui/iwindow/UIWindowMouseEvent.h"
 #include "log/colorful-log.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/SideBarUI.h"
+#include "ui/imgui/manager/FileManagerView.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/MainMenuView.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
@@ -17,6 +19,8 @@
 #include "ui/imgui/status/IStatusMessageSink.h"
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/workspace/MobileInputPolicy.h"
+#include <chrono>
+#include <future>
 #include <imgui.h>
 #include <initializer_list>
 #include <memory>
@@ -734,6 +738,51 @@ static bool testEventSubscriptionSnapshot()
     return legacySum == 2 && outerLast == 1 && copies == registeredCopies;
 }
 
+/// @brief 在 EventBus 已取得快照后销毁文件管理器，再放行保存事件。
+/// @details 先登记门闩，使快照固定包含旧订阅；取消不会撤销已经开始的分发。
+/// @return 发布及销毁都能完成时返回真，供内存检查器观察旧对象是否被访问。
+static bool testFileManagerInFlightSave()
+{
+    using namespace MMM::Event;
+    auto& bus = EventBus::instance();
+    // 两个信号各有单一方向，销毁发生在快照固定之后、旧回调执行之前。
+    std::promise<void> snapshotTaken;
+    std::promise<void> releaseSnapshot;
+    // 发布线程只等待测试控制信号，不加入生产事件链的任何同步操作。
+    auto release = releaseSnapshot.get_future();
+    // 父类事件无关，这里订阅真实项目保存类型，保证与生产回调处在同一列表。
+    // 门闩先登记，按注册顺序在文件管理器回调前得到控制权。
+    const auto blocker =
+        bus.subscribe<ProjectSavedEvent>([&](const ProjectSavedEvent&) {
+            // EventBus 已经选择此轮订阅列表，旧视图的回调仍由该列表持有。
+            // 阻塞先注册的回调，制造注销不会撤销旧快照的精确顺序。
+            snapshotTaken.set_value();
+            release.wait();
+        });
+    // 构造真实视图，保证后续的保存回调通过其生产订阅入口登记。
+    auto view = std::make_unique<MMM::UI::FileManagerView>("InFlightSave");
+    // 真实项目保存可能来自逻辑线程，显式 async 使测试观察到跨线程路径。
+    auto publishing = std::async(std::launch::async,
+                                 [&] { bus.publish(ProjectSavedEvent{}); });
+    // 等待上限只用于发现测试接线失败，正常场景不依赖睡眠碰撞时序。
+    const bool started =
+        snapshotTaken.get_future().wait_for(std::chrono::seconds(2)) ==
+        std::future_status::ready;
+    // 即使等待超时也要释放发布线程，并在销毁门闩前回收任务。
+    // 析构首先注销订阅，然后释放 UI 对象；旧快照仍可访问独立收件箱。
+    // 不重建同地址的替代视图，避免旧回调错误访问有效的后来对象。
+    view.reset();
+    releaseSnapshot.set_value();
+    // join 确保旧回调确实执行结束，栈上的门闩仍然存活。
+    // 最后移除额外订阅，不能让后续场景访问已经消费的 promise。
+    publishing.get();
+    // 退出后没有任何额外订阅或线程继续持有测试栈数据。
+    // 此用例仅依赖文件保存通知，不需要初始化真实浏览目录或系统拖入。
+    bus.unsubscribe<ProjectSavedEvent>(blocker);
+    // 测试以实际进入分发为条件，未获得快照也要失败。
+    return started;
+}
+
 /// @brief 验证应用级方案、真实输入映射、动作权限、生命周期和配置兼容。
 /// @details 本用例由独立 CTest 进程运行，测试方案不会进入用户的生产注册表。
 /// 配置目录由 mmm_register_test_case 隔离，不读写真实用户的键位设置。
@@ -1038,5 +1087,6 @@ int main(int argc, char** argv)
     ok &= testMobileInputPolicy();
     ok &= testWindowEventBaseDispatch();
     ok &= testEventSubscriptionSnapshot();
+    ok &= testFileManagerInFlightSave();
     return ok ? 0 : 1;
 }

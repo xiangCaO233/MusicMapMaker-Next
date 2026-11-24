@@ -109,7 +109,7 @@ std::string sanitizeTemporaryFolderName(std::string name)
     // 保留的 ASCII 集合不含路径分隔符，因此不会由包名引入额外目录层级。
     for ( char& ch : name ) {
         const unsigned char byte = static_cast<unsigned char>(ch);
-        const bool          ok   = (byte >= 'a' && byte <= 'z') ||
+        const bool ok = (byte >= 'a' && byte <= 'z') ||
                         (byte >= 'A' && byte <= 'Z') ||
                         (byte >= '0' && byte <= '9') || ch == '-' || ch == '_';
         if ( !ok ) ch = '_';
@@ -1291,6 +1291,37 @@ void ProjectController::publishUiSnapshot()
         state->m_mapper             = project.m_metadata.m_mapper;
         state->m_settings = { project.m_settings.m_colorPaletteSchemeName,
                               project.m_settings.m_autoBackupOverride };
+        // 投影沿用 Project 的只读资源解析接口，但不保活逻辑侧的可变工程。
+        // 显示投影仅填充已声明的字段。草稿对象、运行时句柄、工具历史由工程独占。
+        // 资源路径解析复用 Project 的数据表示，读者不能用投影执行写入操作。
+        // 根、条目与工作区来自锁定的同一瞬间，避免文件元数据跨两个项目拼接。
+        // 持有结果的 UI 可以跨关闭完成一次目录请求或图集准备。
+        auto details                  = std::make_shared<Project>();
+        details->m_projectRoot        = project.m_projectRoot;
+        details->m_metadata           = project.m_metadata;
+        details->m_isTemporaryProject = project.m_isTemporaryProject;
+        // 工具试听依赖资源 ID、路径及增益等字段，独立副本不能只复制显示名称。
+        details->m_audioResources = project.m_audioResources;
+        details->m_beatmaps       = project.m_beatmaps;
+        // 只复制音频工具消费的工作区字段，避免复制其它画布及插件的持久状态。
+        const auto& sourceWorkspace = project.m_settings.m_workspace;
+        auto&       workspace       = details->m_settings.m_workspace;
+        workspace.m_projectAudioToolSelectedResourceId =
+            sourceWorkspace.m_projectAudioToolSelectedResourceId;
+        workspace.m_projectAudioToolBrushVolume =
+            sourceWorkspace.m_projectAudioToolBrushVolume;
+        // 保持方块顺序和按资源保存的倍率；视图依此恢复 Z 序以及默认尺寸。
+        workspace.m_projectAudioToolPlacements =
+            sourceWorkspace.m_projectAudioToolPlacements;
+        // 三个布尔值都来自同一版设置，避免裁剪路径采用不同的吸附状态。
+        workspace.m_projectAudioToolPreviewEffectOnSelection =
+            sourceWorkspace.m_projectAudioToolPreviewEffectOnSelection;
+        workspace.m_projectAudioToolSnapEnabled =
+            sourceWorkspace.m_projectAudioToolSnapEnabled;
+        workspace.m_projectAudioToolShowVolume =
+            sourceWorkspace.m_projectAudioToolShowVolume;
+        // 只有填充完毕后才转成 const 类型，发布后不存在可变别名。
+        state->m_details = std::move(details);
         // 只复制向导需要的标识与路径，避开草稿轨节点和音频效果配置。
         for ( const auto& audio : project.m_audioResources )
             if ( audio.m_type == AudioTrackType::Main )
@@ -1302,6 +1333,7 @@ void ProjectController::publishUiSnapshot()
             state->m_beatmapNames.push_back(beatmap.m_name);
     }
     // nullptr 与已完成的投影走同一发布边界，界面无需另读工程存在标志。
+    // release 同时发布资源、设置和代次，禁止界面把这些字段拆成独立可变来源。
     m_uiSnapshot.store(std::move(state), std::memory_order_release);
 }
 
@@ -1328,6 +1360,23 @@ void ProjectController::queueUiSettingsEdit(ProjectUiSettingsEdit edit)
         if ( edit.m_autoBackupOverride )
             m_pendingUiSettingsEdit->m_autoBackupOverride =
                 edit.m_autoBackupOverride;
+        // 页签不替换整个工作区，另一个请求的工具布局仍在槽内。
+        if ( edit.m_sidebarActiveTab )
+            m_pendingUiSettingsEdit->m_sidebarActiveTab =
+                std::move(edit.m_sidebarActiveTab);
+        // optional 的存在性与内部 bool 值不同，关闭开关也必须保存。
+        if ( edit.m_audioToolPreview )
+            m_pendingUiSettingsEdit->m_audioToolPreview =
+                edit.m_audioToolPreview;
+        if ( edit.m_audioToolSnap )
+            m_pendingUiSettingsEdit->m_audioToolSnap = edit.m_audioToolSnap;
+        if ( edit.m_audioToolShowVolume )
+            m_pendingUiSettingsEdit->m_audioToolShowVolume =
+                edit.m_audioToolShowVolume;
+        // 布局按一次手势保存整组位置和画笔状态，不能混用两份手势结果。
+        if ( edit.m_audioToolLayout )
+            m_pendingUiSettingsEdit->m_audioToolLayout =
+                std::move(edit.m_audioToolLayout);
     }
     // 设置槽已在短锁内填好，布尔值只提示下轮是否需取锁。
     m_hasPendingUiSettingsEdit.store(true, std::memory_order_relaxed);
@@ -1356,12 +1405,37 @@ const Project* ProjectController::applyPendingUiSettingsEdit()
          edit->m_generation != m_projectGeneration )
         return nullptr;
     // 字段级提交避免替换项目其他设置及工作区现场。
+    // 接管时才读取当前值，排队前的 UI 副本不可以替代直接由逻辑更新的字段。
     auto& settings = m_currentProject->m_settings;
     if ( edit->m_colorPaletteSchemeName )
         settings.m_colorPaletteSchemeName =
             std::move(*edit->m_colorPaletteSchemeName);
     if ( edit->m_autoBackupOverride )
         settings.m_autoBackupOverride = *edit->m_autoBackupOverride;
+    // 只有通过身份与只读门禁才取得工作区引用，由后续生产保存步骤发布。
+    auto& workspace = settings.m_workspace;
+    // 页签使用项目文件中的稳定名称，跟随界面语言变化时也能恢复。
+    if ( edit->m_sidebarActiveTab )
+        workspace.m_sidebarActiveTab = std::move(*edit->m_sidebarActiveTab);
+    // 从一次请求中逐个消费开关字段，缺省保留所有者最新值。
+    if ( edit->m_audioToolPreview )
+        workspace.m_projectAudioToolPreviewEffectOnSelection =
+            *edit->m_audioToolPreview;
+    if ( edit->m_audioToolSnap )
+        workspace.m_projectAudioToolSnapEnabled = *edit->m_audioToolSnap;
+    if ( edit->m_audioToolShowVolume )
+        workspace.m_projectAudioToolShowVolume = *edit->m_audioToolShowVolume;
+    // 画笔状态和位置共用一次更新边界，旧版快照一直保持原值。
+    if ( auto& layout = edit->m_audioToolLayout ) {
+        // 一次替换同一交互结束时的选择及布局，其它视图字段不参与覆盖。
+        workspace.m_projectAudioToolSelectedResourceId =
+            std::move(layout->m_selectedResourceId);
+        workspace.m_projectAudioToolBrushVolume = layout->m_brushVolume;
+        // 直接接管已提交的部署数组，避免持有会话锁期间复制全部条目。
+        workspace.m_projectAudioToolPlacements =
+            std::move(layout->m_placements);
+    }
+    // 返回值仅供本轮所有者同步运行设置，界面仍通过不可变发布入口读取。
     return m_currentProject.get();
 }
 

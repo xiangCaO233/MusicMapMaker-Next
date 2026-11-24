@@ -5,6 +5,7 @@
 #include "runtime/AppThreadPool.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
@@ -19,6 +20,7 @@
 #include <ice/thread/ThreadPool.hpp>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <utility>
 
 namespace MMM::Audio
@@ -39,6 +41,94 @@ namespace
 // - 进度回调为空时完全跳过事件构造，不影响核心导出路径；
 // - 实际输出可因最小时长超过理论值而包含确定性的静音尾部；
 // - 成功结果同时报告帧数和秒数，二者由同一实际写入计数生成。
+
+/// @brief 独占目标卷上的暂存目录，成功编码并关闭后才替换正式文件。
+class StagedAudioOutput
+{
+public:
+    /// @brief 保留已有音频文件链接和权限，暂存后缀继续决定编码格式。
+    explicit StagedAudioOutput(const std::filesystem::path& output)
+        : m_target(output)
+    {
+        namespace fs = std::filesystem;
+        std::error_code error;
+        // 既有导出允许写入文件链接指向的普通文件，保持该路径语义。
+        if ( fs::is_symlink(fs::symlink_status(output, error)) ) {
+            m_target = fs::canonical(output, error);
+            if ( error ) return;
+        }
+        // 缺失表示允许新建；权限拒绝或 I/O 失败不能解释成空闲文件名。
+        // 暂存和最终目标使用同一解析结果，避免文件链接跨卷导致提交失败。
+        const auto status = fs::status(m_target, error);
+        if ( error && error != std::errc::no_such_file_or_directory ) return;
+        if ( fs::exists(status) && !fs::is_regular_file(status) ) return;
+        m_permissions = status.permissions();
+
+        // 目录原子创建确定跨进程所有权，名称计数器只减少同进程冲突。
+        static std::atomic<unsigned long> next{ 0 };
+        for ( unsigned attempt = 0; attempt < 1024; ++attempt ) {
+            auto directory =
+                m_target.parent_path() /
+                (".mmm-audio-export-" +
+                 std::to_string(next.fetch_add(1, std::memory_order_relaxed)));
+            // 内核只允许一个并发调用取得目录；另一进程的暂存数据不可清理。
+            // 同名遗留目录只消耗一次候选，不会被认成当前实例的私有路径。
+            if ( fs::create_directory(directory, error) ) {
+                m_directory = std::move(directory);
+                // 必须保留用户请求的容器后缀，文件链接目标可能使用不同名称。
+                m_path = m_directory / "audio";
+                m_path.replace_extension(output.extension());
+                return;
+            }
+            // 权限或父目录异常不会被另一个编号解决，立即向调用者失败返回。
+            if ( error && error != std::errc::file_exists ) return;
+        }
+    }
+
+    /// @brief 只回收本次编码持有的暂存文件和目录。
+    ~StagedAudioOutput()
+    {
+        if ( m_directory.empty() ) return;
+        std::error_code error;
+        // 先清理编码输出，再撤掉独占目录；成功提交后文件已移出目录。
+        // 这里不递归删除，目录若被外部程序改动也不应误删未知条目。
+        std::filesystem::remove(m_path, error);
+        std::filesystem::remove(m_directory, error);
+    }
+
+    /// @brief 编码器输出路径，空值表示暂存准备失败。
+    const std::filesystem::path& path() const { return m_path; }
+
+    /// @brief 编码器完成排空和关闭后提交完整音频。
+    /// @param error 返回权限设置或同卷重命名失败原因。
+    /// @pre 编码器已释放输出句柄，Windows 方可替换已存在目标。
+    /// @return 只有最终文件已可见时返回真。
+    bool commit(std::error_code& error) const
+    {
+        // 文件权限必须在重命名前处理，失败时仍保留正式路径的原字节。
+        if ( m_permissions != std::filesystem::perms::unknown ) {
+            std::filesystem::permissions(m_path, m_permissions, error);
+            if ( error ) return false;
+        }
+        // 单次同卷重命名作为提交点，以免先删除目标再遇到无法恢复的失败。
+        // 并发成功导出按最终重命名顺序可见，任何中途失败都不写入目标。
+        std::filesystem::rename(m_path, m_target, error);
+        return !error;
+    }
+
+private:
+    /// @brief 完整音频的最终路径。
+    /// 文件符号链接解析后指向其目标，目录和后缀仍用各自的规范来源。
+    std::filesystem::path m_target;
+    /// @brief 成功独占的同卷目录。
+    /// 只有 create_directory 返回成功才赋值，因此析构只清理确实持有的目录。
+    std::filesystem::path m_directory;
+    /// @brief 保留容器后缀的编码输出。
+    std::filesystem::path m_path;
+    /// @brief 覆盖已有普通文件前保留的权限。
+    /// 新建路径没有旧权限可继承，交由平台默认创建策略决定。
+    std::filesystem::perms m_permissions{ std::filesystem::perms::unknown };
+};
 
 /// @brief 音频倍速导出的离线处理块大小。
 constexpr std::size_t AUDIO_SPEED_EXPORT_CHUNK_FRAMES = 65536;
@@ -397,7 +487,13 @@ AudioSpeedExportResult AudioSpeedExportService::exportWav(
 
     emitProgress(options, 0.08f, "正在通过音频引擎导出...");
 
-    ice::FFmpegFileReceiver receiver(options.outputPath, format);
+    const StagedAudioOutput staged(options.outputPath);
+    if ( staged.path().empty() ) {
+        result.errorMessage = "Failed to stage output audio";
+        return result;
+    }
+
+    ice::FFmpegFileReceiver receiver(staged.path(), format);
     // 接收端输入仍使用引擎内部时钟，目标采样率只在编码链重采样。
     // targetFrames 和进度分母不能按目标采样率重复缩放。
     receiver.set_source(graph);
@@ -435,6 +531,14 @@ AudioSpeedExportResult AudioSpeedExportService::exportWav(
         result.errorMessage = receiver.error_message().empty()
                                   ? "Failed to encode output audio"
                                   : receiver.error_message();
+        return result;
+    }
+
+    // start 覆盖编码、写容器尾与关闭；最后才提交，失败不回退为直接写目标。
+    std::error_code commitError;
+    if ( !staged.commit(commitError) ) {
+        result.errorMessage =
+            "Failed to replace output audio: " + commitError.message();
         return result;
     }
 

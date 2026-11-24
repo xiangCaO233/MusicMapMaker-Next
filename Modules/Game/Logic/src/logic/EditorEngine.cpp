@@ -34,6 +34,7 @@
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ProjectController.h"
 #include "logic/ProjectResourceService.h"
+#include "logic/ProjectUiState.h"
 #include "logic/TimingTableSnapshot.h"
 #include "logic/UnlimitedIdleUpdateGate.h"
 #include "logic/audio/CanvasAudioPreparation.h"
@@ -1762,10 +1763,10 @@ void EditorEngine::restoreProjectWorkspace(
                                       ? map->m_baseMapMetadata.name
                                       : state.m_displayName;
         int32_t     index       = createSession(map,
-                                      displayName,
-                                      false,
-                                      state.m_cameraId,
-                                      !state.m_cameraId.empty());
+                                                displayName,
+                                                false,
+                                                state.m_cameraId,
+                                                !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
         // fallback 始终指向最后成功创建项，活动路径丢失时仍给用户可用画布。
 
@@ -2832,6 +2833,17 @@ void EditorEngine::pushCommand(LogicCommand&&               cmd,
     // 项目音频画笔同样跨画布共享，资源、类型和音量作为不可拆分状态传播。
     if ( const auto* audioResource =
              std::get_if<CmdSetBrushAudioResource>(&cmd) ) {
+        std::lock_guard<std::recursive_mutex> lock(
+            impl().m_sessionRegistry.mutex());
+        // 项目接管也使用会话锁；核对身份后到广播结束前不能切换工程。
+        // 从项目工具发起时同时约束全局画笔缓存和所有会话的当前资源。
+        // 其他画笔入口允许省略代次，沿用它们的现有路由契约。
+        if ( audioResource->projectGeneration ) {
+            const auto snapshot = ProjectController::instance().uiSnapshot();
+            if ( !snapshot ||
+                 snapshot->m_generation != *audioResource->projectGeneration )
+                return;
+        }
         // 总门禁也约束引擎缓存，禁止旧窗口命令在下一次开启时复活选择。
         // 空资源的类型回退 Effect，不保留不可用的 Main 放置语义。
         // 广播采用清洗后的缓存值，所有会话接收相同的空选择。
@@ -2854,8 +2866,7 @@ void EditorEngine::pushCommand(LogicCommand&&               cmd,
             workspace.m_projectAudioToolBrushVolume = impl().m_brushAudioVolume;
         }
 
-        std::lock_guard<std::recursive_mutex> lock(
-            impl().m_sessionRegistry.mutex());
+
         auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
         for ( auto& entry : sessions ) {
             if ( entry.session ) {
@@ -2991,8 +3002,8 @@ void EditorEngine::pushCommand(LogicCommand&&               cmd,
          metadata && metadata->trackCountEdit ) {
         const auto snapshot = impl().m_sessionRegistry.publishedSnapshot();
         const auto active   = std::ranges::find(snapshot->sessions,
-                                              snapshot->activeIndex,
-                                              &SessionSnapshotEntry::index);
+                                                snapshot->activeIndex,
+                                                &SessionSnapshotEntry::index);
         // 活动索引和条目来自同代，索引左移时不能回退到任意当前会话。
         // Session 自己执行协作权限检查；Logo 只显示工具占位状态。
         if ( active != snapshot->sessions.end() && !active->isLogoPlaceholder )
@@ -3832,10 +3843,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 顺序投递初始化命令，保证载图处理看到完整编辑环境。
                 sessions[i].isLogoPlaceholder        = false;
                 sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
-                sessions[i].displayName              = displayName.empty()
-                                                           ? beatmap->m_baseMapMetadata.name
-                                                           : displayName;
-                sessions[i].beatmapPathKey           = requestedBeatmapKey;
+                sessions[i].displayName = displayName.empty()
+                                              ? beatmap->m_baseMapMetadata.name
+                                              : displayName;
+                sessions[i].beatmapPathKey = requestedBeatmapKey;
                 // 占位条目的旧音频身份必须覆盖为空，等待载图命令生成新描述符。
                 sessions[i].audioTimelineFingerprint =
                     requestedAudioTimelineFingerprint;
@@ -5279,6 +5290,22 @@ void EditorEngine::handleRenameAudioResource(const CmdRenameAudioResource& cmd,
     // 注册表递归锁也允许内部 saveProject 复用工作区捕获入口。
     std::lock_guard<std::recursive_mutex> lock(
         impl().m_sessionRegistry.mutex());
+    // 项目音频工具可能在显示确认弹窗期间切换工程。
+    // 同名资源不能作为跨工程身份，收到旧代请求时不访问任何资源表。
+    // 失败仍发布常规变更结果，让已确认的 UI 操作有明确终态。
+    // 此入口低频，代次核对与后续资源重命名在已有互斥区内完成。
+    if ( cmd.projectGeneration ) {
+        const auto snapshot = ProjectController::instance().uiSnapshot();
+        if ( !snapshot || snapshot->m_generation != *cmd.projectGeneration ) {
+            publishAudioResourceMutationResult(
+                Event::AudioResourceMutationOperation::Rename,
+                cmd.id,
+                false,
+                {},
+                "项目已切换，已取消音频资源重命名");
+            return;
+        }
+    }
     if ( ProjectController::instance().isCurrentProjectTemporary() ) {
         // 同步设置入口也必须遵循临时谱包只读规则，不能绕过命令路由门禁。
         publishAudioResourceMutationResult(

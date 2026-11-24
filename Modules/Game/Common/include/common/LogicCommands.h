@@ -529,6 +529,9 @@ struct CmdSetBrushAudioResource {
 
     /// @brief 新建玩家物件绑定或自动采样使用的物件音量倍率。
     float volume{ 1.0F };
+
+    /// @brief 发出选择命令的项目实例，空值为非项目工具入口。
+    std::optional<std::uint64_t> projectGeneration;
 };
 
 /// @brief 将完整音符调色盘应用到当前选中物件。
@@ -556,8 +559,7 @@ struct CmdClearNoteColorOverrides {
 };
 
 /// @brief 清除当前谱面全部正式音符及折线子段的自定义颜色。
-struct CmdClearAllNoteColorOverrides {
-};
+struct CmdClearAllNoteColorOverrides {};
 
 /**
  * @brief 撤销指令
@@ -580,8 +582,7 @@ struct CmdRedo {
 /**
  * @brief 复制指令
  */
-struct CmdCopy {
-};
+struct CmdCopy {};
 
 /**
  * @brief 粘贴指令
@@ -600,8 +601,7 @@ struct CmdPaste {
 /**
  * @brief 剪切指令
  */
-struct CmdCut {
-};
+struct CmdCut {};
 
 /**
  * @brief 删除选中物件指令
@@ -625,14 +625,12 @@ struct CmdRemoveComposeLessonNote {
 /**
  * @brief 镜像选中物件指令
  */
-struct CmdMirrorSelected {
-};
+struct CmdMirrorSelected {};
 
 /**
  * @brief 对齐选中物件至常用分拍指令
  */
-struct CmdAlignSelectedToCommonBeats {
-};
+struct CmdAlignSelectedToCommonBeats {};
 
 /// @brief 全选命令的轨道区范围。
 enum class SelectAllScope : std::uint8_t {
@@ -698,6 +696,9 @@ struct CmdSaveBeatmapAs {
 struct CmdExportImdPackage {
     /// @brief 资源包输出路径，使用 UTF-8 编码。
     std::string path;
+
+    /// @brief 打开资源包选择器时的项目实例。
+    std::optional<std::uint64_t> projectGeneration;
 };
 
 /// @brief 打包转换时临时覆盖单个谱面的基础元数据。
@@ -748,6 +749,9 @@ struct CmdPackBeatmap {
 
     /// @brief 转换指定谱面时临时覆盖的元数据列表。
     std::vector<PackageBeatmapMetadataOverride> metadataOverrides;
+
+    /// @brief 文件候选扫描所属的项目实例。
+    std::optional<std::uint64_t> projectGeneration;
 };
 
 /// @brief 滚轮指令的处理意图。
@@ -1142,8 +1146,7 @@ struct CmdUpdateBeatmapMetadata {
 };
 
 /// @brief 标记直接修改的扩展谱面元数据，并请求尾随自动保存。
-struct CmdMarkBeatmapMetadataDirty {
-};
+struct CmdMarkBeatmapMetadataDirty {};
 
 /**
  * @brief 导入音频指令
@@ -1168,6 +1171,9 @@ struct CmdRenameAudioResource {
 
     /// @brief 不含目录的目标文件名；扩展名必须与源文件一致。
     std::string newFileName;
+
+    /// @brief 项目音频工具的重命名目标所属工程实例。
+    std::optional<std::uint64_t> projectGeneration;
 };
 
 /// @brief 更新项目音频资源的完整持久化 DSP 配置。
