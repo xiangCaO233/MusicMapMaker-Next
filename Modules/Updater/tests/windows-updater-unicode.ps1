@@ -103,8 +103,47 @@ public static class UpdaterUnicodeProbe {
 
     # 正常路径传入已经退出的真实 PID，验证超时路径之后仍可以完成安装。
     $parent = Start-Process -FilePath $env:ComSpec -ArgumentList '/d /c exit 0' -NoNewWindow -PassThru -Wait
-    $start.Arguments = '"{0}" "{1}" {2}' -f $download, $target, $parent.Id
+    $exitedParentId = $parent.Id
+    $start.Arguments = '"{0}" "{1}" {2}' -f $download, $target, $exitedParentId
     $parent.Dispose()
+    # 模拟旧更新器在移动原程序后退出。即使下载已丢失，也须恢复唯一副本。
+    [IO.File]::Move($target, $target + '.old')
+    $validArguments = $start.Arguments
+    $start.Arguments = '"{0}" "{1}" {2}' -f ($download + '.missing'), $target, $exitedParentId
+    $process = [Diagnostics.Process]::Start($start)
+    if (!$process.WaitForExit(15000) -or $process.ExitCode -ne 1 -or
+        $process.StandardError.ReadToEnd() -notmatch 'Failed to replace executable') {
+        throw 'Missing download did not fail after recovering the previous executable'
+    }
+    if ((Get-FileHash -LiteralPath $target).Hash -ne $oldHash -or
+        [IO.File]::ReadAllText($marker) -cne 'previous marker') {
+        throw 'Interrupted legacy update lost the original executable or marker'
+    }
+    $process.Dispose()
+    $process = $null
+    $start.Arguments = $validArguments
+
+    # 拒绝删除共享让同卷提交失败，已完成的暂存副本也不能覆盖正式文件。
+    $locked = [IO.File]::Open($target, 'Open', 'Read', 'Read')
+    try {
+        $process = [Diagnostics.Process]::Start($start)
+        if (!$process.WaitForExit(15000) -or $process.ExitCode -ne 1 -or
+            $process.StandardError.ReadToEnd() -notmatch 'Failed to replace executable') {
+            throw 'Locked target did not reject the staged update'
+        }
+        # 释放锁前核对源文件、旧程序和暂存清理，重试继续使用相同下载文件。
+        if ((Get-FileHash -LiteralPath $target).Hash -ne $oldHash -or
+            (Get-FileHash -LiteralPath $download).Hash -ne $payloadHash -or
+            @(Get-ChildItem -LiteralPath $installDir -Force -Filter '.mmm-update-*').Count -ne 0) {
+            throw 'Failed commit changed the old installation or leaked staging files'
+        }
+        $process.Dispose()
+        $process = $null
+    } finally {
+        $locked.Dispose()
+    }
+    Write-Output 'Legacy interruption and failed staged commit preserved the installation.'
+
     # 使用进程 API 调用实际二进制，跳过交互式终端或 cmd 的代码页转换。
     $process = [System.Diagnostics.Process]::Start($start)
     # 夹具没有长驻父进程。测试超时用于防止生产 wait 退化时让测试永久阻塞。
