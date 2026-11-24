@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -111,16 +112,16 @@ void waitForParent(DWORD pid)
 /// @return 成功请求系统启动时返回 true。
 ///
 /// 工作目录设置为目标父目录，使更新后的程序继续按安装目录解析相对资源。
-bool launchTarget(const std::string& targetPath)
+bool launchTarget(const std::wstring& targetPath)
 {
-    std::string dir =
-        std::filesystem::path(targetPath).parent_path().generic_string();
+    // 路径及工作目录保留 Windows 原生 UTF-16，系统 ANSI 代码页不参与重启。
+    const auto directory = std::filesystem::path(targetPath).parent_path();
     // ShellExecute 大于 32 表示系统已接受启动请求，不代表子进程完成初始化。
-    return reinterpret_cast<INT_PTR>(ShellExecuteA(nullptr,
-                                                   "open",
+    return reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr,
+                                                   L"open",
                                                    targetPath.c_str(),
                                                    nullptr,
-                                                   dir.c_str(),
+                                                   directory.c_str(),
                                                    SW_SHOWNORMAL)) > 32;
 }
 
@@ -564,7 +565,15 @@ void writeUpdateSuccessMarker(const std::filesystem::path& targetPath)
     // ofstream 默认截断旧标记，确保内容对应最近一次更新。
     std::ofstream marker(markerPath);
     if ( marker.is_open() ) {
-        marker << targetPath.string();
+#if defined(_WIN32)
+        // Windows 路径输出为 UTF-8 文本，避免窄代码页转换失败中止更新。
+        const auto pathText = targetPath.u8string();
+        marker.write(reinterpret_cast<const char*>(pathText.data()),
+                     static_cast<std::streamsize>(pathText.size()));
+#else
+        // POSIX 保留原生路径字节，与现有标记的读取语义一致。
+        marker << targetPath.native();
+#endif
     }
 }
 
@@ -589,6 +598,24 @@ long parseParentPid(std::string_view text)
     return value;
 }
 
+#if defined(_WIN32)
+/// @brief 从宽命令行解析 Windows 父进程 PID。
+/// @param text 十进制 ASCII 数字在 UTF-16 命令行中的表示。
+/// @return 正数 PID，空参数、非数字或超出 long 范围时为零。
+long parseParentPid(std::wstring_view text)
+{
+    long value = 0;
+    for ( const wchar_t character : text ) {
+        // 只接受 ASCII 形式的十进制数字，先检查范围再累加。
+        if ( character < L'0' || character > L'9' ) return 0;
+        const long digit = character - L'0';
+        if ( value > (std::numeric_limits<long>::max() - digit) / 10 ) return 0;
+        value = value * 10 + digit;
+    }
+    return value;
+}
+#endif
+
 /// @brief 执行独立更新器流程。
 /// @param argc 命令行参数数量。
 /// @param argv 下载文件、更新目标和父进程 PID 参数。
@@ -608,7 +635,11 @@ long parseParentPid(std::string_view text)
 /// 更新器不删除失败时仍可能用于恢复或重试的下载文件。各平台只在新目标
 /// 已安全就位后清理下载源；临时和备份路径均从明确目标及当前 PID 推导，
 /// 禁止把未验证的命令行目录作为递归删除范围。
+#if defined(_WIN32)
+int wmain(int argc, wchar_t* argv[])
+#else
 int main(int argc, char* argv[])
+#endif
 {
     // 参数数量必须精确，避免把缺失 PID 或多余字符串误当作路径片段。
     if ( argc != 4 ) {
@@ -618,7 +649,8 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    // 路径对象只做词法保存，存在性和可操作性在平台替换步骤验证。
+    // Windows 从宽入口直接构造原生路径；POSIX 保留原始字节。
+    // 存在性和可操作性在平台替换步骤验证。
     const std::filesystem::path downloadedFile = argv[1];
     std::filesystem::path       targetPath     = argv[2];
     const long                  parentPid      = parseParentPid(argv[3]);
@@ -648,8 +680,10 @@ int main(int argc, char* argv[])
     std::error_code replaceError;
 #if defined(_WIN32)
     // Windows 不能覆盖仍被占用的映像，先把旧文件移动到同目录备份。
-    const std::filesystem::path backupPath = targetPath.string() + ".old";
-    std::error_code             cleanupError;
+    auto backupPath = targetPath;
+    // 追加原生路径后缀，避免给已有的 UTF-16 字符做代码页往返。
+    backupPath += L".old";
+    std::error_code cleanupError;
     // 旧备份只做尽力清理，后续 rename 会给出实际冲突错误。
     std::filesystem::remove(backupPath, cleanupError);
 
@@ -715,7 +749,7 @@ int main(int argc, char* argv[])
     writeUpdateSuccessMarker(targetPath);
 
     // 启动失败不回滚新版本，保留更新结果供用户手工启动和诊断。
-    if ( !launchTarget(targetPath.string()) ) {
+    if ( !launchTarget(targetPath.native()) ) {
         std::error_code markerError;
         const auto      markerPath = updateSuccessMarkerPath(targetPath);
         if ( !markerPath.empty() )
