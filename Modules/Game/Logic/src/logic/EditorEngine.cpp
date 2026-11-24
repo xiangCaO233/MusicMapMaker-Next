@@ -4992,10 +4992,15 @@ void EditorEngine::loop()
                     if ( shouldUpdateSession ) {
                         // 更新前保存播放位置，只在活动会话确由命令改变时间时，
                         // 才把它登记为本轮同主音轨同步来源。
-                        const double previousCurrentTime =
-                            entry.session->getContext().currentTime;
+                        const auto&  context = entry.session->getContext();
+                        const double previousCurrentTime = context.currentTime;
+                        // 仅在实例替换时更新模板列表。常态只比较地址，不复制谱面所有权。
+                        const auto* previousBeatmap =
+                            context.currentBeatmap.get();
                         entry.session->update(
                             sessionDt, editorConfigSnapshot, isActiveSession);
+                        if ( previousBeatmap != context.currentBeatmap.get() )
+                            impl().m_sessionRegistry.publishSnapshotUnsafe();
                         if ( isActiveSession ) {
                             // 命令可能在本轮改变播放状态；发布只含活动源的最终值。
                             const auto& activeContext =

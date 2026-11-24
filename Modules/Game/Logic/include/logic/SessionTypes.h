@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -8,6 +9,11 @@
 /// @file SessionTypes.h
 /// @brief 会话列表及其已发布快照的公共值类型，不包含注册表实现。
 /// @details 保持已有快照的所有权和字段布局，锁与发布算法继续由注册表负责。
+
+namespace MMM
+{
+class BeatMap;
+}
 
 namespace MMM::Logic
 {
@@ -87,10 +93,26 @@ struct SessionUiSnapshotEntry {
     bool restoreDockFromWorkspace{ false };
 };
 
+/// @brief 向导模板候选的不可变展示数据，源对象不由列表保活。
+struct SessionTemplateOption {
+    /// @brief 稳定相机 ID，用于确认时重新定位源会话。
+    std::string cameraId;
+    /// @brief 主画布的标签名称。
+    std::string displayName;
+    /// @brief 源谱面名称，与显示名称可能不同。
+    std::string internalName;
+    /// @brief 仅用于悬停预览的源文件路径。
+    std::filesystem::path mapPath;
+    /// @brief 同相机重载时区分实际载图实例，不允许旧选择自动指向新谱。
+    std::weak_ptr<BeatMap> beatmap;
+};
+
 /// @brief UI 每帧读取的轻量会话列表，由结构变更低频发布。
 struct PublishedSessionUiSnapshot {
     /// @brief 与会话注册表同索引的画布元数据。
     std::vector<SessionUiSnapshotEntry> entries;
+    /// @brief 已加载且可作为模板的谱面，与标签使用同一次发布。
+    std::vector<SessionTemplateOption> templateOptions;
 };
 
 }  // namespace MMM::Logic

@@ -9,15 +9,18 @@
 #include "event/core/EventBus.h"
 #include "event/input/glfw/GLFWDropEvent.h"
 #include "event/logic/BeatmapCreateInteractionEvent.h"
+#include "event/project/ProjectEvents.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectController.h"
+#include "logic/SessionTypes.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/project/Project.h"
 #include "mmm/timing/BpmNormalization.h"
+#include "runtime/AppThreadPool.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 #include "ui/utils/MobileFileDialog.h"
@@ -30,11 +33,12 @@
 #include <algorithm>
 #include <cctype>
 #include <cfloat>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fmt/format.h>
-#include <initializer_list>
+#include <ice/thread/ThreadPool.hpp>
 #include <mutex>
 #include <string_view>
 #include <system_error>
@@ -112,71 +116,7 @@ bool resourcePathMatches(const std::filesystem::path& lhs,
            Config::pathToUtf8(rhs.filename());
 }
 
-/// @brief 扫描项目资源，跳过无权限目录和异常文件状态。
-/// @param projectRoot 项目根目录。
-/// @param allowedExtensions 允许的扩展名，必须为小写。
-/// @return 项目根相对路径列表。
-///
-/// 扫描使用 error_code 和
-/// skip_permission_denied，任何单个目录或文件状态错误都只
-/// 跳过对应条目，不中断整个向导。返回路径相对项目根，便于直接写入谱面元数据。
-/// 扩展名比较在 UTF-8 字符串上执行 ASCII 小写转换，allowedExtensions 的调用方
-/// 必须提供带点号的小写值。结果保持目录迭代器顺序，UI 不依赖排序语义。
-/// 目录项状态查询和 relative 转换分别复用并清除同一个 error_code，保证某个损坏
-/// 条目不会让之后的正常文件全部被跳过。
-/// @warning 低频路径：仅在用户展开封面或背景下拉框时递归扫描项目目录。
-std::vector<std::string> collectProjectResources(
-    const std::filesystem::path&            projectRoot,
-    std::initializer_list<std::string_view> allowedExtensions)
-{
-    // error_code 版本避免文件系统异常穿过禁异常边界。
-    std::vector<std::string>                      resources;
-    std::error_code                               filesystemError;
-    std::filesystem::recursive_directory_iterator it(
-        projectRoot,
-        std::filesystem::directory_options::skip_permission_denied,
-        filesystemError);
-    std::filesystem::recursive_directory_iterator end;
-    if ( filesystemError ) return resources;
 
-    for ( ; it != end; it.increment(filesystemError) ) {
-        if ( filesystemError ) {
-            // 清除当前迭代错误，让 iterator 尝试继续后续可访问节点。
-            filesystemError.clear();
-            continue;
-        }
-        if ( !it->is_regular_file(filesystemError) || filesystemError ) {
-            // 目录、符号设备和无法读取状态的条目都不是可选资源。
-            filesystemError.clear();
-            continue;
-        }
-
-        // 扩展名按无符号字符转小写，避免负 char 传给 tolower。
-        auto ext = Config::pathToUtf8(it->path().extension());
-        std::transform(ext.begin(), ext.end(), ext.begin(), [](char c) {
-            return static_cast<char>(
-                std::tolower(static_cast<unsigned char>(c)));
-        });
-        // 白名单由具体音频、封面或背景调用点提供。
-        const bool accepted = std::any_of(
-            allowedExtensions.begin(),
-            allowedExtensions.end(),
-            [&](std::string_view allowed) { return ext == allowed; });
-        if ( !accepted ) continue;
-
-        // 只把项目内部相对路径暴露给 UI 和元数据。
-        auto rel =
-            std::filesystem::relative(it->path(), projectRoot, filesystemError);
-        if ( filesystemError ) {
-            // 无法建立相对路径的条目不能安全持久化。
-            filesystemError.clear();
-            continue;
-        }
-        // 保留目录层级，避免项目内同名资源冲突。
-        resources.push_back(Config::pathToUtf8(rel));
-    }
-    return resources;
-}
 
 /// @brief 判断相对路径是否位于项目根内。
 /// @param path 待检查路径。
@@ -283,6 +223,119 @@ std::filesystem::path normalizeProjectResourcePath(
 }
 }  // namespace
 
+/// @brief 从同一轮递归遍历构建两类下拉框使用的视觉候选。
+/// @param root 当前工程的绝对根目录。
+/// @param generation 工程实例的代次，同一路径重新打开也会变化。
+/// @param revision 本次读取前观察到的目录失效序号。
+/// @return 带有原请求身份的图片视频列表，空工程也返回有效结果。
+/// @details 封面选择只读取图片子集，背景选择可读取两种资源。无论哪个下拉
+/// 先展开，本轮遍历产物可服务两个控件。
+/// 文件任务不持有向导和工程对象，即使页面关闭也不访问悬空引用。
+/// @details 相对路径保留子目录层级，便于工程迁移及同名素材区分。
+/// 仅检查扩展名和常规文件类型，实际媒体内容由原解码流程验证。
+/// 路径大小写按文件系统保留。只对扩展名执行 ASCII 小写转换。
+/// 背景和封面复用同一次扫描的结果，布尔类型用于选择时决定 cover_type。
+/// 遍历使用 error_code。无权访问的目录按选项跳过，其余迭代错误结束扫描；
+/// 返回此前收集的候选，异常条目不会传播到 UI。
+/// @warning 独立文件线程入口。只访问请求内路径，不读取向导或会话状态。
+NewBeatmapWizard::VisualResources NewBeatmapWizard::scanVisualResources(
+    std::filesystem::path root, std::uint64_t generation,
+    std::uint64_t revision)
+{
+    VisualResources result{ generation, revision, {} };
+    std::error_code error;
+    std::filesystem::recursive_directory_iterator it(
+        root,
+        std::filesystem::directory_options::skip_permission_denied,
+        error);
+    // 不开启 follow_directory_symlink，避免目录别名导致重复递归或成环。
+    const std::filesystem::recursive_directory_iterator end;
+    // 迭代错误会终止标准迭代器。逐项状态错误单独处理，保留可访问结果。
+    for ( ; !error && it != end; it.increment(error) ) {
+        std::error_code fileError;
+        if ( !it->is_regular_file(fileError) ) continue;
+        // 视频沿用设置背景类型的公共判定，避免扩展名接受规则分叉。
+        const bool video = isVideoBackgroundPath(it->path());
+        if ( !video ) {
+            auto extension = Config::pathToUtf8(it->path().extension());
+            std::ranges::transform(
+                extension, extension.begin(), [](unsigned char c) {
+                    return static_cast<char>(std::tolower(c));
+                });
+            // 仅接受现有封面和背景控件支持的图片类型。
+            if ( extension != ".png" && extension != ".jpg" &&
+                 extension != ".jpeg" && extension != ".bmp" )
+                continue;
+        }
+
+        // relative 可能解析符号链接并访问文件系统，必须留在工作线程。
+        // 界面继续显示和提交的是项目相对字符串，无需重做转换。
+        auto relative = std::filesystem::relative(it->path(), root, fileError);
+        // 相对路径不能逃离工程根，即便目录中存在指向外部的符号链接。
+        if ( !fileError && !relative.empty() && *relative.begin() != ".." )
+            result.entries.push_back({ Config::pathToUtf8(relative), video });
+    }
+    return result;
+}
+
+/// @brief 取出已完成目录快照；按工程代次和目录失效序号验证。
+/// @param project 由绘制帧持有的工程快照。
+/// @return 当前目录快照，或扫描期间的空值。
+/// @details 工程代次区分同一路径关闭重开。目录序号区分同一工程打开期间
+/// 的资源改动。只有两者都匹配才能继续使用列表。
+/// 结果对象由向导持有，同一帧在两个下拉中按引用读取。
+/// @details 同一工程和失效序号最多启动一次扫描，封面和背景共用这份列表。
+/// 新目录事件或同路径重开后，仍运行的旧任务不会阻塞当帧绘制；下一轮收到
+/// 结果时重新匹配请求身份，旧数据被丢弃。单独跟踪未完成 future 能限制积压，
+/// 即使文件服务器无响应也不会在每帧递交新线程任务。
+/// @note 只有展开下拉框时会调用。其余画面不轮询文件或提交后台任务。
+/// 返回值由向导独占，只在下一次到达此轮询点之前借用。
+/// @warning 每个展开帧调用；拒绝阻塞式等待、文件探测与会话锁。
+const NewBeatmapWizard::VisualResources* NewBeatmapWizard::readVisualResources(
+    const Logic::ProjectUiState& project)
+{
+    // 事件线程只递增失效序号；文件任务自身只接收本次提交的副本。
+    const auto revision =
+        m_visualResourceRevision->load(std::memory_order_relaxed);
+    const auto isCurrent = [&](const VisualResources& result) {
+        return result.projectGeneration == project.m_generation &&
+               result.revision == revision;
+    };
+    // packaged_task future 的析构不会 join。只有明确就绪才允许取结果。
+    // 工作线程可能在视图关闭期间完成，按请求身份核验后才能替换当前缓存。
+    // 读取已完成的 future 会清空任务槽，使更新后的工程可以开始下一轮扫描。
+    if ( m_visualResourcesJob.valid() &&
+         m_visualResourcesJob.wait_for(std::chrono::seconds(0)) ==
+             std::future_status::ready ) {
+        auto result = m_visualResourcesJob.get();
+        if ( isCurrent(result) ) m_visualResources = std::move(result);
+    }
+    // 未变更的静置帧不分配 vector，也不重复复制已解析的相对路径。
+    if ( m_visualResources && isCurrent(*m_visualResources) )
+        return &*m_visualResources;
+    // 目录变化后旧列表立即失效；等待期间禁止选择已被删除的项目路径。
+    m_visualResources.reset();
+    // 新任务只在没有在途工作时提交，以免项目连续切换占满文件线程池。
+    // 文件池按值接收根和序号，不复用 UI 中的 project 引用。
+    if ( !m_visualResourcesJob.valid() ) {
+        // 移动项只捕获路径和数值，关闭向导后工作线程也能安全收尾。
+        auto* const pool =
+            Runtime::AppThreadPool::instance().getFileThreadPool();
+        if ( pool )
+            m_visualResourcesJob = pool->enqueue(scanVisualResources,
+                                                 project.m_projectRoot,
+                                                 project.m_generation,
+                                                 revision);
+        // 停机或启动失败时不在后续静置帧反复尝试提交。
+        if ( !m_visualResourcesJob.valid() ) {
+            m_visualResources.emplace(
+                VisualResources{ project.m_generation, revision, {} });
+            return &*m_visualResources;
+        }
+    }
+    return nullptr;
+}
+
 /// @brief 创建新谱面向导并订阅文件拖放事件。
 ///
 /// 初始状态通过 reset 建立；只在向导打开且未进入手动 BPM 工具时缓存拖放事件，
@@ -291,6 +344,20 @@ NewBeatmapWizard::NewBeatmapWizard() : IUIView("NewBeatmapWizard")
 {
     // 统一初始化输入缓冲、资源选择和模板状态。
     reset();
+    // EventBus 可以在取消订阅后执行已复制的回调，故此处只捕获独立序号。
+    // 目录刷新涵盖外部写入，项目保存涵盖程序内导入和改名。
+    // 多次通知只推进序号，文件轮询合并为下一次展开时的一份工作。
+    const auto invalidateDirectory =
+        [revision = m_visualResourceRevision](const auto&) {
+            revision->fetch_add(1, std::memory_order_relaxed);
+        };
+    m_visualDirectorySubscription =
+        Event::EventBus::instance()
+            .subscribe<Event::ProjectDirectoryRefreshedEvent>(
+                invalidateDirectory);
+    m_visualSaveSubscription =
+        Event::EventBus::instance().subscribe<Event::ProjectSavedEvent>(
+            invalidateDirectory);
     // 保存订阅 ID，析构时对称注销捕获 this 的回调。
     m_dropSubscription =
         Event::EventBus::instance().subscribe<Event::GLFWDropEvent>(
@@ -304,110 +371,60 @@ NewBeatmapWizard::NewBeatmapWizard() : IUIView("NewBeatmapWizard")
 /// @brief 解除文件拖放订阅并结束向导生命周期。
 NewBeatmapWizard::~NewBeatmapWizard()
 {
+    // 文件线程仅拥有路径，关闭时不等待正在进行的扫描。
+    Event::EventBus::instance()
+        .unsubscribe<Event::ProjectDirectoryRefreshedEvent>(
+            m_visualDirectorySubscription);
+    Event::EventBus::instance().unsubscribe<Event::ProjectSavedEvent>(
+        m_visualSaveSubscription);
     // EventBus 不拥有向导，必须移除捕获成员地址的回调。
     Event::EventBus::instance().unsubscribe<Event::GLFWDropEvent>(
         m_dropSubscription);
 }
 
-/// @brief 收集当前所有已打开且可用的谱面作为复制模板。
-/// @return 按 EditorEngine 会话顺序排列的模板候选快照。
-///
-/// 会话互斥锁覆盖条目复制和 Beatmap shared_ptr 获取，返回后候选以共享所有权保证
-/// 模板读取生命周期。Logo 占位会话和未装载谱面的会话不参与选择。
-/// 候选同时保存列表显示名、内部名、源 map_path、会话索引和 cameraId；实际重新
-/// 定位以 cameraId 为准，会话索引仅作为当时顺序信息，不作为持久化身份。
-/// 返回 vector 离开锁后可安全绘制，但源会话内容可能继续变化，因此提交前还会
-/// 再次取得锁并同步模板 Beatmap。
-std::vector<NewBeatmapWizard::OpenTemplateOption>
-NewBeatmapWizard::collectOpenTemplateOptions() const
+/// @brief 根据稳定相机及载图实例选择模板，并在锁内复制预填字段。
+/// @param option 来自发布列表的候选，真实会话可能已关闭或更换谱面。
+/// @return 同一载图实例仍存在时为 true。
+/// @details 列表可以比实时会话稍旧。显式点击时重找相机，并核对该相机是否
+/// 仍绑定列表里的谱面实例。比较所有权控制块可区分同路径打开的两个版本。
+/// 复制后立即释放会话锁，资源字段填入草稿及发送演练事件在锁外完成。
+/// 已选择项仍以弱引用标识源，关闭源窗口时不会延长整个谱面的生命周期。
+/// @warning 只在明确点击时使用会话锁。普通绘制不查询实时 SessionContext。
+bool NewBeatmapWizard::selectTemplate(
+    const Logic::SessionTemplateOption& option)
 {
-    // 候选在锁内建立，离开函数后不持有 SessionEntry 引用。
-    std::vector<OpenTemplateOption> options;
-
-    // 与会话增删和同步共用递归互斥锁。
-    auto& engine = Logic::EditorEngine::instance();
-    std::lock_guard<std::recursive_mutex> lock(engine.getSessionMutex());
-    auto                                  entries = engine.getSessionEntries();
-    // 按会话数预留上界容量，减少 push_back 重分配。
-    options.reserve(entries.size());
-
-    for ( int32_t index = 0; index < static_cast<int32_t>(entries.size());
-          ++index ) {
-        // Logo 画布没有实际谱面，空会话也无法提供模板。
-        const auto& entry = entries[static_cast<std::size_t>(index)];
-        if ( entry.isLogoPlaceholder || !entry.session ) continue;
-
-        // currentBeatmap 是模板复制所需的完整源对象。
-        const auto& ctx = entry.session->getContext();
-        if ( !ctx.currentBeatmap ) continue;
-
-        // UI 显示名与内部谱面名称分离，保留用户可辨识标签。
-        const auto&        meta = ctx.currentBeatmap->m_baseMapMetadata;
-        OpenTemplateOption option;
-        // cameraId 是会话存在期间重新定位并同步模板的稳定键。
-        option.sessionIndex = index;
-        option.cameraId     = entry.cameraId;
-        option.displayName =
-            entry.displayName.empty() ? meta.name : entry.displayName;
-        option.internalName = meta.name;
-        option.mapPath      = meta.map_path;
-        // shared_ptr 延长源谱面生命周期直到提交或重新同步。
-        option.beatmap = ctx.currentBeatmap;
-        options.push_back(std::move(option));
+    MMM::BaseMapMeta meta;
+    {
+        auto&           engine = Logic::EditorEngine::instance();
+        std::lock_guard lock(engine.getSessionMutex());
+        const auto      entries = engine.getSessionEntries();
+        const auto      source  = std::ranges::find(
+            entries, option.cameraId, &Logic::SessionEntry::cameraId);
+        if ( source == entries.end() || source->isLogoPlaceholder ||
+             !source->session )
+            return false;
+        const auto& chart = source->session->getContext().currentBeatmap;
+        // 相同相机可重新加载其他谱面，所有权身份比地址或文件名更可靠。
+        if ( !chart || option.beatmap.owner_before(chart) ||
+             chart.owner_before(option.beatmap) )
+            return false;
+        // 普通选择只读取资源和显示字段，不同步 ECS、不复制谱面对象。
+        meta              = chart->m_baseMapMetadata;
+        m_templateBeatmap = chart;
     }
-
-    return options;
-}
-
-/// @brief 在本帧模板候选中定位当前选中的 cameraId。
-/// @param templateOptions 当前打开会话生成的候选列表。
-/// @return 匹配项的观察指针，未选择或会话已关闭时返回 nullptr。
-///
-/// 返回指针只在 templateOptions 未修改期间有效，不存入成员。
-const NewBeatmapWizard::OpenTemplateOption*
-NewBeatmapWizard::findSelectedTemplate(
-    const std::vector<OpenTemplateOption>& templateOptions) const
-{
-    // 空键明确表示尚未选择模板。
-    if ( m_templateCameraId.empty() ) return nullptr;
-
-    // cameraId 比显示名和内部名更能区分同时打开的多个会话。
-    auto it = std::find_if(templateOptions.begin(),
-                           templateOptions.end(),
-                           [&](const OpenTemplateOption& option) {
-                               return option.cameraId == m_templateCameraId;
-                           });
-    // 会话关闭后候选消失，调用方会清理陈旧选择。
-    if ( it == templateOptions.end() ) return nullptr;
-    return &(*it);
-}
-
-/// @brief 选择一个打开谱面作为创建模板并继承资源默认值。
-/// @param option 当前候选列表中的模板项。
-void NewBeatmapWizard::selectTemplate(const OpenTemplateOption& option)
-{
-    // 切换创建模式并复制用于后续重新定位和显示的字段。
     m_createMode          = CreateMode::OpenTemplate;
     m_templateCameraId    = option.cameraId;
     m_templateDisplayName = option.displayName;
-    // Beatmap 使用共享所有权，防止弹窗操作期间源会话提前释放对象。
-    m_templateBeatmap = option.beatmap;
-
-    if ( m_templateBeatmap ) {
-        // 模板身份确认后再发布阶段，空候选不能推进模板创建演练。
-        publishInteraction(
-            Event::BeatmapCreateInteractionStage::TemplateSelected);
-        // 只补充资源与尚未填写的文本字段，不覆盖用户已输入内容。
-        applyTemplateResourceDefaults(*m_templateBeatmap);
-        if ( !m_selectedAudioPath.empty() )
-            // 模板自动带入有效音频时同样满足向导准备阶段。
-            publishInteraction(
-                Event::BeatmapCreateInteractionStage::AudioSelected);
-    }
+    publishInteraction(Event::BeatmapCreateInteractionStage::TemplateSelected);
+    // 预填仅读取复制出来的值，不把 mutable BeatMap 借给渲染线程。
+    applyTemplateResourceDefaults(meta);
+    if ( !m_selectedAudioPath.empty() )
+        publishInteraction(Event::BeatmapCreateInteractionStage::AudioSelected);
+    return true;
 }
 
 /// @brief 从模板谱面提取适合作为新谱面初始值的资源和偏好。
-/// @param beatmap 当前选中的源谱面。
+/// @param meta 在选择时复制的源谱面元数据。
 ///
 /// 音频、背景、封面和数值偏好可直接继承；标题与艺术家只填入仍为空的输入框，
 /// 避免用户先填写的内容在切换模板时丢失。音频变化会使旧 BPM 测量结果失效。
@@ -416,11 +433,8 @@ void NewBeatmapWizard::selectTemplate(const OpenTemplateOption& option)
 /// author、version 与内部 name
 /// 不从模板预填，继续沿用当前向导用户输入和软件默认值。
 void NewBeatmapWizard::applyTemplateResourceDefaults(
-    const MMM::BeatMap& beatmap)
+    const MMM::BaseMapMeta& meta)
 {
-    // 元数据是本函数唯一读取的模板部分。
-    const auto& meta = beatmap.m_baseMapMetadata;
-
     // song_file_hint 优先表达用户选择，旧项目回退到 main_audio_path。
     const auto& audioHint = meta.song_file_hint.empty() ? meta.main_audio_path
                                                         : meta.song_file_hint;
@@ -508,30 +522,32 @@ std::string NewBeatmapWizard::findAudioTrackIdForPath(
     return {};
 }
 
-/// @brief 提交前从当前源会话同步并刷新模板 Beatmap 指针。
+/// @brief 提交前从当前源会话同步并提升模板引用。
+/// @return 仍与选择时身份一致的谱面对象，失效时返回空。
+/// @details 提交方只在创建操作上提升源谱面的弱引用，确认同一个实例后
+/// 刷新逻辑对象的领域数据，与命令发布之间保持会话锁。
+/// 常态绘制只借用标题和路径，详情改变不会延长源谱面生命周期。
+/// @pre 由创建提交持有递归会话锁，直到同步创建结束，由此封闭两次操作之间的
+/// 更新窗口。定位失败不会退回可写但已经离开会话的对象。
+/// @warning 低频确认可能同步已修改领域，禁止用于普通模板绘制。
 ///
 /// 向导打开期间模板会话仍可继续编辑；通过 cameraId 在会话锁内重新定位并调用
 /// SessionUtils::syncBeatmap，确保创建命令复制的是最新逻辑状态。
-void NewBeatmapWizard::syncSelectedTemplateBeatmap()
+std::shared_ptr<MMM::BeatMap> NewBeatmapWizard::syncSelectedTemplateBeatmap()
 {
-    // 没有选择键时无需取得会话锁。
-    if ( m_templateCameraId.empty() ) return;
-
-    // 锁覆盖会话枚举、上下文同步和 shared_ptr 更新。
-    auto& engine = Logic::EditorEngine::instance();
-    std::lock_guard<std::recursive_mutex> lock(engine.getSessionMutex());
-    auto                                  entries = engine.getSessionEntries();
-    for ( const auto& entry : entries ) {
-        // cameraId 精确匹配当前选择，并要求会话仍存在。
-        if ( entry.cameraId != m_templateCameraId || !entry.session ) continue;
-
-        // 把编辑器运行时状态写回 Beatmap 数据模型后再共享给命令。
-        auto& ctx = entry.session->getContextMutable();
-        Logic::SessionUtils::syncBeatmap(ctx);
-        m_templateBeatmap = ctx.currentBeatmap;
-        // 找到唯一匹配项即可结束扫描。
-        return;
-    }
+    const auto entries = Logic::EditorEngine::instance().getSessionEntries();
+    const auto source  = std::ranges::find(
+        entries, m_templateCameraId, &Logic::SessionEntry::cameraId);
+    if ( source == entries.end() || source->isLogoPlaceholder ||
+         !source->session )
+        return {};
+    auto& context = source->session->getContextMutable();
+    // 关闭或同画布重载后禁止拿仍存活的旧谱面对象提交。
+    const auto selected = m_templateBeatmap.lock();
+    if ( !selected || context.currentBeatmap != selected ) return {};
+    // 写回发生在模板的原会话内；目标创建使用同步完毕的同一个对象。
+    Logic::SessionUtils::syncBeatmap(context);
+    return selected;
 }
 
 /// @brief 把当前输入控件和资源选择同步到待提交的基础元数据。
@@ -789,14 +805,11 @@ bool NewBeatmapWizard::hasInternalNameConflict() const
            project->m_beatmapNames.end();
 }
 
-/// @brief 汇总向导状态并向编辑器命令队列提交创建谱面请求。
-///
-/// 空白模式只携带基础元数据与测量 Timing；模板模式在提交前同步源会话，并附带
-/// 模板共享对象和复制选项。命令入队后关闭向导，实际项目修改由逻辑线程执行。
-/// 提交前置条件由 update 控件保证；重复名称警告确认后也复用此入口，从而不会出现
-/// 两套元数据组装逻辑。向导不等待命令完成，项目反馈由其他 UI 服务处理。
-/// CmdCreateBeatmap 按值接管元数据与 Timing，模板 Beatmap 通过共享所有权保证
-/// 命令消费前仍然有效。
+/// @brief 汇总向导状态并经编辑器命令入口创建谱面。
+/// @details 空白模式只携带基础元数据与测量 Timing；模板模式在同一会话锁内
+/// 同步源会话并同步派发创建，防止命令观察到重载或后续编辑写入的模板数据。
+/// 普通确认与重名确认复用同一入口，模板失效时保留草稿以便重新选择。
+/// @warning 仅显式确认时调用。创建命令可能保存文件，禁止从绘制读路径触发。
 void NewBeatmapWizard::submitCreateRequest()
 {
     // 最后一次从控件缓冲同步，保证失焦前输入也进入命令。
@@ -809,28 +822,32 @@ void NewBeatmapWizard::submitCreateRequest()
     cmd.projectGeneration = m_projectGeneration;
     cmd.baseMeta          = m_meta;
     cmd.initialTimings    = m_measuredTimings;
-    if ( m_createMode == CreateMode::OpenTemplate && m_templateBeatmap ) {
-        // 源谱面可能在向导打开期间发生编辑，提交前刷新一次。
-        syncSelectedTemplateBeatmap();
-        cmd.templateBeatmap = m_templateBeatmap;
+    // 创建指令由当前引擎入口同步消费，模板比空白模式多一次源身份校验。
+    // 这里只在明确提交时才取得会话锁，锁的作用域不延伸到弹窗清理。
+    auto& engine = Logic::EditorEngine::instance();
+    if ( m_createMode == CreateMode::OpenTemplate ) {
+        // 源同步及同步创建共用作用域，之间不能让会话替换或修改源。
+        const std::lock_guard lock(engine.getSessionMutex());
+        cmd.templateBeatmap = syncSelectedTemplateBeatmap();
+        if ( !cmd.templateBeatmap ) return;
         cmd.templateOptions = m_templateOptions;
+        engine.pushCommand(std::move(cmd));
+    } else {
+        engine.pushCommand(std::move(cmd));
     }
-
-    // pushCommand 转移命令所有权，不在 UI 帧直接修改项目集合。
-    Logic::EditorEngine::instance().pushCommand(std::move(cmd));
     // 清理事件绑定和临时交互状态，保留下一次 open 可重新 reset。
     close();
 }
 
 /// @brief 绘制当前打开谱面列表并处理模板选择。
-/// @param templateOptions 本帧收集的可用模板候选。
+/// @param templateOptions 本帧借用的不可变模板候选。
 /// @param sourceManager 提供模板选择成功后的演练状态更新。
 ///
 /// 弹窗使用稳定内部名称，列表项以 cameraId 构造唯一 ID。选择后先继承默认资源，
 /// 再关闭选择器并请求打开复制选项弹窗。
 void NewBeatmapWizard::renderTemplatePickerPopup(
-    const std::vector<OpenTemplateOption>& templateOptions,
-    UIManager*                             sourceManager)
+    const std::vector<Logic::SessionTemplateOption>& templateOptions,
+    UIManager*                                       sourceManager)
 {
     if ( ImGui::BeginPopupModal(
              "NewBeatmapTemplatePicker",
@@ -857,9 +874,9 @@ void NewBeatmapWizard::renderTemplatePickerPopup(
                                                 option.internalName,
                                                 option.cameraId);
                 bool        selected = option.cameraId == m_templateCameraId;
-                if ( ::MMM::UI::FeedbackSelectable(label.c_str(), selected) ) {
-                    // 选择行为同时更新模式、源对象和资源默认值。
-                    selectTemplate(option);
+                if ( ::MMM::UI::FeedbackSelectable(label.c_str(), selected) &&
+                     selectTemplate(option) ) {
+                    // 选择成功后才推进到复制范围。
                     m_shouldOpenTemplateOptions = true;
                     ImGui::CloseCurrentPopup();
                     if ( sourceManager )
@@ -995,11 +1012,12 @@ void NewBeatmapWizard::renderDuplicateNameWarningPopup(UIManager* sourceManager)
 /// @brief 绘制空白创建与打开谱面模板两种来源选择及关联弹窗。
 /// @param templateOptions 本帧有效的打开谱面候选。
 ///
+/// @warning 每帧调用且不应获取会话锁；只有点击候选才进入显式选择事务。
 /// 每帧先校验持久化选择仍在候选中；没有候选时强制回退空白模式。弹窗打开请求
 /// 使用一次性布尔位，确保 OpenPopup 与对应 BeginPopup 在同一 UI 调用链中完成。
 void NewBeatmapWizard::renderTemplateSourceControls(
-    const std::vector<OpenTemplateOption>& templateOptions,
-    UIManager*                             sourceManager)
+    const std::vector<Logic::SessionTemplateOption>& templateOptions,
+    UIManager*                                       sourceManager)
 {
     if ( templateOptions.empty() && m_createMode == CreateMode::OpenTemplate ) {
         // 最后一个源会话关闭后，模板模式已不可提交。
@@ -1010,15 +1028,19 @@ void NewBeatmapWizard::renderTemplateSourceControls(
         m_templateBeatmap.reset();
     }
 
-    if ( auto* selected = findSelectedTemplate(templateOptions) ) {
-        // 每帧刷新 shared_ptr 与显示名，跟随源会话对象更新。
-        m_templateBeatmap     = selected->beatmap;
-        m_templateDisplayName = selected->displayName;
-    } else if ( !m_templateCameraId.empty() ) {
-        // 指定 cameraId 已不在打开会话中，废弃陈旧选择。
-        m_templateCameraId.clear();
-        m_templateDisplayName.clear();
-        m_templateBeatmap.reset();
+    if ( !m_templateCameraId.empty() ) {
+        const auto selected =
+            std::ranges::find(templateOptions,
+                              m_templateCameraId,
+                              &Logic::SessionTemplateOption::cameraId);
+        // 只比较所有权身份。常态不提升弱引用，也不复制来源谱面引用。
+        if ( selected == templateOptions.end() ||
+             selected->beatmap.owner_before(m_templateBeatmap) ||
+             m_templateBeatmap.owner_before(selected->beatmap) ) {
+            m_templateCameraId.clear();
+            m_templateDisplayName.clear();
+            m_templateBeatmap.reset();
+        }
     }
 
     // 来源选择与基础元数据分区显示。
@@ -1066,7 +1088,7 @@ void NewBeatmapWizard::renderTemplateSourceControls(
     if ( m_createMode == CreateMode::OpenTemplate ) {
         // 当前选择以用户显示名呈现，未选择时显示明确占位。
         std::string selectedText =
-            m_templateBeatmap
+            !m_templateCameraId.empty()
                 ? TR_FMT("ui.wizard.new_beatmap.template.selected",
                          m_templateDisplayName)
                 : std::string(
@@ -1086,7 +1108,7 @@ void NewBeatmapWizard::renderTemplateSourceControls(
             sourceManager->walkthroughSpotlight().reportLastItem(
                 "new-beatmap.template.pick");
         ImGui::SameLine();
-        if ( !m_templateBeatmap ) {
+        if ( m_templateCameraId.empty() ) {
             // 未选源对象时复制范围没有作用。
             ImGui::BeginDisabled();
         }
@@ -1102,7 +1124,7 @@ void NewBeatmapWizard::renderTemplateSourceControls(
              !ImGui::IsPopupOpen("NewBeatmapTemplateOptions") )
             sourceManager->walkthroughSpotlight().reportLastItem(
                 "new-beatmap.template.options");
-        if ( !m_templateBeatmap ) {
+        if ( m_templateCameraId.empty() ) {
             ImGui::EndDisabled();
         }
     }
@@ -1570,9 +1592,12 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         return;
     }
 
-    // 模板候选以本帧打开会话为准，关闭源会立即反映。
-    auto templateOptions = collectOpenTemplateOptions();
-    renderTemplateSourceControls(templateOptions, sourceManager);
+    // 候选跟随已发布会话列表；绘制只借用同一份不可变结果。
+    // 单个读句柄保证关谱发布新列表时，本帧打开的模板弹层仍能安全完成。
+    // 列表中是弱身份，静置帧不会复制各源谱的拥有权或遍历可变会话。
+    const auto sessions =
+        Logic::EditorEngine::instance().getSessionUiSnapshot();
+    renderTemplateSourceControls(sessions->templateOptions, sourceManager);
 
     ImGui::SeparatorText(TR("ui.settings.beatmap.resource").data());
 
@@ -1804,17 +1829,22 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     ImGui::SetNextItemWidth(comboWidth);
     if ( ::MMM::UI::FeedbackBeginCombo("##NewBeatmapCoverImageSelect",
                                        coverImgPreview.c_str()) ) {
-        // 仅在展开下拉时扫描项目图片，避免普通帧执行文件系统遍历。
-        std::vector<std::string> resources = collectProjectResources(
-            project->m_projectRoot, { ".png", ".jpg", ".jpeg", ".bmp" });
-
-        for ( const auto& resPath : resources ) {
-            // 相对路径既作为可见标签也作为选择值。
-            bool isSelected = (m_selectedCoverImgPath == resPath);
-            if ( ::MMM::UI::FeedbackSelectable(resPath.c_str(), isSelected) ) {
-                m_selectedCoverImgPath = resPath;
+        // 第一次展开时启动或复用后台任务。就绪后绘制使用同一列表，
+        // 收起不会等待或取消扫描，随后展开另一个列表可直接接续结果。
+        if ( const auto* resources = readVisualResources(*project) ) {
+            for ( const auto& resource : resources->entries ) {
+                if ( resource.video ) continue;
+                // 图片用于缩略图，视频只会出现在独立的背景列表。
+                const auto& path     = resource.path;
+                const bool  selected = (m_selectedCoverImgPath == path);
+                if ( ::MMM::UI::FeedbackSelectable(path.c_str(), selected) )
+                    m_selectedCoverImgPath = path;
+                if ( selected ) ImGui::SetItemDefaultFocus();
             }
-            if ( isSelected ) ImGui::SetItemDefaultFocus();
+        } else {
+            ImGui::TextDisabled(
+                "%s",
+                TR("ui.status.project_loading.scanning_directory").data());
         }
         // “补充信息”阶段包含封面选择，展开后必须照亮完整资源列表。
         // 文件数变化会改变弹窗高度，不能沿用打开瞬间的旧坐标。
@@ -1841,44 +1871,24 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     ImGui::SetNextItemWidth(comboWidth);
     if ( ::MMM::UI::FeedbackBeginCombo("##NewBeatmapBackgroundSelect",
                                        coverPreview.c_str()) ) {
-        // 仅在下拉展开时扫描项目中的图片和视频文件。
-        std::vector<std::string> resources =
-            collectProjectResources(project->m_projectRoot,
-                                    { ".png",
-                                      ".jpg",
-                                      ".jpeg",
-                                      ".bmp",
-                                      ".mp4",
-                                      ".avi",
-                                      ".mkv",
-                                      ".webm",
-                                      ".mov",
-                                      ".flv",
-                                      ".m4v" });
-
-        for ( const auto& resPath : resources ) {
-            // 选中后立即同步背景路径与媒体类型。
-            bool isSelected = (m_selectedCoverPath == resPath);
-            if ( ::MMM::UI::FeedbackSelectable(resPath.c_str(), isSelected) ) {
-                m_selectedCoverPath = resPath;
-                m_meta.cover_type =
-                    isVideoBackgroundPath(Config::utf8ToPath(resPath))
-                        ? MMM::CoverType::VIDEO
-                        : MMM::CoverType::IMAGE;
-
-                // 图片背景且封面为空时自动沿用同一资源作为封面。
-                auto ext =
-                    Config::pathToUtf8(Config::utf8ToPath(resPath).extension());
-                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                if ( ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
-                     ext == ".bmp" ) {
-                    if ( m_selectedCoverImgPath.empty() ) {
-                        // 已有显式封面选择永远不被背景切换覆盖。
-                        m_selectedCoverImgPath = resPath;
-                    }
+        if ( const auto* resources = readVisualResources(*project) ) {
+            for ( const auto& resource : resources->entries ) {
+                const auto& path     = resource.path;
+                const bool  selected = (m_selectedCoverPath == path);
+                if ( ::MMM::UI::FeedbackSelectable(path.c_str(), selected) ) {
+                    m_selectedCoverPath = path;
+                    m_meta.cover_type =
+                        resource.video ? CoverType::VIDEO : CoverType::IMAGE;
+                    // 保留用户明确填写的封面；只有未设置时才从图片背景继承。
+                    if ( !resource.video && m_selectedCoverImgPath.empty() )
+                        m_selectedCoverImgPath = path;
                 }
+                if ( selected ) ImGui::SetItemDefaultFocus();
             }
-            if ( isSelected ) ImGui::SetItemDefaultFocus();
+        } else {
+            ImGui::TextDisabled(
+                "%s",
+                TR("ui.status.project_loading.scanning_directory").data());
         }
         // 背景列表与封面列表遵守同一帧范围契约，收起后自动恢复。
         if ( sourceManager )
@@ -1910,7 +1920,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
 
     // 模板模式额外要求已选择仍存活的源对象。
     const bool needsTemplateSelection =
-        m_createMode == CreateMode::OpenTemplate && !m_templateBeatmap;
+        m_createMode == CreateMode::OpenTemplate && m_templateCameraId.empty();
     // 音频是两种创建模式共同的最低提交条件。
     const bool canCreate =
         !m_selectedAudioPath.empty() && !needsTemplateSelection;
@@ -2085,6 +2095,9 @@ void NewBeatmapWizard::close()
 /// 选项使用值初始化恢复类型定义的默认策略，而非沿用上一轮用户选择。
 void NewBeatmapWizard::reset()
 {
+    // 忽略上一次草稿的文件结果。保留未完成 future，避免反复开关积压扫描。
+    m_visualResourceRevision->fetch_add(1, std::memory_order_relaxed);
+    m_visualResources.reset();
     // 再次打开是新草稿，旧系统选择结果不得绑定到这一轮。
     m_resourcePickerLifetime.reset();
     // 清理瞬时输入和上一轮可见错误。

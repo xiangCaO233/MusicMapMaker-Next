@@ -565,7 +565,9 @@
 
 ### P2 · R11 · 新谱面向导每帧带锁复制模板，下拉中同步扫目录
 
-- [ ] 模板未展开也逐帧取会话锁并复制候选；封面或背景展开期间每帧在 UI 线程递归枚举项目。按会话代次复用模板，展开或失效时后台枚举；验证持锁时仍能绘制、下拉静置不再重复遍历。
+- [x] 模板未展开也逐帧取会话锁并复制候选；封面或背景展开期间每帧在 UI 线程递归枚举项目。按会话代次复用模板，展开或失效时后台枚举；验证持锁时仍能绘制、下拉静置不再重复遍历。
+
+  已验证。Linux Clang 22 RelWithDebInfo 全量构建和 5 项回归通过。覆盖会话锁占用时向导仍可绘制、源实例关闭或替换后拒绝旧模板、两个资源下拉复用扫描结果，以及同目录重开后拒绝旧列表。
 
 [Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:328](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L328) [Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:1565](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L1565) [Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:134](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L134) [Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:1807](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L1807) [Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp:1845](../Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp#L1845)
 
