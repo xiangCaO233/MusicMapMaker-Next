@@ -3856,6 +3856,10 @@ void BeatmapSession::handleCommand(const CmdLoadBeatmap& cmd)
     m_ctx->composeLessonInputMode = ComposeLessonInputMode::Off;
     m_ctx->composeLessonBegin     = 0.0;
     m_ctx->composeLessonEnd       = 0.0;
+    // 载入在同一个会话中替换谱面。先撤回时间点表格，UI 不会把两份
+    // 仍属于旧谱面的快照相互匹配；已经借用旧表的绘制仍可正常结束。
+    m_timingTableRevision.reset();
+    m_timingTableSnapshot.store({});
     SessionUtils::loadBeatmap(*m_ctx, cmd.beatmap);
     if ( m_ctx->currentBeatmap ) {
         // 诊断在完整载入后发布，能检查实际格式解析和资源引用结果。

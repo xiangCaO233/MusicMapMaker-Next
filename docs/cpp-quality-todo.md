@@ -165,6 +165,24 @@
     | `Modules/Game/Logic/src/logic/audio/CanvasAudioPreparation.cpp` | 49 | 110 | 30.82% |
     | `Modules/Game/Logic/tests/PlaybackRestartTest.cpp` | 255 | 593 | 30.07% |
 
+  - 已完成时间点表格读模型批次。打开表格时，通过同代活动会话快照请求完整 Timing 行。逻辑线程仅在修订变化或谱面重新载入时投影并排序，表格帧借用同一代行与实例令牌，避免读取会话长锁或每帧复制全表。复制、编辑等低频入口仍保留原有会话访问。
+  - Linux RelWithDebInfo 全量构建和 13 项 CTest 通过。回归覆盖持有会话锁时读取、快照复用、Timing 变更、同会话重载、换图和关闭后的保活，以及真实鼠标和触屏表格在异步发布后的交互。
+  - 时间点表格批次逐文件注释率
+
+    | 文件 | 注释行 | 代码行 | 比例 |
+    | --- | ---: | ---: | ---: |
+    | `Modules/Game/Canvas/src/TimelineCanvas_Popups.cpp` | 1134 | 2646 | 30.00% |
+    | `Modules/Game/Canvas/tests/TimingTableMouseSelectionTest.cpp` | 229 | 508 | 31.07% |
+    | `Modules/Game/Logic/CMakeLists.txt` | 147 | 340 | 30.18% |
+    | `Modules/Game/Logic/include/logic/BeatmapSession.h` | 239 | 173 | 58.01% |
+    | `Modules/Game/Logic/include/logic/EditorEngine.h` | 374 | 252 | 59.74% |
+    | `Modules/Game/Logic/include/logic/TimingTableSnapshot.h` | 7 | 15 | 31.82% |
+    | `Modules/Game/Logic/src/logic/EditorEngine.cpp` | 1713 | 3971 | 30.14% |
+    | `Modules/Game/Logic/src/logic/session/BeatmapSession.cpp` | 419 | 976 | 30.04% |
+    | `Modules/Game/Logic/src/logic/session/BeatmapSession_Commands.cpp` | 1379 | 3214 | 30.02% |
+    | `Modules/Game/Logic/src/logic/session/BeatmapSession_TimingTable.cpp` | 38 | 84 | 31.15% |
+    | `Modules/Game/Logic/tests/BrushPaletteSessionStateTest.cpp` | 369 | 861 | 30.00% |
+
 - [ ] **PERF-06 P3 离屏几何容量扩张在命令录制阶段等待全 GPU 空闲**
 
   - `Modules/Game/Graphic/src/imguivk/VKOffScreenRenderer.cpp:134-147` 当前帧顶点/索引超过历史容量即调用 `device.waitIdle()`；`:154-160` 回收全部帧槽后重新分配，按 1.5 倍增长。

@@ -9,6 +9,7 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
+#include "logic/TimingTableSnapshot.h"
 #include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/SampleComponent.h"
 #include "logic/session/ActionController.h"
@@ -26,6 +27,7 @@
 #include "mmm/metadata/NoteMetadata.h"
 #include "mmm/note/Note.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -1148,6 +1150,121 @@ bool testActivePlaybackStatePublication()
            ignoredOld && acceptedNew && noClosedTarget;
 }
 
+/// @brief 验证活动时间点表按需发布、跨关闭保活及无变化时复用。
+/// @return 完整行、排序、更新边界及活动目标归属均正确时返回 true。
+/// @note 逻辑线程未启动。夹具用正常队列载入内存谱面，再手动推进 update。
+/// @note 第一张谱面的旧快照跨编辑与会话关闭留存，确保没有原地修改共享行。
+/// @note 测试不创建时间线相机，表格不能只靠相机可见区域组织输入。
+/// @note 事件时间采用精确可表示的小整数秒，断言无需给排序容差。
+/// @note 读接口应将没有会话与已有会话但尚未生成第一份表格区分开。
+/// @note 自动备份和项目磁盘写入在此用例均未配置，清理由正式关闭入口完成。
+/// @note 夹具的编辑器只消费本线程预先排队的命令，不从异步查询访问模型。
+bool testTimingTablePublication()
+{
+    using namespace MMM;
+    auto& engine = Logic::EditorEngine::instance();
+    auto  map    = std::make_shared<BeatMap>();
+    // 固定轨道数只用于建立真实谱面，会话不需要音轨、目录或屏幕控制器。
+    map->m_baseMapMetadata.track_count = 4;
+    const auto first   = engine.createSession(map, "Timing source", false);
+    auto       session = engine.getActiveSession();
+    const auto config  = engine.getEditorConfig();
+
+    // 先准备真实事件。两项倒序提交，用不同效果和时间验证并非视口裁剪列表。
+    session->pushCommand(Logic::CmdCreateTimelineEvent{
+        .time = 6.0, .type = TimingEffect::SCROLL, .value = 1.5 });
+    session->pushCommand(Logic::CmdCreateTimelineEvent{
+        .time = 2.0, .type = TimingEffect::HS, .value = 1.25 });
+    // 主视口进入空闲前的首个查询只提出请求。它既不阻塞，也不展示默认空表。
+    const auto pending = Logic::readActiveTimingTable();
+    session->update(0, config, true);
+    // 首次更新消费加载与两个创建事件，读模型必须在事件提交后形成同一代。
+    const auto initial = Logic::readActiveTimingTable();
+
+    // 阻塞旧的直接读取路径会使异步调用在持锁期间超时。
+    // 解锁后回收 future，故障场景也不会让测试进程挂死。
+    std::unique_lock sessionLock(engine.getSessionMutex());
+    auto             reader = std::async(std::launch::async,
+                             [] { return Logic::readActiveTimingTable(); });
+    const bool       independent =
+        reader.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+    sessionLock.unlock();
+    const auto concurrent = reader.get();
+    session->update(0, config, true);
+    // 普通轮询不能发布内容相同的新对象，使用具体句柄身份验证分配复用。
+    const auto unchanged = Logic::readActiveTimingTable();
+
+    // 下一次 Timing 编辑才替换共享数据；旧行必须保有已呈现给 UI 的原始值。
+    session->pushCommand(Logic::CmdCreateTimelineEvent{
+        .time = 4.0, .type = TimingEffect::STOP, .value = 0.5 });
+    session->update(0, config, true);
+    const auto edited = Logic::readActiveTimingTable();
+    // 对实际时间查找，允许谱面载入时补默认 BPM 行，不把默认行当作测试事件。
+    const auto contains = [](const Logic::TimingTableSnapshot& table,
+                             double                            time) {
+        return std::ranges::any_of(
+            table.rows, [time](const auto& row) { return row.time == time; });
+    };
+    // 以期待的两个事件确认列表完整，再单独检查所有行都按真实时间排列。
+    const bool sorted = initial && *initial && contains(**initial, 2) &&
+                        contains(**initial, 6) &&
+                        std::ranges::is_sorted(
+                            (*initial)->rows,
+                            {},
+                            &Common::Render::TimelineInteractiveElement::time);
+    // 修订变化和实例变化独立。采纳编辑后仍属于第一图，新增事件只在新句柄中。
+    const bool revised =
+        initial && *initial && edited && *edited && *edited != *initial &&
+        (*edited)->beatmapInstanceId == (*initial)->beatmapInstanceId &&
+        contains(**edited, 4) && !contains(**initial, 4);
+
+    // 新建另一会话后应首次等待它自己的数据，不能返回第一份实例的旧行。
+    auto other                           = std::make_shared<BeatMap>();
+    other->m_baseMapMetadata.track_count = 4;
+    const auto second   = engine.createSession(other, "Timing target", false);
+    const auto switched = Logic::readActiveTimingTable();
+    // 第二图尚未要求逻辑线程推进即关闭，未完成的投影不能影响回退的第一图。
+    engine.closeSession(second, false);
+    // 关闭活动项后退回第一张图，可以复用已经准备好的完整快照。
+    const auto returned = Logic::readActiveTimingTable();
+    // 同一个会话内载入另一份模型，即使新模型可能从同一滚动修订开始，
+    // 也必须撤回旧行。只靠活动索引比较无法识别这次实例改变。
+    session->pushCommand(Logic::CmdLoadBeatmap{ other });
+    session->update(0, config, true);
+    // 刷新请求在装载前已经存在，完成这次 update 后应直接读到新实例。
+    const auto reloaded = Logic::readActiveTimingTable();
+    // 新谱面没有已编辑的 STOP。旧时间点若泄漏到同索引的新实例，绝不能通过。
+    const bool replaced =
+        edited && *edited && reloaded && *reloaded &&
+        (*edited)->beatmapInstanceId != (*reloaded)->beatmapInstanceId &&
+        !contains(**reloaded, 4);
+    // 显式关闭测试用会话，避免污染调用链中之后读取引擎单例的用例。
+    engine.closeSession(first, false);
+    // 释放夹具持有的最后一份会话引用，让后面的读访问仅依赖快照所有权。
+    session.reset();
+
+    // 关闭真实谱面即停止路由，测试所持的旧首代仍能独立读取。
+    // 保留原始句柄到最终断言，检验行内实体值不会借用已销毁的源容器。
+    const bool closed = !Logic::readActiveTimingTable() && initial &&
+                        *initial && contains(**initial, 2);
+    // 联合检查挂起、调度和数据条件，提前返回空值不能掩盖等待或误路由。
+    const bool ok = pending && !*pending && independent &&
+                    concurrent == initial && unchanged == initial && sorted &&
+                    revised && switched && !*switched && returned == edited &&
+                    replaced && closed;
+    // 分别输出锁读取、数据和销毁阶段，便于在平台上有针对性地排查。
+    if ( !ok )
+        XERROR(
+            "Timing table publication regression: lock={}, sort={}, edit={}, "
+            "reload={}, closed={}",
+            independent,
+            sorted,
+            revised,
+            replaced,
+            closed);
+    return ok;
+}
+
 }  // namespace
 
 /// @brief 运行画笔调色盘跨会话恢复测试。
@@ -1167,7 +1284,7 @@ int main()
                    testPublishedActiveGestureState() &&
                    testToolbarTrackLayoutPublication() &&
                    testActivePlaybackStatePublication() &&
-                   testCameraConfigSnapshot() &&
+                   testTimingTablePublication() && testCameraConfigSnapshot() &&
                    testConcurrentEditorConfigSnapshots()
                ? 0
                : 1;

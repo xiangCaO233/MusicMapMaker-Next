@@ -233,8 +233,20 @@ void tap(Canvas::TimelineCanvas& canvas, ImVec2 point)
     frame(canvas, point);
 }
 
+/// @brief 推进一次有未处理表格请求的逻辑帧。
+/// @note 夹具直接填 Registry，故固定为 VSync，避免真实空闲节流影响检查时序。
+/// @param session 正常接收表格请求的活动会话。
+/// @param config 本次测试独占的配置副本，替代帧节流不影响用户设置。
+void advanceTablePublication(Logic::BeatmapSession& session,
+                             Config::EditorConfig   config)
+{
+    // 固定逻辑边界，测试不等待系统时间跨过空闲节流窗口。
+    config.settings.frameLimit = Config::FrameLimitPreference::VSync;
+    session.update(0.0, config, true);
+}
+
 /// @brief 使用内存活动会话验证真实表格的点选、拖选、筛选和经典规则。
-/// @details 完整表格数据来自 Registry，不能只给快照填几行绕过表格数据源。
+/// @details 完整表格数据经实际逻辑投影发布，测试不得手工注入表格行。
 /// 引擎循环不启动，测试拥有的会话在所有视图析构后关闭，且禁止工作区写回。
 /// @return 真实控件、集合成员与输入收尾全部符合契约时返回真。
 /// @pre 测试进程独占 ImGui 上下文和自己创建的活动会话。
@@ -279,7 +291,7 @@ bool run()
     snapshot.hasBeatmap     = true;
     snapshot.beatmapPathKey = "mouse-table.mmm";
     // 表格用对象地址令牌隔离同路径重载，不能随意填固定整数假装快照已就绪。
-    // 数据源仍来自活动 Registry，快照只提供身份和通用显示参数。
+    // 表格行另由活动会话发布，相机 RenderSnapshot 只提供身份和通用显示参数。
     snapshot.beatmapInstanceId = reinterpret_cast<std::uintptr_t>(map.get());
     snapshot.currentTime       = 1.0;
     UI::Interaction::synchronizeProfile("mouse-only", true);
@@ -301,6 +313,10 @@ bool run()
     {
         Canvas::TimelineCanvas canvas("MouseTable", 500, 500, nullptr);
         Access::open(canvas, snapshot);
+        // 第一帧走实际窗口的请求路径，由随后一次逻辑更新生成表格。
+        // 不用直接构造行快照，因为那样会绕过活动会话的路由与投影。
+        frame(canvas);
+        advanceTablePublication(*session, engine.getEditorConfig());
         // 两帧完成首用尺寸和后续测试窗口尺寸切换，防止用过期行高定位。
         // 字体与布局的初始化帧不包含点击，不能被当作选择行为的一部分。
         frame(canvas);
@@ -535,6 +551,9 @@ bool touchTable()
             ImGui::FindWindowByName("###TimingPointsTableWindow");
         expect(waiting && waiting->Size.y > ImGui::GetIO().DisplaySize.y * .8f,
                "syncing window keeps touch viewport geometry");
+        // 占位帧向逻辑会话请求表格行；收到该发布之后才让相机快照进入就绪态。
+        // 这样真实触屏场景仍覆盖从首次打开、到快照异步到达、再到选择的完整顺序。
+        advanceTablePublication(*session, engine.getEditorConfig());
         snapshot.hasBeatmap = true;
         // 使用真实页面仲裁器，序号列滑动必须与其它可滚动内容遵守同一规则。
         // 原始触点分类与合成鼠标回放都在本帧执行，不能只验证其中一条路径。

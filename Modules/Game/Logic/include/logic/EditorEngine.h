@@ -53,6 +53,7 @@ namespace MMM::Logic
 {
 
 struct ActiveAnnotationTableRead;
+struct TimingTableSnapshot;
 
 class BeatmapSession;
 struct ClipboardItem;
@@ -714,6 +715,10 @@ private:
 
     /// @brief 仅允许批注表窄接口访问已发布的注册表快照。
     friend std::optional<ActiveAnnotationTableRead> readActiveAnnotationTable();
+
+    /// @brief 时间点表格只通过不可变注册表快照查找本轮活动会话。
+    friend std::optional<std::shared_ptr<const TimingTableSnapshot>>
+    readActiveTimingTable();
 
     /// @brief 隔离注册表、配置缓存和线程生命周期的稳定私有状态。
     struct Impl;
