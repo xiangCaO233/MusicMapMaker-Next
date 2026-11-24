@@ -2215,6 +2215,8 @@ void NoteRenderSystem::debugRenderHitboxes(Batcher&        batcher,
         // 重叠命中区域仍能观察到下方物件，避免调试层完全遮挡画布。
         glm::vec4 color{ 0.2f, 0.9f, 1.0f, 0.8f };
         switch ( hb.part ) {
+        // 长条起点与普通头同属头部交互类别，统一使用绿色描边。
+        case HoverPart::HoldStart:
         case HoverPart::Head: color = { 0.25f, 1.0f, 0.25f, 0.85f }; break;
         case HoverPart::HoldBody: color = { 0.0f, 0.8f, 1.0f, 0.75f }; break;
         case HoverPart::HoldEnd: color = { 1.0f, 0.65f, 0.1f, 0.85f }; break;
