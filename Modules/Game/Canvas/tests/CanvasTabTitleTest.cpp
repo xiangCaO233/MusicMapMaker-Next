@@ -1,4 +1,5 @@
 #include "canvas/CanvasTabTitle.h"
+#include "../src/Basic2DCanvas_Private.h"
 #include "canvas/Basic2DCanvas.h"
 #include "common/render/RenderSnapshot.h"
 #include "common/render/RenderSnapshotBuffer.h"
@@ -16,6 +17,34 @@ namespace MMM::Canvas
 /// @brief 对隐藏编辑器使用真实快照池验证标题状态刷新，不创建 GPU 或 ImGui
 /// 窗口。
 struct CanvasTabSnapshotTestAccess {
+    /// @brief 验证延迟到达的上传确认不覆盖当前解码代际。
+    /// @details 录制与解码使用不同的修订标识，确认进入纹理时仍要核对解码代际。
+    /// @note 当前确认代际固定为 20，过时输入使用 19 模拟旧来源迟到。
+    /// 上次确认如果错误标记已经播完，下一次暂停定位也可能不再请求新帧。
+    static bool checkVideoSubmissionGeneration()
+    {
+        Basic2DCanvas canvas("VideoGeneration", 1, 1, {});
+        auto&         submission = *canvas.m_background;
+        // 只供应代际测试需要的因果输入，不启动后台线程或合成视频像素。
+        submission.m_requiredVideoRequestGeneration = 20;
+        submission.m_videoDiscontinuityPending      = true;
+        // 不创建 Vulkan 资源，只注入录制阶段的确认，覆盖两端的代际门槛。
+        submission.commitUploadedVideoFrame(3.0, 19, true);
+        if ( submission.m_videoFrameAvailable ||
+             !submission.m_videoDiscontinuityPending )
+            return false;
+
+        // 同代帧必须解除定位等待，并且新的末尾状态不受旧帧报尾影响。
+        submission.commitUploadedVideoFrame(5.0, 20, false);
+        // 同一迟到帧再次交付也不能更改当前有效位置。
+        submission.commitUploadedVideoFrame(4.0, 19, true);
+        // 时间戳与末尾位需要同时核对，否则只拒绝其中一项也可能误通过。
+        return submission.m_videoFrameAvailable &&
+               !submission.m_videoDiscontinuityPending &&
+               !submission.m_videoReachedEnd &&
+               submission.m_uploadedVideoTimestamp == 5.0;
+    }
+
     /// @brief 验证后台标签消费替换谱面及关闭谱面的状态而不改变可见性。
     /// @return 两次发布都被调度器消费且保持后台状态时为 true。
     /// @note 标题、dirty 与 hasBeatmap 来自同一代快照，不能部分保留旧值。
@@ -264,7 +293,9 @@ int main()
                    testCollaborationCanvasStateLifecycle() &&
                    testRestoredHiddenSessionPublishesTitle() &&
                    MMM::Canvas::CanvasTabSnapshotTestAccess::
-                       checkHiddenSnapshotRefresh()
+                       checkHiddenSnapshotRefresh() &&
+                   MMM::Canvas::CanvasTabSnapshotTestAccess::
+                       checkVideoSubmissionGeneration()
                // 任一标题或生命周期规则失败都返回非零。
                ? 0
                : 1;

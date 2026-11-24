@@ -11,6 +11,7 @@
 /// RenderPass 开始前再把待处理像素写入可复用 staging 槽。
 /// requestGeneration 隔离跳转前后的解码结果，
 /// uploadRevision 隔离 CPU 已接收与 GPU 已录制的帧状态。
+#include "Basic2DCanvas_Private.h"
 #include "canvas/Basic2DCanvas.h"
 #include "common/Utf8Codepoints.h"
 #include "common/render/GlyphTextureId.h"
@@ -52,7 +53,7 @@ glm::mat4 Basic2DCanvas::getCanvasProjectionMatrix()
     // 空会话没有轨道场景，Logo 占位仍使用二维投影而非实验摄像机。
     const auto& visual   = canvasVisualConfig();
     const bool  hasScene = m_currentSnapshot && m_currentSnapshot->hasBeatmap &&
-                           (!m_layoutEditor || m_layoutEditor->cameraMode());
+                          (!m_layoutEditor || m_layoutEditor->cameraMode());
     // 元素布局临时回到二维，退出后恢复当前视口独立的自由相机。
     // 视口局部参数仍走完整投影模型，轨道横移与厚度补偿沿用已有几何。
     if ( hasScene && visual.canvasCameraPoseEnabled ) {
@@ -230,22 +231,21 @@ std::vector<std::uint32_t> collectProjectAudioLabelCodepoints()
 /// 缺失、非法或加载失败的背景都收敛为空资源，不保留上一项目画面。
 /// @warning 低频阻塞路径：可能访问文件系统、创建 Vulkan 纹理并等待
 /// GPU；调用方必须保证不在每帧无条件执行。
-void Basic2DCanvas::updateBackgroundTexture()
+void Basic2DCanvas::BackgroundPresentation::updateBackgroundTexture(
+    const Common::Render::RenderSnapshot& snapshot, const UploadContext& upload)
 {
     // 外层比较是进入所有阻塞操作的唯一门槛；相同路径和类型的快照
     // 每帧到达时不会重复查询文件系统或重建 descriptor。
-    if ( m_currentSnapshot &&
-         (m_currentSnapshot->backgroundPath != m_loadedBgPath ||
-          m_currentSnapshot->backgroundIsVideo != m_loadedBackgroundIsVideo) ) {
-        m_loadedBgPath            = m_currentSnapshot->backgroundPath;
-        m_loadedBackgroundIsVideo = m_currentSnapshot->backgroundIsVideo;
+    if ( !matches(snapshot) ) {
+        m_loadedBgPath            = snapshot.backgroundPath;
+        m_loadedBackgroundIsVideo = snapshot.backgroundIsVideo;
 
         // 替换背景纹理前等待全部在途帧，旧 DescriptorSet 可能仍被
         // 上一帧 CommandBuffer 引用；提前释放会违反
         // VUID-vkFreeDescriptorSets-pDescriptorSets-00309。
         // 该阻塞仅由背景代际变化触发，不允许移入常规视频帧更新路径。
-        if ( m_logicalDevice && m_bgTexture ) {
-            (void)m_logicalDevice.waitIdle();
+        if ( upload.m_logicalDevice && m_bgTexture ) {
+            (void)upload.m_logicalDevice.waitIdle();
         }
 
         std::error_code textureExistsError;
@@ -287,7 +287,7 @@ void Basic2DCanvas::updateBackgroundTexture()
                 texturePathExists ? Config::utf8ToPath(m_loadedBgPath)
                                   : std::filesystem::path{};
             m_requiredVideoRequestGeneration =
-                m_backgroundVideoPlayer->setSource(videoPath);
+                m_backgroundVideoPlayer.setSource(videoPath);
             if ( !videoPath.empty() ) {
                 // 首帧按零时刻 discontinuity 请求，使解码器执行 seek 并
                 // 从新来源建立稳定时间基线。
@@ -298,17 +298,17 @@ void Basic2DCanvas::updateBackgroundTexture()
                 m_videoDiscontinuityTargetTime = 0.0;
                 m_lastVideoFrameRequestSysTime = currentSteadySeconds();
             }
-        } else if ( m_physicalDevice && m_logicalDevice && m_cmdPool &&
-                    m_queue && texturePathExists ) {
+        } else if ( upload.m_physicalDevice && upload.m_logicalDevice &&
+                    upload.m_cmdPool && upload.m_queue && texturePathExists ) {
             // 切换到静态图片时先取消视频来源，再同步创建采样纹理；
             // 设备句柄不完整时不会尝试部分构造。
-            (void)m_backgroundVideoPlayer->setSource({});
+            (void)m_backgroundVideoPlayer.setSource({});
             m_bgTexture = std::make_unique<Graphic::VKTexture>(
                 Config::utf8ToPath(m_loadedBgPath),
-                m_physicalDevice,
-                m_logicalDevice,
-                m_cmdPool,
-                m_queue);
+                upload.m_physicalDevice,
+                upload.m_logicalDevice,
+                upload.m_cmdPool,
+                upload.m_queue);
             if ( m_bgTexture->isValid() ) {
                 XINFO("Loaded background texture: {}", m_loadedBgPath);
             } else {
@@ -318,7 +318,7 @@ void Basic2DCanvas::updateBackgroundTexture()
             }
         } else {
             // 无背景、路径无效或设备尚未就绪都需要显式取消旧视频解码。
-            (void)m_backgroundVideoPlayer->setSource({});
+            (void)m_backgroundVideoPlayer.setSource({});
         }
     }
 }
@@ -331,9 +331,8 @@ void Basic2DCanvas::updateBackgroundTexture()
 /// 成功提交会结束 discontinuity 等待、清零暂停重试并更新末尾标志。
 /// 像素数据和 upload revision 由调用方在录制成功后分别清理。
 /// @warning UI 阶段或离屏录制阶段调用；两阶段由渲染器串行。
-void Basic2DCanvas::commitUploadedVideoFrame(double        timestamp,
-                                             std::uint64_t requestGeneration,
-                                             bool          reachedEnd)
+void Basic2DCanvas::BackgroundPresentation::commitUploadedVideoFrame(
+    double timestamp, std::uint64_t requestGeneration, bool reachedEnd)
 {
     // 跳转前的异步解码结果可能晚到；代际检查阻止旧时间画面覆盖
     // 新 Seek 正在等待的目标帧。
@@ -363,12 +362,13 @@ void Basic2DCanvas::commitUploadedVideoFrame(double        timestamp,
 /// 尺寸不变时保存为 pending 像素，留待 RenderPass 前录制上传。
 /// @warning UI 热路径：解码在专用线程执行；只有首帧或分辨率变更
 /// 时会在此低频分支等待 GPU 并重建纹理。
-void Basic2DCanvas::updateBackgroundVideoFrame()
+void Basic2DCanvas::BackgroundPresentation::updateBackgroundVideoFrame(
+    const Common::Render::RenderSnapshot& snapshot, const UploadContext& upload)
 {
     // 背景类型、路径或来源任一无效时立即隐藏视频；旧 GPU 纹理可能
     // 尚待资源重建清理，但绝不能继续参与本帧绘制。
-    if ( !m_currentSnapshot || !m_currentSnapshot->backgroundIsVideo ||
-         m_loadedBgPath.empty() || !m_videoSourceAvailable ) {
+    if ( !snapshot.backgroundIsVideo || m_loadedBgPath.empty() ||
+         !m_videoSourceAvailable ) {
         m_videoShouldBeVisibleThisFrame = false;
         m_videoFrameVisible             = false;
         return;
@@ -378,8 +378,8 @@ void Basic2DCanvas::updateBackgroundVideoFrame()
     // resolvePlaybackTimeAt 使用快照中的播放锚点外推当前时间，
     // 再扣除背景开始偏移得到视频自身从零开始的时间轴。
     const double targetTime = calculateBackgroundVideoTime(
-        m_currentSnapshot->resolvePlaybackTimeAt(currentSysTime),
-        m_currentSnapshot->backgroundVideoStartTime);
+        snapshot.resolvePlaybackTimeAt(currentSysTime),
+        snapshot.backgroundVideoStartTime);
     if ( !std::isfinite(targetTime) ) {
         // 非有限时间不发送给解码器，也不沿用旧帧作为可见背景。
         m_videoShouldBeVisibleThisFrame = false;
@@ -409,7 +409,7 @@ void Basic2DCanvas::updateBackgroundVideoFrame()
                 SEEK_DISCONTINUITY_SECONDS;
         const bool isPausedSeek =
             // 暂停时即使变化小于通用跳转阈值，也需要定位新目标帧。
-            !m_currentSnapshot->isPlaying && m_hasRequestedVideoFrame &&
+            !snapshot.isPlaying && m_hasRequestedVideoFrame &&
             std::abs(targetTime - m_lastRequestedVideoTime) >=
                 REQUEST_INTERVAL_SECONDS;
         // 暂停状态下时间变化来自用户定位而非自然播放，哪怕只跨一帧
@@ -417,8 +417,8 @@ void Basic2DCanvas::updateBackgroundVideoFrame()
         const double generationAdvanceThreshold =
             // 播放中避免每个普通帧开启代际；暂停拖动则按单帧请求
             // 间隔识别新的用户目标。
-            m_currentSnapshot->isPlaying ? SEEK_DISCONTINUITY_SECONDS
-                                         : REQUEST_INTERVAL_SECONDS;
+            snapshot.isPlaying ? SEEK_DISCONTINUITY_SECONDS
+                               : REQUEST_INTERVAL_SECONDS;
         const bool startsNewGeneration =
             (requestJumped || isPausedSeek) &&
             (!m_videoDiscontinuityPending ||
@@ -431,7 +431,7 @@ void Basic2DCanvas::updateBackgroundVideoFrame()
         const bool retriesPendingPausedSeek =
             // 解码器尚未交付当前暂停 Seek 时进行有限重试；系统时间
             // 只用于非阻塞节流，不在 UI 线程等待固定窗口。
-            !m_currentSnapshot->isPlaying && m_videoDiscontinuityPending &&
+            !snapshot.isPlaying && m_videoDiscontinuityPending &&
             m_hasRequestedVideoFrame &&
             m_pendingVideoSeekRetryCount < MAX_PAUSED_SEEK_RETRIES &&
             currentSysTime - m_lastVideoFrameRequestSysTime >=
@@ -450,8 +450,8 @@ void Basic2DCanvas::updateBackgroundVideoFrame()
             // requestFrame 只写入后台请求队列并立即返回其 generation，
             // 解码和 seek 均在播放器工作线程完成。
             const std::uint64_t requestGeneration =
-                m_backgroundVideoPlayer->requestFrame(targetTime,
-                                                      startsNewGeneration);
+                m_backgroundVideoPlayer.requestFrame(targetTime,
+                                                     startsNewGeneration);
             if ( startsNewGeneration ) {
                 // 新代际立即作废旧 pending 像素和状态；即使旧帧随后
                 // 到达，也会在接收条件中因 generation 过小而被丢弃。
@@ -480,7 +480,7 @@ void Basic2DCanvas::updateBackgroundVideoFrame()
     BackgroundVideoFrame decodedFrame;
     // 只取播放器最新完成帧；尺寸与 RGBA 字节数必须严格匹配，
     // 防止损坏缓冲进入纹理构造或 staging 复制。
-    if ( m_backgroundVideoPlayer->tryTakeLatestFrame(decodedFrame) &&
+    if ( m_backgroundVideoPlayer.tryTakeLatestFrame(decodedFrame) &&
          decodedFrame.requestGeneration >= m_requiredVideoRequestGeneration &&
          decodedFrame.frame.width > 0 && decodedFrame.frame.height > 0 &&
          decodedFrame.frame.rgba.size() ==
@@ -507,23 +507,24 @@ void Basic2DCanvas::updateBackgroundVideoFrame()
         if ( mustRecreateTexture ) {
             // 旧 image 和 descriptor 可能仍被在途命令引用；尺寸变化
             // 属于低频事件，允许在销毁前等待设备空闲。
-            if ( m_logicalDevice && m_bgTexture ) {
-                (void)m_logicalDevice.waitIdle();
+            if ( upload.m_logicalDevice && m_bgTexture ) {
+                (void)upload.m_logicalDevice.waitIdle();
             }
-            if ( m_physicalDevice && m_logicalDevice && m_cmdPool && m_queue ) {
+            if ( upload.m_physicalDevice && upload.m_logicalDevice &&
+                 upload.m_cmdPool && upload.m_queue ) {
                 // 构造函数上传首帧并建立新尺寸 image，随后准备双 staging
                 // 槽供相邻帧复用，避免每帧重新分配上传资源。
                 m_bgTexture = std::make_unique<Graphic::VKTexture>(
                     decodedFrame.frame.rgba.data(),
                     decodedFrame.frame.width,
                     decodedFrame.frame.height,
-                    m_physicalDevice,
-                    m_logicalDevice,
-                    m_cmdPool,
-                    m_queue);
+                    upload.m_physicalDevice,
+                    upload.m_logicalDevice,
+                    upload.m_cmdPool,
+                    upload.m_queue);
                 if ( m_bgTexture->isValid() &&
-                     m_bgTexture->prepareStreamingUpload(m_physicalDevice,
-                                                         2U) ) {
+                     m_bgTexture->prepareStreamingUpload(
+                         upload.m_physicalDevice, 2U) ) {
                     // 首帧已由构造路径进入 GPU，无需再次放入 pending；
                     // recorded revision 与当前 revision 对齐后提交状态。
                     m_recordedVideoUploadRevision =
@@ -581,6 +582,14 @@ void Basic2DCanvas::updateBackgroundVideoFrame()
 /// 复制到已映射 staging 槽并录制图像传输命令。
 void Basic2DCanvas::onRecordResourceUploads(vk::CommandBuffer& cmdBuf,
                                             uint32_t           frameIndex)
+{
+    m_background->recordUpload(cmdBuf, frameIndex);
+}
+
+/// @brief 把借用的本帧 staging 槽录入 GPU 上传命令，成功时推进修订水位。
+/// @warning 录制热路径，只有新像素就绪时写 staging，不等待设备空闲。
+void Basic2DCanvas::BackgroundPresentation::recordUpload(
+    vk::CommandBuffer& cmdBuf, std::uint32_t frameIndex)
 {
     // 快速拒绝覆盖静态背景、未完成解码、无效纹理和已录制 revision；
     // 常规无新视频帧路径不会访问像素缓冲。
@@ -666,10 +675,10 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
             m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
     }
     vk::DescriptorSet backgroundDescriptor = VK_NULL_HANDLE;
-    if ( m_bgTexture ) {
+    if ( m_background->texture() ) {
         // 背景纹理尺寸和更新频率独立，因此不并入静态图集。
         backgroundDescriptor =
-            m_bgTexture->getNativeDescriptorSet(pool, setLayout);
+            m_background->texture()->getNativeDescriptorSet(pool, setLayout);
     }
 
     vk::DescriptorSet             lastBoundTexture = VK_NULL_HANDLE;
@@ -700,9 +709,9 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
         const bool isBackground =
             cmd.customTextureId ==
             static_cast<uint32_t>(Common::Render::TextureID::Background);
-        if ( isBackground &&
-             (!m_bgTexture || (m_currentSnapshot->backgroundIsVideo &&
-                               !m_videoFrameVisible)) ) {
+        if ( isBackground && (!m_background->texture() ||
+                              (m_currentSnapshot->backgroundIsVideo &&
+                               !m_background->visible())) ) {
             // 静态背景只要求有效纹理；视频还要求目标时刻已开始且
             // 至少一帧完成 GPU 上传，否则跳过该背景 DrawCmd。
             continue;
@@ -798,10 +807,10 @@ void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
             m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
     }
     vk::DescriptorSet backgroundDescriptor = VK_NULL_HANDLE;
-    if ( m_bgTexture ) {
+    if ( m_background->texture() ) {
         // 协议允许背景 ID，但是否生成背景发光命令由逻辑快照决定。
         backgroundDescriptor =
-            m_bgTexture->getNativeDescriptorSet(pool, setLayout);
+            m_background->texture()->getNativeDescriptorSet(pool, setLayout);
     }
 
     vk::DescriptorSet             lastBoundTexture = VK_NULL_HANDLE;
@@ -876,10 +885,10 @@ void Basic2DCanvas::onRecordOverlayCmds(vk::CommandBuffer&      cmdBuf,
             m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
     }
     vk::DescriptorSet backgroundDescriptor = VK_NULL_HANDLE;
-    if ( m_bgTexture ) {
+    if ( m_background->texture() ) {
         // 独立背景 descriptor 只在命令明确使用 Background ID 时选择。
         backgroundDescriptor =
-            m_bgTexture->getNativeDescriptorSet(pool, setLayout);
+            m_background->texture()->getNativeDescriptorSet(pool, setLayout);
     }
 
     vk::DescriptorSet             lastBoundTexture = VK_NULL_HANDLE;

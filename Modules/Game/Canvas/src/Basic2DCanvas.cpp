@@ -1,4 +1,5 @@
 #include "canvas/Basic2DCanvas.h"
+#include "Basic2DCanvas_Private.h"
 #include "ui/interaction/EditorInteraction.h"
 /// @file Basic2DCanvas.cpp
 /// @brief 实现主谱面画布窗口、会话生命周期和协作视野覆盖层。
@@ -732,7 +733,8 @@ Basic2DCanvas::Basic2DCanvas(
         m_interaction->setLocalLayout(&m_comparisonLayout->m_config.visual,
                                       &m_comparisonLayout->m_dirty,
                                       &m_comparisonLayout->m_open);
-    m_backgroundVideoPlayer = std::make_unique<BackgroundVideoPlayer>();
+    m_background  = std::make_unique<BackgroundPresentation>();
+    m_walkthrough = std::make_unique<WalkthroughRecognizer>();
 }
 
 /// @brief 销毁主画布拥有的交互控制器和背景视频播放器。
@@ -1658,14 +1660,17 @@ bool Basic2DCanvas::updateComposeLessonHints(
 /// 当前帧只投影七个目标并核对一个固定身份槽位。
 /// 鼠标经过顺序和最终 ECS 子段数分别在 UI 与逻辑线程验证。
 /// Flick 与 Hold 的相邻练习也需避开同轨相交的可见物件。
+/// @param spotlight 提供练习步骤与本帧提示覆盖层。
+/// @param interaction 可为空，只在需要设置画笔模式或取消释放时借用。
+/// @param cameraId 只复制到延迟编辑通知，避免回调依赖旧画布。
+/// @param appliedYOffset 当前快照与屏幕投影之间的动态差值。
 /// @warning UI 热路径：非目标步骤仅做状态判断；目标随机化只在进入步骤时执行。
-void Basic2DCanvas::updateComposeWalkthrough(
-    UI::UIManager*                        sourceManager,
-    const Common::Render::RenderSnapshot& snapshot,
+void Basic2DCanvas::WalkthroughRecognizer::updateComposeWalkthrough(
+    UI::Walkthrough::Spotlight& spotlight,
+    Basic2DCanvasInteraction* interaction, const std::string& cameraId,
+    float appliedYOffset, const Common::Render::RenderSnapshot& snapshot,
     const ImVec2& canvasScreenPosition, const ImVec2& canvasSize)
 {
-    if ( !sourceManager ) return;
-    auto&      spotlight = sourceManager->walkthroughSpotlight();
     const bool placingHold =
         spotlight.awaitingTarget("compose.canvas.place-hold");
     const bool placingNote =
@@ -1762,8 +1767,11 @@ void Basic2DCanvas::updateComposeWalkthrough(
     }
     // 已创建物件上的编辑引导先读取正式快照；被处理的步骤不再生成绘制目标。
     // 这样局部拖动与 Shift 续接不会落入下面的独立画笔路径。
-    if ( updateComposeEditWalkthrough(
-             sourceManager, snapshot, canvasScreenPosition, canvasSize) )
+    if ( updateComposeEditWalkthrough(spotlight,
+                                      interaction,
+                                      snapshot,
+                                      canvasScreenPosition,
+                                      canvasSize) )
         return;
     if ( placingPolyline ) {
         // 折线没有预设的唯一终点，用户可以在主轨道自由折返。
@@ -1793,9 +1801,8 @@ void Basic2DCanvas::updateComposeWalkthrough(
         // 即使步骤在拖动途中改变，EndBrush 仍能检查原来的最低段数。
         // minimumSubNotes 只服务教学笔画，普通用户画笔的值保持零。
         // 已进行的笔画不因 UI 快照滞后而丢失所属步骤令牌。
-        if ( m_interaction )
-            m_interaction->setWalkthroughPlacement(
-                true, token, minimumSubNotes);
+        if ( interaction )
+            interaction->setWalkthroughPlacement(true, token, minimumSubNotes);
 
         // 逻辑线程完成规范化和提交后才会发布根物件及子段数量；预览或松手
         // 本身均不能证明五段真实存在。
@@ -1821,7 +1828,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
                 spotlight.registerRollback(
                     targetId,
                     [command = Logic::CmdUndo{ .walkthroughToken = token,
-                                               .cameraId = m_cameraId }] {
+                                               .cameraId         = cameraId }] {
                         UI::Interaction::dispatchCommand(
                             Event::LogicCommandEvent(command));
                     });
@@ -1839,7 +1846,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
         const auto cancelInvalidRelease = [&]() {
             if ( m_walkthroughPolylineAttemptActive &&
                  UI::Interaction::mouseReleased(ImGuiMouseButton_Left) ) {
-                if ( m_interaction ) m_interaction->cancelBrushOnNextRelease();
+                if ( interaction ) interaction->cancelBrushOnNextRelease();
                 m_walkthroughPolylineAttemptActive = false;
                 m_walkthroughPolylineAttemptValid  = false;
                 m_walkthroughPolylineNextWaypoint  = 0;
@@ -1927,8 +1934,8 @@ void Basic2DCanvas::updateComposeWalkthrough(
                 snapshot.playerBeatLines,
                 snapshot.trackCount,
                 noteHeight,
-                trackTop - m_preparedSnapshot.appliedYOffset,
-                trackBottom - m_preparedSnapshot.appliedYOffset,
+                trackTop - appliedYOffset,
+                trackBottom - appliedYOffset,
                 mixWalkthroughSeed(snapshot.beatmapInstanceId ^ token),
                 placedHold);
             m_walkthroughPolylineTargetBeatmapInstanceId =
@@ -1963,8 +1970,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
             std::optional<float> y;
             for ( const auto& line : snapshot.playerBeatLines ) {
                 if ( std::abs(line.time - waypoint.time) >= 1e-7 ) continue;
-                const float screenY =
-                    line.y + m_preparedSnapshot.appliedYOffset;
+                const float screenY = line.y + appliedYOffset;
                 if ( isComposeTargetBeatLine(waypoint.time,
                                              screenY,
                                              noteHeight,
@@ -2145,8 +2151,8 @@ void Basic2DCanvas::updateComposeWalkthrough(
                  snapshot.currentTool == Logic::EditTool::Draw ) {
                 // 正常结束命令提交后等待正式根物件快照，禁止提前完成。
                 m_walkthroughPolylinePendingToken = token;
-            } else if ( m_interaction ) {
-                m_interaction->cancelBrushOnNextRelease();
+            } else if ( interaction ) {
+                interaction->cancelBrushOnNextRelease();
             }
             m_walkthroughPolylineAttemptActive = false;
             m_walkthroughPolylineAttemptValid  = false;
@@ -2169,9 +2175,9 @@ void Basic2DCanvas::updateComposeWalkthrough(
     const auto placementKind = placingFlick  ? WalkthroughPlacementKind::Flick
                                : placingHold ? WalkthroughPlacementKind::Hold
                                              : WalkthroughPlacementKind::Note;
-    if ( m_interaction )
-        m_interaction->setWalkthroughPlacement(placingNote || requiresShift,
-                                               spotlight.stepToken());
+    if ( interaction )
+        interaction->setWalkthroughPlacement(placingNote || requiresShift,
+                                             spotlight.stepToken());
     const std::string_view targetId =
         placingFlick  ? "compose.canvas.place-flick"
         : placingHold ? "compose.canvas.place-hold"
@@ -2180,7 +2186,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
     const auto cancelUnresolvedRelease = [&]() {
         if ( m_walkthroughNoteAttemptActive &&
              UI::Interaction::mouseReleased(ImGuiMouseButton_Left) ) {
-            if ( m_interaction ) m_interaction->cancelBrushOnNextRelease();
+            if ( interaction ) interaction->cancelBrushOnNextRelease();
             m_walkthroughNoteAttemptActive = false;
         }
     };
@@ -2205,8 +2211,8 @@ void Basic2DCanvas::updateComposeWalkthrough(
                               .enablePolylineEditing ) {
         // 中途关闭设置也不得提交退化成普通 Note/Hold 的本次手势。
         if ( UI::Interaction::mouseReleased(ImGuiMouseButton_Left) &&
-             m_interaction )
-            m_interaction->cancelBrushOnNextRelease();
+             interaction )
+            interaction->cancelBrushOnNextRelease();
         m_walkthroughNoteDragTarget.reset();
         m_walkthroughNoteAttemptActive = false;
         spotlight.reportTarget(targetId,
@@ -2268,7 +2274,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
         if ( !isComposeTargetTime(time) ) return std::nullopt;
         for ( const auto& line : snapshot.playerBeatLines ) {
             if ( std::abs(line.time - time) >= 1e-7 ) continue;
-            const float y = line.y + m_preparedSnapshot.appliedYOffset;
+            const float y = line.y + appliedYOffset;
             // 教程框必须完整落在玩家轨纵向边界内；中心可见但 Note 被裁掉的
             // 拍线不能作为练习目标，否则实际物件与提示框都只显示一部分。
             if ( !isComposeTargetBeatLine(
@@ -2342,8 +2348,8 @@ void Basic2DCanvas::updateComposeWalkthrough(
             m_walkthroughPlacedNote->destinationTrack,
             snapshot.trackCount,
             noteHeight,
-            trackTop - m_preparedSnapshot.appliedYOffset,
-            trackBottom - m_preparedSnapshot.appliedYOffset,
+            trackTop - appliedYOffset,
+            trackBottom - appliedYOffset,
             mixWalkthroughSeed(snapshot.beatmapInstanceId),
             excludedFlickTime,
             excludedFlickStartTrack,
@@ -2396,7 +2402,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
         // 渲染器已经按像素行去重，遍历顺序中的每项均代表不同可见位置。
         for ( const auto& line : snapshot.playerBeatLines ) {
             if ( candidateCount >= candidates.size() ) break;
-            const float y = line.y + m_preparedSnapshot.appliedYOffset;
+            const float y = line.y + appliedYOffset;
             // 负时间拍线可见不代表可绘制；起点和终点必须从同一合法集合选取。
             // 不钳制到零，确保首拍偏移和当前分拍位置保持原样。
             if ( isComposeTargetBeatLine(
@@ -2665,17 +2671,17 @@ void Basic2DCanvas::updateComposeWalkthrough(
                 targetId,
                 [command =
                      Logic::CmdUndo{ .walkthroughToken = spotlight.stepToken(),
-                                     .cameraId         = m_cameraId }] {
+                                     .cameraId         = cameraId }] {
                     UI::Interaction::dispatchCommand(
                         Event::LogicCommandEvent(command));
                 });
             // 回退后的重新绘制是新手势，可以完成步骤，不受回看防跳步限制。
             spotlight.completeTarget(targetId, true);
-        } else if ( m_interaction ) {
+        } else if ( interaction ) {
             // Interaction 随后发布 cancel=true 的结束命令，原子丢弃失败预览。
             // 请求必须在本帧 Interaction::update 之前设置，释放分支消费后立即
             // 复位；因此它不可能泄漏到用户下一次正常画笔手势。
-            m_interaction->cancelBrushOnNextRelease();
+            interaction->cancelBrushOnNextRelease();
         }
         m_walkthroughNoteAttemptActive   = false;
         m_walkthroughNoteStartedAtSource = false;
@@ -2974,15 +2980,18 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         if ( m_currentSnapshot ) {
             // 背景资源只在路径或媒体类型变化时同步；纹理加载与视频
             // 打开包含文件系统操作，绝不能无条件进入每帧路径。
-            if ( m_currentSnapshot->backgroundPath != m_loadedBgPath ||
-                 m_currentSnapshot->backgroundIsVideo !=
-                     m_loadedBackgroundIsVideo ) {
-                updateBackgroundTexture();
+            const BackgroundPresentation::UploadContext upload{
+                m_physicalDevice, m_logicalDevice, m_cmdPool, m_queue
+            };
+            if ( !m_background->matches(*m_currentSnapshot) ) {
+                m_background->updateBackgroundTexture(*m_currentSnapshot,
+                                                      upload);
             }
             if ( m_currentSnapshot->backgroundIsVideo ) {
                 // 视频帧更新只在快照确认当前背景为视频时执行，静态图
                 // 不轮询播放器，也不会意外保留旧视频的时间推进。
-                updateBackgroundVideoFrame();
+                m_background->updateBackgroundVideoFrame(*m_currentSnapshot,
+                                                         upload);
             }
         }
 
@@ -3112,10 +3121,16 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                 // 教学命中装饰同样依赖二维像素，透视模式跳过装饰而保留普通编辑。
                 // 教程先判定本帧释放是否合法，以便交互控制器随后选择提交或
                 // 取消 CmdEndBrush；目标装饰不创建 ImGui Item，不拦截画布输入。
-                updateComposeWalkthrough(sourceManager,
-                                         *m_currentSnapshot,
-                                         canvasScreenPosition,
-                                         canvasSize);
+                if ( sourceManager ) {
+                    m_walkthrough->updateComposeWalkthrough(
+                        sourceManager->walkthroughSpotlight(),
+                        m_interaction.get(),
+                        m_cameraId,
+                        m_preparedSnapshot.appliedYOffset,
+                        *m_currentSnapshot,
+                        canvasScreenPosition,
+                        canvasSize);
+                }
                 lessonButtonHovered =
                     updateComposeLessonHints(sourceManager,
                                              *m_currentSnapshot,

@@ -9,11 +9,11 @@
 ///
 /// 热路径只查询固定步骤表、四个槽位及快照已有命中框，
 /// 不读取 ECS，也不触发额外的跨线程等待或全谱扫描。
+#include "Basic2DCanvas_Private.h"
 #include "canvas/Basic2DCanvas.h"
 #include "canvas/Basic2DCanvasInteraction.h"
 #include "canvas/ComposeEditProgress.h"
 #include "imgui.h"
-#include "ui/UIManager.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
 #include <array>
 #include <string_view>
@@ -21,19 +21,18 @@
 namespace MMM::Canvas
 {
 /// @brief 检查编辑教程目标是否已经由逻辑线程正式提交。
-/// @param sourceManager 提供当前步骤与聚光灯状态。
+/// @param spotlight 提供当前步骤与聚光灯状态。
 /// @param snapshot 包含当前物件几何、命中框及最新编辑事务。
 /// @param canvasScreenPosition 画布屏幕位置，用于转换命中框坐标。
 /// @param canvasSize 画布尺寸，用于目标暂不可见时提示导航。
 /// @return 当前正在处理编辑步骤时返回 true，供其它绘制步骤跳过。
 /// @warning UI 热路径：每帧仅检查固定教程目标和快照已剔除的命中框。
-bool Basic2DCanvas::updateComposeEditWalkthrough(
-    UI::UIManager*                        sourceManager,
+bool Basic2DCanvas::WalkthroughRecognizer::updateComposeEditWalkthrough(
+    UI::Walkthrough::Spotlight&           spotlight,
+    Basic2DCanvasInteraction*             interaction,
     const Common::Render::RenderSnapshot& snapshot,
     const ImVec2& canvasScreenPosition, const ImVec2& canvasSize)
 {
-    if ( !sourceManager ) return false;
-    auto& spotlight = sourceManager->walkthroughSpotlight();
     /// @brief 编辑步骤只观察已创建的四个练习物件与一次正式释放事务。
     /// @note 多目标扩展允许从 Hold 或 Flick 任一尾部起笔，其余步骤固定槽位。
     /// @note slot 对应创建步骤登记的身份，不靠拍位重新搜索目标。
@@ -142,7 +141,7 @@ bool Basic2DCanvas::updateComposeEditWalkthrough(
         if ( !spotlight.awaitingTarget(guide.id) ) continue;
         // 独立绘制步骤的限制不能阻止从已有物件尾部开始续接。
         // 该标志仅控制教程放置目标，不替代逻辑线程的正式操作。
-        if ( m_interaction ) m_interaction->setWalkthroughPlacement(false, 0);
+        if ( interaction ) interaction->setWalkthroughPlacement(false, 0);
         // 每一步只在进入时采样基线；拖动中的临时快照不得重新定义原位置。
         // 谱面实例切换后即使实体数值相同，也必须重取这一步的基线。
         // 基线和事务序号来自同一快照，避免跨线程发布出现混合状态。
