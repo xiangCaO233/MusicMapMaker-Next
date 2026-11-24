@@ -1,3 +1,4 @@
+#include "BeatmapSession_Domains.h"
 #include "common/render/ScrollRenderData.h"
 /// @file BeatmapSession_TimingTable.cpp
 /// @brief 投影独立于视口的时间点表格。
@@ -26,11 +27,18 @@ namespace MMM::Logic
 /// @brief 合并 UI 请求，并返回逻辑线程上次发布的表格。
 /// @warning 表格可见时每帧读取。共享句柄保证编辑或切换谱面后旧行仍可使用。
 std::shared_ptr<const TimingTableSnapshot>
-BeatmapSession::requestTimingTableSnapshot()
+BeatmapSession::TableProjection::requestTimingTableSnapshot()
 {
     // 请求只唤起刷新；表格的数据与代际由发布槽同步。
     m_timingTableRequested.store(true, std::memory_order_relaxed);
     return m_timingTableSnapshot.load();
+}
+
+/// @brief 转交对当前会话表格的请求。
+std::shared_ptr<const TimingTableSnapshot>
+BeatmapSession::requestTimingTableSnapshot()
+{
+    return m_tables->requestTimingTableSnapshot();
 }
 
 /// @brief 在逻辑线程投影完整 Timing 表格，在修订不变时复用已有发布。
@@ -40,12 +48,12 @@ BeatmapSession::requestTimingTableSnapshot()
 /// @note 活动谱面不需要打开主画布才能响应请求。空闲分支也会到达此入口。
 /// @warning
 /// 活动会话每轮只检查待处理标志。仅有请求且谱面或修订变化时遍历与排序。
-void BeatmapSession::publishTimingTableSnapshot()
+void BeatmapSession::TableProjection::publishTimingTableSnapshot(
+    const SessionContext& context)
 {
     if ( !m_timingTableRequested.load(std::memory_order_relaxed) ) return;
 
-    const auto& context = *m_ctx;
-    const auto  id =
+    const auto id =
         reinterpret_cast<std::uintptr_t>(context.currentBeatmap.get());
     const auto* cache =
         context.timelineRegistry.ctx().find<System::ScrollCache>();

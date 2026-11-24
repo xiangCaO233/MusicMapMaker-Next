@@ -1,4 +1,5 @@
 #include "BeatmapSession_CommandState.h"
+#include "BeatmapSession_Domains.h"
 #include "common/ClockTimeText.h"
 #include "common/ComparisonCanvas.h"
 #include "common/LogicCommands.h"
@@ -2530,11 +2531,8 @@ namespace MMM::Logic
 /// savedMetadata 则冻结项目入口所需的持久化字段；如果用户在写入期间继续修改
 /// 标题或版本，完成阶段不能把这些尚未进入文件的新值同步到项目清单。
 ///
-/// AsyncSaveOperation 使用 shared_ptr 作为不完整私有类型的持有方式，但不会在
-/// update 中复制共享所有权。逻辑线程只移动或解引用唯一成员句柄，工作线程持有
-/// 的是另一个 BeatMap 快照句柄，不持有本操作对象。该选择避免公开头暴露 future、
-/// filesystem 和保存结果细节，也避免会话构造函数要求私有类型完整定义。
-struct BeatmapSession::AsyncSaveOperation {
+/// 保存任务持有独立的谱面快照，操作对象由逻辑线程独占。
+struct BeatmapSession::Persistence::AsyncSaveOperation {
     /// @brief 后台文件编码、写入和哈希计算结果。
     struct WriteResult {
         /// @brief 谱面目标文件是否完整写出。
@@ -2561,9 +2559,82 @@ struct BeatmapSession::AsyncSaveOperation {
     bool hadPendingMetadataAutoSave{ false };
 };
 
+/// @brief 建立持久化状态，后台操作仅在收到保存请求时创建。
+BeatmapSession::Persistence::Persistence() = default;
+
+/// @brief 释放当前保存操作，文件池任务继续使用独立快照。
+BeatmapSession::Persistence::~Persistence() = default;
+
 /// @brief 在私有异步状态类型完整可见处销毁会话。
 /// @note 丢弃 future 不取消后台任务；任务只持有独立谱面副本，不再访问会话。
 BeatmapSession::~BeatmapSession() = default;
+
+/// @brief 更新调度标志，实际保存由下次空闲轮询决定。
+/// @warning 命令批次提交路径，仅做常量级配置判断。
+void BeatmapSession::Persistence::noteMutation(
+    const Config::AutoSaveConfig& save, const Config::AutoBackupConfig& backup)
+{
+    // 任一谱面变更都会让自动备份基线失效。
+    m_autoBackupDirty = true;
+    // 保存与备份分别排队，覆盖原文件的保存不代表独立副本已更新。
+    if ( save.mode == Config::AutoSaveMode::EventTriggered &&
+         save.onObjectModified )
+        m_triggeredAutoSavePending = true;
+    if ( backup.mode == Config::AutoSaveMode::EventTriggered &&
+         backup.onObjectModified )
+        m_triggeredAutoBackupPending = true;
+}
+
+/// @brief 将新谱面的尾随保存和备份状态恢复至初始值。
+void BeatmapSession::Persistence::resetAfterBeatmapChange()
+{
+    // 已经保存的旧元数据不能在新图上重复执行尾随保存。
+    m_metadataAutoSavePending         = false;
+    m_metadataAutoSaveTimerNeedsReset = false;
+    // 备份的周期和脏状态属于旧谱面，下一轮应以新谱面重新建立。
+    m_autoBackupDirty                = false;
+    m_triggeredAutoBackupPending     = false;
+    m_timedAutoBackupDeadline        = 0.0;
+    m_timedAutoBackupIntervalSeconds = 0.0;
+    // 已消费的备份事件绑定旧谱面。保留原有的异步写入身份检查。
+    m_requestedAutoBackupTriggers.store(0U, std::memory_order_relaxed);
+}
+
+/// @brief 按当前项目根解析已加载谱面，重新建立覆盖检查使用的文件哈希。
+void BeatmapSession::Persistence::establishFileBaseline(const BeatMap* beatmap)
+{
+    // 载图成功才读取新的基线；无法读出文件时保留空表，覆盖检查会保守提示。
+    m_savedBeatmapFileHashes.clear();
+    if ( beatmap ) {
+        rememberBeatmapFileHash(
+            m_savedBeatmapFileHashes,
+            resolveCurrentProjectPath(beatmap->m_baseMapMetadata.map_path));
+    }
+}
+
+/// @brief 只迁移对应命令入队之后登记过的路径，保留连续改名形成的映射链。
+void BeatmapSession::Persistence::applyResourceRenames(
+    BaseMapMeta& metadata, std::uint64_t generation) const
+{
+    for ( const auto& alias : m_resourceRenameAliases ) {
+        // 已经知道最新路径的命令不复用旧别名，允许后来新建的同名文件正常绑定。
+        if ( alias.m_generation <= generation ) {
+            continue;
+        }
+        if ( metadata.main_audio_path == alias.m_oldPath ) {
+            metadata.main_audio_path = alias.m_newPath;
+        }
+        if ( metadata.song_file_hint == alias.m_oldPath ) {
+            metadata.song_file_hint = alias.m_newPath;
+        }
+        if ( metadata.cover_path == alias.m_oldPath ) {
+            metadata.cover_path = alias.m_newPath;
+        }
+        if ( metadata.main_cover_path == alias.m_oldPath ) {
+            metadata.main_cover_path = alias.m_newPath;
+        }
+    }
+}
 
 /// @brief 消费编辑指令，并把等待中的文件操作从普通交互队列旁路延后。
 /// @return 本轮是否处理了会影响持续轮询或状态反馈的非悬停命令。
@@ -2634,20 +2705,9 @@ bool BeatmapSession::processCommands()
             // UI 不读取注册表，也不等待这轮 mutation 的会话锁。
             ++m_ctx->composeNoteRevision;
         }
-        // 任一谱面变更都让自动备份基线失效，定时策略由其他轮询路径处理。
-        m_autoBackupDirty    = true;
-        const auto& autoSave = m_ctx->lastConfig.settings.autoSave;
-        if ( autoSave.mode == Config::AutoSaveMode::EventTriggered &&
-             autoSave.onObjectModified ) {
-            // 事件触发保存只设置待处理标记，当前命令热路径不直接写文件。
-            m_triggeredAutoSavePending = true;
-        }
-        const auto& autoBackup = m_ctx->lastConfig.settings.autoBackup;
-        if ( autoBackup.mode == Config::AutoSaveMode::EventTriggered &&
-             autoBackup.onObjectModified ) {
-            // 自动备份与覆盖原文件的自动保存分别排队，二者策略互不替代。
-            m_triggeredAutoBackupPending = true;
-        }
+        // 保存调度由私有组件处理；命令分发仍负责通知观察者和同步当前领域模型。
+        m_persistence->noteMutation(m_ctx->lastConfig.settings.autoSave,
+                                    m_ctx->lastConfig.settings.autoBackup);
         // 回调所用的句柄独立于发布槽，替换者不需要等待本次谱面同步完成。
         const auto observer = m_mutationObserver.load();
         if ( observer && m_ctx->currentBeatmap ) {
@@ -2758,7 +2818,7 @@ bool BeatmapSession::processCommands()
                 continue;
             }
             const auto& saveCommand = std::get<CmdSaveBeatmap>(cmd);
-            if ( !beginAsyncBeatmapSave(saveCommand) ) {
+            if ( !m_persistence->beginAsyncBeatmapSave(*m_ctx, saveCommand) ) {
                 // 同一会话任务未完成时保持文件 FIFO 头部，但不拦住普通命令。
                 if ( fromDeferred )
                     m_commands->deferredFileCommands.emplace_front(
@@ -2776,7 +2836,7 @@ bool BeatmapSession::processCommands()
         std::unique_lock fileOperationLock(Event::beatmapFileOperationGate(),
                                            std::defer_lock);
         if ( isFileOperation &&
-             (m_asyncSaveOperation || !fileOperationLock.try_lock()) ) {
+             (hasInFlightBeatmapSave() || !fileOperationLock.try_lock()) ) {
             // 后台保存或其它会话占用门闩时仅延后文件命令，不使用 sleep 或忙等。
             if ( fromDeferred )
                 m_commands->deferredFileCommands.emplace_front(std::move(cmd));
@@ -3913,21 +3973,15 @@ void BeatmapSession::handleCommand(const CmdUpdateViewport& cmd)
 /// @warning 载图低频路径：可能同步写出旧元数据并完整重建 ECS 与派生索引。
 void BeatmapSession::handleCommand(const CmdLoadBeatmap& cmd)
 {
-    if ( m_metadataAutoSavePending && !flushPendingMetadataAutoSave() ) {
+    if ( hasPendingMetadataAutoSave() && !flushPendingMetadataAutoSave() ) {
         // 旧谱面尾随元数据无法保存时拒绝替换，避免载图导致未落盘修改丢失。
         XERROR(
             "BeatmapSession: cannot replace beatmap because pending "
             "metadata could not be saved");
         return;
     }
-    // 新谱面不继承旧谱面的尾随保存计时和自动备份脏状态。
-    m_metadataAutoSavePending         = false;
-    m_metadataAutoSaveTimerNeedsReset = false;
-    m_autoBackupDirty                 = false;
-    m_triggeredAutoBackupPending      = false;
-    m_timedAutoBackupDeadline         = 0.0;
-    m_timedAutoBackupIntervalSeconds  = 0.0;
-    m_requestedAutoBackupTriggers.store(0U, std::memory_order_relaxed);
+    // 只有旧谱面通过落盘门槛才重置调度数据；取消载入时无法丢掉原备份请求。
+    m_persistence->resetAfterBeatmapChange();
     // 载图建立本地项目解析环境，旧协作资源快照和路径映射全部失效。
     m_ctx->collaborationProject.reset();
     m_ctx->collaborationPathRemap.clear();
@@ -3939,21 +3993,14 @@ void BeatmapSession::handleCommand(const CmdLoadBeatmap& cmd)
     m_ctx->composeLessonEnd       = 0.0;
     // 载入在同一个会话中替换谱面。先撤回时间点表格，UI 不会把两份
     // 仍属于旧谱面的快照相互匹配；已经借用旧表的绘制仍可正常结束。
-    m_timingTableRevision.reset();
-    m_timingTableSnapshot.store({});
+    m_tables->invalidateTimingTable();
     SessionUtils::loadBeatmap(*m_ctx, cmd.beatmap);
     if ( m_ctx->currentBeatmap ) {
         // 诊断在完整载入后发布，能检查实际格式解析和资源引用结果。
         publishBeatmapLoadDiagnostics(*m_ctx->currentBeatmap);
     }
-    m_savedBeatmapFileHashes.clear();
-    if ( m_ctx->currentBeatmap ) {
-        // 当前磁盘内容成为外部修改检测基线，路径按当前项目根解析。
-        rememberBeatmapFileHash(
-            m_savedBeatmapFileHashes,
-            resolveCurrentProjectPath(
-                m_ctx->currentBeatmap->m_baseMapMetadata.map_path));
-    }
+    // 以模型完成载入后的路径为准，不引用载入命令中可能已被规范化的旧路径。
+    m_persistence->establishFileBaseline(m_ctx->currentBeatmap.get());
     // 新谱面的 Timing 已整体替换，BPM 事件缓存必须在下一次使用前重建。
     m_ctx->isBpmEventsDirty = true;
 }
@@ -3976,7 +4023,7 @@ void BeatmapSession::handleCommand(const CmdLoadBeatmap& cmd)
 /// 任务；禁止为“保险”无条件标脏全部领域，否则每次保存都会重复扫描完整 ECS。
 void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
 {
-    if ( beginAsyncBeatmapSave(cmd) ) return;
+    if ( m_persistence->beginAsyncBeatmapSave(*m_ctx, cmd) ) return;
     // 同一会话已有后台保存时只延后文件请求；普通编辑命令仍由队列继续消费。
     m_commands->deferredFileCommands.emplace_back(cmd);
 }
@@ -3984,19 +4031,20 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
 /// @brief 创建一致谱面快照并提交后台写入。
 /// @param cmd 保存来源、格式与覆盖策略。
 /// @return 请求已处理或已启动时返回 true；当前会话已有任务时返回 false。
-bool BeatmapSession::beginAsyncBeatmapSave(const CmdSaveBeatmap& cmd)
+bool BeatmapSession::Persistence::beginAsyncBeatmapSave(
+    SessionContext& context, const CmdSaveBeatmap& cmd)
 {
     if ( m_asyncSaveOperation ) return false;
-    if ( !m_ctx->currentBeatmap ) return true;
+    if ( !context.currentBeatmap ) return true;
 
     const bool hadPendingMetadataAutoSave = m_metadataAutoSavePending;
-    const auto oldPath  = m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
+    const auto oldPath  = context.currentBeatmap->m_baseMapMetadata.map_path;
     auto       savePath = resolveCurrentProjectPath(oldPath);
-    if ( usesMmmSaveFormat(m_ctx->lastConfig.settings, cmd) ) {
+    if ( usesMmmSaveFormat(context.lastConfig.settings, cmd) ) {
         // 格式覆写只改变目标路径，活动谱面路径在后台成功后才提交。
         savePath.replace_extension(".mmm");
     }
-    if ( shouldConfirmForcedMmmOverwrite(m_ctx->lastConfig.settings,
+    if ( shouldConfirmForcedMmmOverwrite(context.lastConfig.settings,
                                          m_savedBeatmapFileHashes,
                                          cmd,
                                          savePath) ) {
@@ -4022,9 +4070,9 @@ bool BeatmapSession::beginAsyncBeatmapSave(const CmdSaveBeatmap& cmd)
 
     // 各编辑入口负责精确标脏；清洁领域不能仅因保存请求再次完整重建。
     // 只在逻辑线程触碰已标脏 ECS 和会话模型，后台任务随后仅访问独立副本。
-    SessionUtils::syncBeatmap(*m_ctx);
-    refreshCurrentProjectSongFileHint(*m_ctx->currentBeatmap);
-    auto snapshot = cloneBeatMapForSave(*m_ctx->currentBeatmap);
+    SessionUtils::syncBeatmap(context);
+    refreshCurrentProjectSongFileHint(*context.currentBeatmap);
+    auto snapshot = cloneBeatMapForSave(*context.currentBeatmap);
     if ( !snapshot ) {
         // 快照不完整时保持原谱面与保存点不变，并向 UI 返回明确失败原因。
         // 尚未解析资源或提交编码任务，不产生任何 MC 前导音频副本。
@@ -4047,14 +4095,14 @@ bool BeatmapSession::beginAsyncBeatmapSave(const CmdSaveBeatmap& cmd)
     const auto mainAudioSource =
         isMalody ? prepareMalodySaveAudio(*snapshot, savePath)
                  : std::filesystem::path{};
-    auto operation            = std::make_shared<AsyncSaveOperation>();
-    operation->sourceBeatmap  = m_ctx->currentBeatmap;
+    auto operation            = std::make_unique<AsyncSaveOperation>();
+    operation->sourceBeatmap  = context.currentBeatmap;
     operation->oldPath        = oldPath;
     operation->savePath       = savePath;
     operation->storedSavePath = makeCurrentProjectRelativePath(savePath);
     operation->savedMetadata  = snapshot->m_baseMapMetadata;
     operation->savedMetadata.map_path = operation->storedSavePath;
-    operation->actionRevision = m_ctx->actionStack.captureSaveRevision();
+    operation->actionRevision = context.actionStack.captureSaveRevision();
     operation->hadPendingMetadataAutoSave = hadPendingMetadataAutoSave;
     const auto presentation               = savePresentationFor(cmd.kind);
     const auto savePathText               = Config::pathToUtf8(savePath);
@@ -4131,7 +4179,8 @@ bool BeatmapSession::beginAsyncBeatmapSave(const CmdSaveBeatmap& cmd)
 /// 哈希读取失败不否定已成功写出的谱面，但必须删除旧基线，使下次 ForceMMM 覆盖
 /// 重新请求保守确认。
 /// @warning 每次 update 调用；未完成分支只执行 future::wait_for(0)。
-void BeatmapSession::finalizeAsyncBeatmapSave()
+void BeatmapSession::Persistence::finalizeAsyncBeatmapSave(
+    SessionContext& context)
 {
     if ( !m_asyncSaveOperation || !m_asyncSaveOperation->future.valid() ||
          m_asyncSaveOperation->future.wait_for(std::chrono::seconds(0)) !=
@@ -4142,7 +4191,7 @@ void BeatmapSession::finalizeAsyncBeatmapSave()
     auto       operation = std::move(m_asyncSaveOperation);
     const auto result    = operation->future.get();
     // 会话可能在任务期间载入另一谱面；写盘结果仍已由后台发布，但不能提交旧状态。
-    if ( m_ctx->currentBeatmap != operation->sourceBeatmap ) return;
+    if ( context.currentBeatmap != operation->sourceBeatmap ) return;
     if ( !result.success ) {
         if ( operation->hadPendingMetadataAutoSave ) {
             m_metadataAutoSavePending         = true;
@@ -4151,7 +4200,7 @@ void BeatmapSession::finalizeAsyncBeatmapSave()
         return;
     }
 
-    m_ctx->currentBeatmap->m_baseMapMetadata.map_path =
+    context.currentBeatmap->m_baseMapMetadata.map_path =
         operation->storedSavePath;
     const auto hashKey = makeBeatmapFileHashPathKey(operation->savePath);
     if ( result.fileHash ) {
@@ -4162,14 +4211,14 @@ void BeatmapSession::finalizeAsyncBeatmapSave()
     }
     // 保存期间有新编辑时保留脏状态；旧快照成功不能替后续内容背书。
     static_cast<void>(
-        m_ctx->actionStack.markSavedIfUnchanged(operation->actionRevision));
+        context.actionStack.markSavedIfUnchanged(operation->actionRevision));
     if ( operation->oldPath != operation->storedSavePath ) {
         EditorEngine::instance().updateBeatmapFilePathInProject(
             operation->oldPath, operation->storedSavePath);
-        auto* draftProject = m_ctx->collaborationProject
-                                 ? m_ctx->collaborationProject.get()
+        auto* draftProject = context.collaborationProject
+                                 ? context.collaborationProject.get()
                                  : EditorEngine::instance().getCurrentProject();
-        ProjectDraftLaneService::rebindBeatmapPath(*m_ctx, draftProject);
+        ProjectDraftLaneService::rebindBeatmapPath(context, draftProject);
     } else {
         EditorEngine::instance().syncProjectWithFile(operation->savePath);
     }
@@ -4193,9 +4242,10 @@ void BeatmapSession::finalizeAsyncBeatmapSave()
 /// 同步路径与异步路径保持相同提交规则：冲突检查在写盘前，失败恢复尾随元数据，
 /// 成功后才更新长期路径、哈希、ActionStack 和项目入口。这里可以直接 markSaved，
 /// 因为返回前同一逻辑线程不会并发消费后续会话编辑命令。
-bool BeatmapSession::saveBeatmapBlocking(const CmdSaveBeatmap& cmd)
+bool BeatmapSession::Persistence::saveBeatmapBlocking(SessionContext& context,
+                                                      const CmdSaveBeatmap& cmd)
 {
-    if ( !m_ctx->currentBeatmap ) return true;
+    if ( !context.currentBeatmap ) return true;
     const bool hadPendingMetadataAutoSave     = m_metadataAutoSavePending;
     const auto restorePendingMetadataAutoSave = [&]() {
         if ( !hadPendingMetadataAutoSave ) return;
@@ -4204,11 +4254,11 @@ bool BeatmapSession::saveBeatmapBlocking(const CmdSaveBeatmap& cmd)
     };
     m_metadataAutoSavePending         = false;
     m_metadataAutoSaveTimerNeedsReset = false;
-    const auto oldPath  = m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
+    const auto oldPath  = context.currentBeatmap->m_baseMapMetadata.map_path;
     auto       savePath = resolveCurrentProjectPath(oldPath);
-    if ( usesMmmSaveFormat(m_ctx->lastConfig.settings, cmd) )
+    if ( usesMmmSaveFormat(context.lastConfig.settings, cmd) )
         savePath.replace_extension(".mmm");
-    if ( shouldConfirmForcedMmmOverwrite(m_ctx->lastConfig.settings,
+    if ( shouldConfirmForcedMmmOverwrite(context.lastConfig.settings,
                                          m_savedBeatmapFileHashes,
                                          cmd,
                                          savePath) ) {
@@ -4219,15 +4269,15 @@ bool BeatmapSession::saveBeatmapBlocking(const CmdSaveBeatmap& cmd)
         return false;
     }
 
-    m_ctx->m_needsTimingsSync = true;
-    m_ctx->m_needsNotesSync   = true;
-    SessionUtils::syncBeatmap(*m_ctx);
-    SessionUtils::ensureHitEvents(*m_ctx);
-    refreshCurrentProjectSongFileHint(*m_ctx->currentBeatmap);
+    context.m_needsTimingsSync = true;
+    context.m_needsNotesSync   = true;
+    SessionUtils::syncBeatmap(context);
+    SessionUtils::ensureHitEvents(context);
+    refreshCurrentProjectSongFileHint(*context.currentBeatmap);
     bool success = false;
     if ( isMalodyChartPath(savePath) ) {
         // 同步生命周期事务也只改写独立快照，补静音不能污染当前撤销模型。
-        auto snapshot = cloneBeatMapForSave(*m_ctx->currentBeatmap);
+        auto snapshot = cloneBeatMapForSave(*context.currentBeatmap);
         // 即使生命周期事务必须等待磁盘，也不能在原对象上改写项目资源 ID。
         // 快照创建失败与编码失败均进入已有失败恢复路径，不清除编辑脏状态。
         if ( snapshot ) {
@@ -4239,7 +4289,7 @@ bool BeatmapSession::saveBeatmapBlocking(const CmdSaveBeatmap& cmd)
             if ( !success ) XERROR("MC save failed: {}", exportError);
         }
     } else {
-        success = m_ctx->currentBeatmap->saveToFile(savePath);
+        success = context.currentBeatmap->saveToFile(savePath);
     }
     Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
         .path         = Config::pathToUtf8(savePath),
@@ -4255,21 +4305,21 @@ bool BeatmapSession::saveBeatmapBlocking(const CmdSaveBeatmap& cmd)
     }
 
     const auto storedSavePath = makeCurrentProjectRelativePath(savePath);
-    m_ctx->currentBeatmap->m_baseMapMetadata.map_path = storedSavePath;
+    context.currentBeatmap->m_baseMapMetadata.map_path = storedSavePath;
     rememberBeatmapFileHash(m_savedBeatmapFileHashes, savePath);
-    m_ctx->actionStack.markSaved();
+    context.actionStack.markSaved();
     if ( oldPath != storedSavePath ) {
         EditorEngine::instance().updateBeatmapFilePathInProject(oldPath,
                                                                 storedSavePath);
-        auto* draftProject = m_ctx->collaborationProject
-                                 ? m_ctx->collaborationProject.get()
+        auto* draftProject = context.collaborationProject
+                                 ? context.collaborationProject.get()
                                  : EditorEngine::instance().getCurrentProject();
-        ProjectDraftLaneService::rebindBeatmapPath(*m_ctx, draftProject);
+        ProjectDraftLaneService::rebindBeatmapPath(context, draftProject);
     } else {
         EditorEngine::instance().syncProjectWithFile(savePath);
     }
     static_cast<void>(syncSavedMetadataToProjectEntry(
-        m_ctx->currentBeatmap->m_baseMapMetadata));
+        context.currentBeatmap->m_baseMapMetadata));
     EditorEngine::instance().saveProject();
     return true;
 }
@@ -4664,8 +4714,8 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
 /// @note 新旧路径都以项目相对表示传入，和元数据命令规范化结果一致。
 /// @note 同一源文件再次改名时可形成链，消费按改名记录顺序连续投影。
 /// @note 不遍历既有队列，保留并发生产者和文件操作原有的入队顺序。
-void BeatmapSession::recordResourceRename(const std::filesystem::path& oldPath,
-                                          const std::filesystem::path& newPath)
+void BeatmapSession::Persistence::recordResourceRename(
+    const std::filesystem::path& oldPath, const std::filesystem::path& newPath)
 {
     if ( oldPath != newPath ) {
         // 先登记别名、再发布代次，提交途中的 UI 草稿仍按旧资源迁移。
@@ -4676,6 +4726,13 @@ void BeatmapSession::recordResourceRename(const std::filesystem::path& oldPath,
             ResourceRenameAlias{ oldPath, newPath, generation });
         m_resourceRenameGeneration.store(generation, std::memory_order_relaxed);
     }
+}
+
+/// @brief 将请求交给本会话的持久化组件。
+void BeatmapSession::recordResourceRename(const std::filesystem::path& oldPath,
+                                          const std::filesystem::path& newPath)
+{
+    m_persistence->recordResourceRename(oldPath, newPath);
 }
 
 /// @brief 更新谱面元数据，并同步主音轨提示对应的首个 Main BGM 采样。
@@ -4725,23 +4782,8 @@ void BeatmapSession::recordResourceRename(const std::filesystem::path& oldPath,
             normalizeCurrentProjectMetadataPaths(updatedMeta);
             // 只迁移命令入队以后发生的改名；后来新建同名文件时的新命令不受影响。
             // 此处只读取别名表和命令代次，不增加逻辑 update 中的文件系统访问。
-            for ( const auto& alias : m_resourceRenameAliases ) {
-                if ( alias.m_generation <= cmd.m_resourceRenameGeneration ) {
-                    continue;
-                }
-                if ( updatedMeta.main_audio_path == alias.m_oldPath ) {
-                    updatedMeta.main_audio_path = alias.m_newPath;
-                }
-                if ( updatedMeta.song_file_hint == alias.m_oldPath ) {
-                    updatedMeta.song_file_hint = alias.m_newPath;
-                }
-                if ( updatedMeta.cover_path == alias.m_oldPath ) {
-                    updatedMeta.cover_path = alias.m_newPath;
-                }
-                if ( updatedMeta.main_cover_path == alias.m_oldPath ) {
-                    updatedMeta.main_cover_path = alias.m_newPath;
-                }
-            }
+            m_persistence->applyResourceRenames(updatedMeta,
+                                                cmd.m_resourceRenameGeneration);
         }
         updatedMeta.track_count = std::max(1, updatedMeta.track_count);
         // BGM 轨道数由专门交互命令维护，元数据编辑不能绕过采样迁移逻辑覆盖。
@@ -4794,8 +4836,7 @@ void BeatmapSession::recordResourceRename(const std::filesystem::path& oldPath,
         m_ctx->currentBeatmap->m_baseMapMetadata = updatedMeta;
         // 元数据值提交后标记撤销栈脏，并安排用户停止编辑后的尾随保存。
         m_ctx->actionStack.markDirty();
-        m_metadataAutoSavePending         = true;
-        m_metadataAutoSaveTimerNeedsReset = true;
+        m_persistence->scheduleMetadataSave();
         XINFO("BeatmapSession: Metadata updated for {}",
               m_ctx->currentBeatmap->m_baseMapMetadata.name);
         if ( oldMetadata.map_path != updatedMeta.map_path ) {
@@ -4860,8 +4901,7 @@ void BeatmapSession::handleCommand(const CmdMarkBeatmapMetadataDirty& cmd)
 
     // 扩展元数据已由调用方原地更新，只需推进保存点与尾随计时状态。
     m_ctx->actionStack.markDirty();
-    m_metadataAutoSavePending         = true;
-    m_metadataAutoSaveTimerNeedsReset = true;
+    m_persistence->scheduleMetadataSave();
 }
 
 }  // namespace MMM::Logic

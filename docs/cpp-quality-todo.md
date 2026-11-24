@@ -14,11 +14,13 @@
 
   已验证。视图注册表和工程工作区恢复协调器位于既有 Impl，视图借用与 GPU 等待仍走现有入口。Linux RelWithDebInfo 全量构建和 13 项相关 CTest 通过。Ninja 活动对象中 ProjectUiLifecycleState.h 从 70 降至 2，UIManager.h 保留 69 个公开入口消费者。
 
-- [ ] **R63 · P0 · BeatmapSession 的保存调度和表格投影可独立拥有**
+- [x] **R63 · P0 · BeatmapSession 的保存调度和表格投影可独立拥有**
 
   53 个对象依赖；保存时钟、在途任务、改名状态、表格快照与会话控制处于同一布局。与 PERF-05 已迁移的 UI 读接口不同。 先由私有持久化组件承担自动保存时钟、备份和在途任务，再把时序与批注投影交给内部发布器。保留会话身份、控制入口和热读取语义。覆盖保存中改名/编辑、关闭时回收、换图及表格快照复用。
 
   [BeatmapSession.h L342](../Modules/Game/Logic/include/logic/BeatmapSession.h#L342)、[BeatmapSession.cpp L651](../Modules/Game/Logic/src/logic/session/BeatmapSession.cpp#L651)
+
+  已验证。将保存调度、后台任务、文件哈希与资源改名映射归入 Persistence，将时间点和批注快照归入 TableProjection。原命令队列继续负责保存顺序。Linux RelWithDebInfo 全量构建及 18 项相关 CTest 通过。同一 Ninja 构建的活动对象依赖数如下。BeatmapSession.h 53,BeatmapSession_Domains.h 4。
 
 - [ ] **R64 · P0 · AudioManager 同时拥有时间线安装退休与音效资产池**
 
