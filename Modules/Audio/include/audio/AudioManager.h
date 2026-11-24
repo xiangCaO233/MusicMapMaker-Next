@@ -572,6 +572,13 @@ public:
     /// @brief 获取当前是否启用了 EQ
     bool isMainTrackEQEnabled() const;
 
+    /// @brief 在控制线程读取主轨 EQ 的参数代次，供后台分析交付前校验。
+    /// @warning UI 每帧可调用；只读取控制线程本身更新的标量。
+    [[nodiscard]] std::uint64_t getMainTrackEQRevision() const
+    {
+        return m_mainTrackEQRevision;
+    }
+
     /// @brief 获取当前 EQ 预设类型
     EQPreset getMainTrackEQPreset() const;
 
@@ -963,6 +970,9 @@ private:
 
     /// @brief 当前主音轨 EQ 预设。
     EQPreset m_mainEQPreset{ EQPreset::None };
+
+    /// @brief 仅由控制线程维护的主轨 EQ 代次，不随节点更换重置。
+    std::uint64_t m_mainTrackEQRevision{ 0U };
 
     /// @brief 当前主音轨时间拉伸节点。
     std::shared_ptr<ice::TimeStretcher> m_stretcher;

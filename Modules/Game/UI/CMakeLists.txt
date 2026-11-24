@@ -274,6 +274,7 @@ add_library(
   src/ui/imgui/audio/AudioTrackControllerUI_EQ.cpp
   src/ui/imgui/audio/ProjectAudioPreviewControls.cpp
   src/ui/imgui/audio/AudioWaveformView.cpp
+  src/ui/imgui/audio/WaveformAnalysis.cpp
   src/ui/imgui/audio/AudioSpectrumView.cpp
   # 调试、画布标签和 Clay 布局桥。
   src/ui/imgui/DebugWindowUI.cpp
@@ -578,6 +579,16 @@ mmm_add_test_executable(UI CollaborationAudioViewTest
 target_link_libraries(CollaborationAudioViewTest PRIVATE UI Canvas 3rd_imgui)
 mmm_register_test_case(NAME CollaborationAudioViewTest COMMAND
                        CollaborationAudioViewTest)
+
+# 波形回归复用正式分析入口，通过可控后台队列使关闭、切轨和参数代次变更发生在确定的阶段。 内存解码器提供可区分的长曲包络，避免测试依赖桌面、音频设备或额外的
+# LFS 资源。 通过私有源目录访问任务交付状态，正式 UI 头文件与组件使用方不需要感知测试细节。
+mmm_add_test_executable(UI WaveformAnalysisTest tests/WaveformAnalysisTest.cpp)
+target_include_directories(WaveformAnalysisTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(WaveformAnalysisTest PRIVATE UI Audio)
+mmm_register_test_case(NAME WaveformAnalysisTest COMMAND WaveformAnalysisTest)
+# 若关闭或绘制误等待后台，无法从用例内推进屏障；由 CTest 限制失效时的测试耗时。
+set_tests_properties(WaveformAnalysisTest PROPERTIES TIMEOUT 30)
 
 # 协作房卡封面测试覆盖真实图片居中缩略、Base64 往返和无效输入拒绝。 测试资源通过 MMM_TEST_RESOURCE_DIR
 # 传入，禁止向源码资源目录写输出。
