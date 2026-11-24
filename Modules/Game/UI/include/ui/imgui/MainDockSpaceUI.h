@@ -11,6 +11,7 @@
 #include "ui/imgui/windows/PgoUploadConsentWindow.h"
 #include <functional>
 #include <memory>
+#include <string>
 #include <string_view>
 
 namespace MMM::Graphic
@@ -179,8 +180,8 @@ public:
     /// @brief 窗口是否最大化 (通过事件同步)
     bool m_isMaximized{ false };
 
-    /// @brief 是否显示退出确认弹窗
-    bool m_showExitConfirmation{ false };
+    /// @brief 发起普通关闭请求时取得的谱面名，弹窗持续借用此副本。
+    std::string m_exitConfirmationMapName;
 
     /// @brief 待导入的音频路径 (用于模态弹窗)
     std::string m_pendingImportPath;

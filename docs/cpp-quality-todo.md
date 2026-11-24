@@ -183,6 +183,9 @@
     | `Modules/Game/Logic/src/logic/session/BeatmapSession_TimingTable.cpp` | 38 | 84 | 31.15% |
     | `Modules/Game/Logic/tests/BrushPaletteSessionStateTest.cpp` | 369 | 861 | 30.00% |
 
+  - 已完成普通关闭确认批次。窗口收到关闭请求时，逻辑侧在同一临界区读取全部会话的脏状态和活动谱面名。弹窗持有名称副本，绘制与按钮分发均不持有会话锁。Linux Clang 22 RelWithDebInfo 全量构建及 11 项相关 CTest 通过，覆盖后台脏谱面、活动切换、关闭后的值保留和保存基线清理。Ninja 活动编译对象中，`SessionContext.h` 扇出由 72 降至 71，移除 `MainDockSpaceUI.cpp`。
+  - 注释／代码行数分别为 `EditorEngine.h` 375/252、`EditorEngine.cpp` 1712/3979、`MainDockSpaceUI.h` 75/112、`MainDockSpaceUI.cpp` 429/943、`BrushPaletteSessionStateTest.cpp` 387/902，均达到 30%。
+
 - [x] **PERF-06 P3 离屏几何容量扩张在命令录制阶段等待全 GPU 空闲**
 
   - 离屏顶点和索引缓冲按帧槽保存容量。渲染器成功等待该槽的提交 fence 后，录制才可复用或扩张该槽；保留其他在途缓冲及固定大小 uniform。扩容记录槽、需要／原有／新增容量和分配耗时。

@@ -117,10 +117,11 @@ public:
         LogicCommand&&               cmd,
         std::optional<std::uint64_t> playbackGeneration = std::nullopt);
 
-    /**
-     * @brief 检查当前是否有未保存的修改
-     */
-    bool hasUnsavedChanges() const;
+    /// @brief 捕获普通项目关闭确认所需的谱面名。
+    /// @return 所有会话均已保存时为空，否则返回活动谱面名；无活动谱面时返回
+    /// Unknown。
+    /// @warning 只在窗口收到关闭请求时调用；会短暂等待会话更新并复制名称。
+    [[nodiscard]] std::optional<std::string> captureUnsavedExitMapName() const;
 
     /// @brief 处理新建谱面指令 (向导/项目管理)
     void handleCreateBeatmap(const CmdCreateBeatmap& cmd);

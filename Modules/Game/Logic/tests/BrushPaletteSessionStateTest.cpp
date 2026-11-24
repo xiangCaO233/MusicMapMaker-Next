@@ -39,6 +39,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 
 // 本组使用进程内 EditorEngine 单例，验证编辑器级状态继承与会话级输入路由。
 // 创建空谱面会话，不加载音频或谱面文件，也不创建真实画布窗口。
@@ -111,7 +112,7 @@ bool testPaletteRestoredAfterSessionClose()
     // 零时间步只消费状态，不依赖播放时间推进或等待固定帧数。
     // 读取目标会话落地后的画笔状态，而非仅检查编辑器暂存的命令或配置。
     const auto& restored = session->getContext().brushState.customColors;
-    const bool matches = colorMatches(restored.tap, colors[0]) &&
+    const bool  matches  = colorMatches(restored.tap, colors[0]) &&
                          colorMatches(restored.head, colors[1]) &&
                          colorMatches(restored.hold, colors[2]) &&
                          colorMatches(restored.end, colors[3]) &&
@@ -304,7 +305,7 @@ bool testBackgroundCanvasMousePositionRouting()
     const auto& activeContext = activeSession->getContext();
     // 同时检查目标收到事件、非目标未被污染，比只检查后台坐标更严格。
     const auto& backgroundContext = backgroundSession->getContext();
-    const bool routed = activeContext.mouseCameraId.empty() &&
+    const bool  routed            = activeContext.mouseCameraId.empty() &&
                         // 空相机标识是初始状态，用作活动会话未接收输入的证据。
                         backgroundContext.mouseCameraId == backgroundCameraId &&
                         backgroundContext.isMouseInCanvas &&
@@ -421,7 +422,7 @@ bool testSkinSelectionSurvivesPaletteRefresh()
         // 写入后清除内存选择，读取结果必须真正来自持久化文件。
         ok                                            = app.save();
         app.getEditorSettings().selectedSkinDirectory = "mmm-default";
-        ok = app.load() && ok &&
+        ok                                            = app.load() && ok &&
              app.getEditorSettings().selectedSkinDirectory == "rm";
     }
     // 测试结束恢复单例，后续会话及并发测试不继承本场景状态。
@@ -827,9 +828,9 @@ bool testPublishedActiveGestureState()
 
     // 异步读取必须在锁释放以前完成；故障路径也释放锁再回收任务。
     std::unique_lock sessionLock(engine.getSessionMutex());
-    auto       reader = std::async(std::launch::async,
-                                   [&] { return engine.activeGestureState(); });
-    const bool ready =
+    auto             reader = std::async(std::launch::async,
+                             [&] { return engine.activeGestureState(); });
+    const bool       ready =
         reader.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
     sessionLock.unlock();
     // 结果使用普通值，测试不在两个线程间分享 SessionContext 中的引用。
@@ -1265,6 +1266,65 @@ bool testTimingTablePublication()
     return ok;
 }
 
+/// @brief 确认后台谱面未保存时也要求退出确认，并独立保存活动谱面名称。
+/// @return 是否正确区分全局脏状态、活动标签和经过关闭的会话。
+///
+/// 构造两张内存谱面，无需模拟平台窗口或写入工程文件。退出提示由普通关闭
+/// 入口在同一临界区读取脏状态和名称，名称随快照复制到界面，因此可在其
+/// 对应的会话关闭后继续显示。此用例直接运行这一捕获入口。
+/// @note 撤销栈保存基线通过内存状态改变，与真实的谱面保存命令路径独立。
+bool testExitConfirmationMapName()
+{
+    auto& engine = MMM::Logic::EditorEngine::instance();
+    // 两张模型谱面的名称与 tab 名刻意不同，验证弹窗使用原始显示内容。
+    const auto nameMap = [](std::string name) {
+        auto beatmap                    = std::make_shared<MMM::BeatMap>();
+        beatmap->m_baseMapMetadata.name = std::move(name);
+        // 四键是载入内存谱面的最小有效夹具，不需要音频和工程资源。
+        beatmap->m_baseMapMetadata.track_count = 4;
+        return beatmap;
+    };
+    const auto first = engine.createSession(
+        nameMap("First raw name"), "First tab caption", false);
+    const auto second = engine.createSession(
+        nameMap("Second raw name"), "Second tab caption", false);
+    // 创建只排队载入谱面。这里没有后台逻辑线程，须推进各会话消费载入命令。
+    const auto config = engine.getEditorConfig();
+    engine.setActiveSessionIndex(second);
+    if ( auto secondSession = engine.getActiveSession() )
+        secondSession->update(0, config, true);
+    // 固定第一张为最初的活动谱面，再推进其载入。
+    engine.setActiveSessionIndex(first);
+    auto session = engine.getActiveSession();
+    if ( session ) session->update(0, config, true);
+    // 干净的会话不阻止普通退出；直接改变撤销基线隔离此处的确认逻辑。
+    bool valid = session && !engine.captureUnsavedExitMapName();
+    if ( session ) session->getContextMutable().actionStack.markDirty();
+
+    // 切到干净谱面后，后台的未保存修改仍应触发确认。
+    engine.setActiveSessionIndex(second);
+    const auto captured = engine.captureUnsavedExitMapName();
+    // 确认词使用当前窗口展示的谱面，不取决于首先检测到的脏撤销栈。
+    valid &= captured && *captured == "Second raw name";
+
+    // 活动谱面关闭后再次查询时应看到剩余谱面，已捕获的值仍供旧弹窗保留。
+    engine.closeSession(second, false);
+    engine.setActiveSessionIndex(first);
+    const auto remaining = engine.captureUnsavedExitMapName();
+    // 第二次捕获的名称与先前的返回值分别独立，不依赖缓存中的活动索引。
+    valid &= remaining && *remaining == "First raw name" && captured &&
+             *captured == "Second raw name";
+    // 保存使活动谱面恢复干净；再次发起关闭时旧的提示值不能影响新查询。
+    if ( session ) session->getContextMutable().actionStack.markSaved();
+    valid &= !engine.captureUnsavedExitMapName();
+    // 即便之前的断言已失败，也要关闭夹具会话，防止进程退出阶段保留对象。
+    engine.closeSession(first, false);
+    valid &= !engine.captureUnsavedExitMapName();
+    if ( !valid )
+        XERROR("Exit confirmation did not preserve active map identity");
+    return valid;
+}
+
 }  // namespace
 
 /// @brief 运行画笔调色盘跨会话恢复测试。
@@ -1284,7 +1344,9 @@ int main()
                    testPublishedActiveGestureState() &&
                    testToolbarTrackLayoutPublication() &&
                    testActivePlaybackStatePublication() &&
-                   testTimingTablePublication() && testCameraConfigSnapshot() &&
+                   testTimingTablePublication() &&
+                   testExitConfirmationMapName() &&
+                   testCameraConfigSnapshot() &&
                    testConcurrentEditorConfigSnapshots()
                ? 0
                : 1;

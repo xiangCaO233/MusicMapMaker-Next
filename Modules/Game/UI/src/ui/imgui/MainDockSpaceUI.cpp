@@ -20,10 +20,7 @@
 #include "graphic/imguivk/VKTexture.h"
 #include "graphic/window/WindowPlatform.h"
 #include "imgui.h"
-#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
-#include "logic/session/context/SessionContext.h"
-#include "mmm/beatmap/BeatMap.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/ToolbarDockLayout.h"
@@ -812,13 +809,15 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                     TemporaryProjectAfterSaveAction::ExitApp;
                 // 记录退出意图，保存成功后由队列消费路径恢复关闭请求。
                 m_showTemporaryProjectCloseModal = true;
-            } else if ( !m_temporaryProjectExitConfirmed &&
-                        engine.hasUnsavedChanges() ) {
-                // 普通工程拦截关闭请求，并使用稳定 ### ID 打开确认框。
-                Graphic::setPlatformWindowShouldClose(nativeWin, false);
-                const std::string exitPopupName = fmt::format(
-                    "{}###ExitConfirmation", TR("ui.exit.confirm_title"));
-                ::MMM::UI::FeedbackOpenPopup(exitPopupName.c_str());
+            } else if ( !m_temporaryProjectExitConfirmed ) {
+                if ( auto exitMap = engine.captureUnsavedExitMapName() ) {
+                    // 同一次关闭请求的名称在弹窗存续期间保持不变，绘制无需取锁。
+                    m_exitConfirmationMapName = std::move(*exitMap);
+                    Graphic::setPlatformWindowShouldClose(nativeWin, false);
+                    const std::string exitPopupName = fmt::format(
+                        "{}###ExitConfirmation", TR("ui.exit.confirm_title"));
+                    ::MMM::UI::FeedbackOpenPopup(exitPopupName.c_str());
+                }
             }
             // 已确认的普通关闭请求保持 GLFW_TRUE，让平台循环自然退出。
         }
@@ -830,21 +829,10 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         // 可见标题允许随语言变化，### 后缀保证 ImGui 弹窗身份稳定。
         Utils::CenteredModalPopupScope exitModalScope(dpiScale);
         if ( exitModalScope.begin(exitPopupName.c_str()) ) {
-            // 锁只覆盖弹窗当前帧的会话名称读取和控件提交。
-            // 这是低频确认路径，不允许扩展到常规主界面绘制。
-            std::lock_guard<std::recursive_mutex> sessionLock(
-                engine.getSessionMutex());
-            // 只在退出弹窗可见的低频路径加锁，读取当前谱面显示名。
-            auto        session = engine.getActiveSession();
-            std::string mapName = "Unknown";
-            if ( session && session->getContext().currentBeatmap ) {
-                // 谱面显示名按值复制，避免格式化文本持有模型内部引用。
-                mapName = session->getContext()
-                              .currentBeatmap->m_baseMapMetadata.name;
-            }
-
+            // 关闭请求已完成逻辑侧查询，提交控件期间只读取 UI 持有的名称。
             ImGui::TextUnformatted(
-                TR_FMT("ui.exit.confirm_msg_fmt", mapName).c_str());
+                TR_FMT("ui.exit.confirm_msg_fmt", m_exitConfirmationMapName)
+                    .c_str());
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
