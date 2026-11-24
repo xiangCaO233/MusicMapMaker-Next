@@ -5187,8 +5187,12 @@ void EditorEngine::loop()
                 m_cursorSmokeLifeOverride.store(cursorSmokeLifeOverride,
                                                 std::memory_order_relaxed);
                 // 门控在全部派生状态发布后记录本轮完成时刻，避免把处理耗时算作空闲。
-                unlimitedIdleUpdateGate.completePoll(FrameLimitClock::now(),
-                                                     hasUnlimitedSessionWork);
+                // 连续推进时 shouldPoll 始终放行，不读取空闲截止线；
+                // 真正进入空闲后才取完成时刻，保留慢更新之后的完整维护间隔。
+                unlimitedIdleUpdateGate.completePoll(
+                    hasUnlimitedSessionWork ? currentTime
+                                            : FrameLimitClock::now(),
+                    hasUnlimitedSessionWork);
             }
         } else {
             // 没有会话时丢弃累计 dt；未来新会话不能继承空窗期的巨大更新时间。
@@ -5209,18 +5213,21 @@ void EditorEngine::loop()
              applyProjectDirectoryScan() )
             pendingDirectoryChange = true;
 
-        const auto now = FrameLimitClock::now();
-        if ( projectController.consumeDirectoryChangePending() ) {
-            // 不因批量复制保存多份中间结果。扫描期间收到的新通知保留到下一轮。
-            // 每条通知只更新时间和待处理位；一个连续批次合并为一个扫描。
-            pendingDirectoryChange = true;
-            lastDirectoryChange    = now;
-        }
-        if ( pendingDirectoryChange &&
-             now - lastDirectoryChange >= std::chrono::milliseconds(200) ) {
-            // 并发的通知可以积累一个新请求，不为每条文件变动分配任务。
-            // 正在处理此前一轮时保留此标记，待其完成后才捕获新的工程值。
-            pendingDirectoryChange = !projectController.startDirectoryScan();
+        // 先消费新通知，不能因为已有待处理批次而短路这次读取。
+        const bool directoryChanged =
+            projectController.consumeDirectoryChangePending();
+        if ( directoryChanged || pendingDirectoryChange ) {
+            const auto now = FrameLimitClock::now();
+            if ( directoryChanged ) {
+                // 批量写入从最后一次通知重新计时；扫描就绪本身不重设通知时间。
+                pendingDirectoryChange = true;
+                lastDirectoryChange    = now;
+            }
+            if ( now - lastDirectoryChange >= std::chrono::milliseconds(200) ) {
+                // 后台仍在扫描时保留请求，下一轮重试，无需阻塞编辑线程。
+                pendingDirectoryChange =
+                    !projectController.startDirectoryScan();
+            }
         }
     }
 }
