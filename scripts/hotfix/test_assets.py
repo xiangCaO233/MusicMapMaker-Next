@@ -2,8 +2,10 @@
 
 import json
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 from prepare_assets import digest, prepare, safe_path
@@ -73,6 +75,61 @@ class AssetHotfixTest(unittest.TestCase):
         validate(self.output, self.live)
         # 模拟另一发布在准备后改变清单，候选文件保持不变。
         self.baseline.write_text('{}')
+        with self.assertRaisesRegex(ValueError, 'baseline changed'):
+            validate(self.output, self.live)
+
+    # /// @brief 模拟选中资产在读取摘要和源复制之间被编辑器保存。
+    def test_source_change_during_prepare(self):
+        """候选的单文件、清单和全量包必须引用相同的暂存字节。
+
+        真实 copyfile 在新内容写完后打开源文件。旧实现会先读取原摘要，
+        因而后续的发布预检拒绝；当前准备完成的候选需直接通过校验。
+        """
+        original = self.source / 'a.lua'
+        # 初始内容也异于基线，确保旧实现会先记下错误摘要后继续复制。
+        original.write_bytes(b'before-copy')
+        # 保留真实复制器，mock 只负责固定竞态发生的时点。
+        real_copy = shutil.copyfile
+
+        def edit_at_copy(source, destination):
+            # 只改变可编辑源，保留复制产生的所有其他内容和副作用。
+            if source == original:
+                original.write_bytes(b'after-copy-with-different-size')
+            return real_copy(source, destination)
+
+        with patch('prepare_assets.shutil.copyfile', side_effect=edit_at_copy):
+            manifest, plan = prepare(self.source, self.baseline, self.package,
+                                     ['a.lua'], 'v0.6.2', 1, self.output)
+        # 计划以单文件作为第一项。比对实际文件、清单摘要和 ZIP 解压后的字节。
+        staged = self.output / plan['uploads'][0]['key']
+        expected = b'after-copy-with-different-size'
+        self.assertEqual(staged.read_bytes(), expected)
+        self.assertEqual(manifest['files'][0]['sha256'], 'sha256:' + digest(staged))
+        with zipfile.ZipFile(self.output / plan['uploads'][-1]['key']) as archive:
+            self.assertEqual(archive.read('assets/a.lua'), expected)
+        # 运行正式发布预检，确认客户端可使用该候选，无需任何线上访问。
+        validate(self.output, self.live)
+
+    # /// @brief 发布计划绑定实际解析的基线，即使准备期间读到了新版本。
+    def test_baseline_change_during_prepare(self):
+        """准备完成后不应以最新清单的摘要掩盖并发发布。"""
+        original = self.source / 'a.lua'
+        original.write_bytes(b'selected change')
+        # 捕获开始准备时的基线作为唯一正确身份。
+        old_digest = digest(self.baseline)
+        real_copy = shutil.copyfile
+
+        def change_baseline_at_copy(source, destination):
+            # 删除原清单结构，模拟新一轮发布接管同一个入口路径。
+            if source == original:
+                self.baseline.write_text('{}')
+            return real_copy(source, destination)
+
+        with patch('prepare_assets.shutil.copyfile', side_effect=change_baseline_at_copy):
+            _, plan = prepare(self.source, self.baseline, self.package,
+                              ['a.lua'], 'v0.6.2', 1, self.output)
+        # 只有原摘要能让独立发布器拒绝覆盖期间出现的新基线。
+        self.assertEqual(plan['baseline_sha256'], old_digest)
         with self.assertRaisesRegex(ValueError, 'baseline changed'):
             validate(self.output, self.live)
 

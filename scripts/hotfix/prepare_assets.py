@@ -12,6 +12,7 @@ import json
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import tempfile
 import zipfile
 from urllib.parse import quote
 
@@ -59,7 +60,9 @@ def prepare(source, baseline_path, package, selected, base_version, revision, ou
     # 正式版本和修订号构成对象路径，禁止通过参数逃逸输出目录。
     if not re.fullmatch(r"v\d+\.\d+\.\d+", base_version) or revision <= 0:
         raise ValueError("base version or revision is invalid")
-    baseline = json.loads(Path(baseline_path).read_text(encoding="utf-8"))
+    # 清单摘要绑定本轮实际解析的字节，不能在准备结束时重新读取另一代清单。
+    baseline_bytes = Path(baseline_path).read_bytes()
+    baseline = json.loads(baseline_bytes.decode("utf-8"))
     previous_base = baseline.get("base_version", baseline.get("version"))
     if previous_base != base_version or revision <= baseline.get("asset_revision", 0):
         raise ValueError("baseline version mismatch or non-increasing revision")
@@ -132,24 +135,28 @@ def prepare(source, baseline_path, package, selected, base_version, revision, ou
     # 上传计划只包含差异资源和完整包，未选项不从分支读取。
     # 同一正式版本可以累积多次选择覆盖，其他资产仍继承线上基线。
     uploads = []
-    for name in sorted(chosen):
-        original = source / name
-        checksum = digest(original)
-        # 相同内容保留旧 URL，客户端也不会重新下载。
-        if name in records and records[name]["sha256"].removeprefix("sha256:") == checksum:
-            continue
-        target = tree / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(original, target)
-        # ZIP 和单文件都从同一个暂存副本生成，避免两次读取不同源字节。
-        key = prefix + "/files/" + name
-        staged = output / key
-        staged.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(target, staged)
-        entry = {"path": name, "url": "/" + quote(key, safe="/"),
-                 "sha256": "sha256:" + checksum, "size": staged.stat().st_size}
-        records[name] = entry
-        uploads.append({"key": key, "sha256": checksum, "size": entry["size"]})
+    with tempfile.TemporaryDirectory(prefix="asset-copy-", dir=output) as snapshot:
+        copy = Path(snapshot) / "content"
+        for name in sorted(chosen):
+            # 源文件可能在准备过程中被保存。先完成独占暂存，再从同一份稳定字节
+            # 判断是否变化以及生成单文件对象和全量 ZIP。
+            shutil.copyfile(source / name, copy)
+            checksum = digest(copy)
+            # 内容不变时保留旧 URL 和基线树，临时副本可被下个选择项复用。
+            if name in records and records[name]["sha256"].removeprefix("sha256:") == checksum:
+                continue
+            key = prefix + "/files/" + name
+            staged = output / key
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            copy.replace(staged)
+            target = tree / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # ZIP 树从已发布计划的单文件副本建立，不再访问可变源码路径。
+            shutil.copyfile(staged, target)
+            entry = {"path": name, "url": "/" + quote(key, safe="/"),
+                     "sha256": "sha256:" + checksum, "size": staged.stat().st_size}
+            records[name] = entry
+            uploads.append({"key": key, "sha256": checksum, "size": entry["size"]})
     if not uploads:
         # 不发布空修订，避免用户看到版本变化却没有任何可更新内容。
         raise ValueError("selected assets have no content changes")
@@ -170,7 +177,7 @@ def prepare(source, baseline_path, package, selected, base_version, revision, ou
                             "size": package_out.stat().st_size},
                 "files": [records[name] for name in sorted(records)]}
     # 发布计划记录原清单精确摘要，用于服务器并发修改检测。
-    plan = {"baseline_sha256": digest(baseline_path), "uploads": uploads}
+    plan = {"baseline_sha256": hashlib.sha256(baseline_bytes).hexdigest(), "uploads": uploads}
     (output / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (output / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     # 清理范围只有新输出内 tree，不接触源资源或已发布包。
