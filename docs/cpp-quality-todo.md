@@ -629,7 +629,9 @@
 
 ### P2 · R19 · 流式解码将估计长度当作硬上限
 
-- [ ] 小估值会拒绝末尾页请求，零估值直接拒绝加载，即便后端实际仍可读。以 mock 提供三页 PCM，分别上报一页及零页，核对真实 EOF 和结尾音频。
+- [x] 小估值会拒绝末尾页请求，零估值直接拒绝加载，即便后端实际仍可读。以 mock 提供三页 PCM，分别上报一页及零页，核对真实 EOF 和结尾音频。
+
+  已验证。ICE 独立 Linux RelWithDebInfo 全量构建、2 项 CTest 和流式回归连续 30 次通过，覆盖一页估值、零估值、尾页 PCM 和实际 EOF。主仓 Linux 全量构建及 225 项 CTest 通过；以修复对象临时重新链接音频套件，在 SDL 虚拟后端通过 5 项音频回归。ICE 来源 [IonCachyEngine #7](https://github.com/xiangCaO233/IonCachyEngine/pull/7)，主仓指向合并提交 `021a2d890ace09661320eb59e30d6f376b2e1705`。仓库默认 ICE 预编译包仍待由指定构建环境刷新，谱面时间线仍按载入时的长度排程。
 
 [3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp:114](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp#L114) [3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp:252](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp#L252) [3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp:315](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp#L315) [3rdpty/sources/IonCachyEngine/src/ice/manage/dec/ffmpeg/FFmpegDecoderInstance.cpp:793](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/ffmpeg/FFmpegDecoderInstance.cpp#L793)
 
