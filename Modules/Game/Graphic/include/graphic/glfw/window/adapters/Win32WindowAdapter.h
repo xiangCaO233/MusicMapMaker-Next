@@ -1,10 +1,10 @@
 #pragma once
 
 #ifdef _WIN32
-#    include "event/ui/UpdateDragAreaEvent.h"
+#    include "event/core/SubscriptionID.h"
 #    include "graphic/glfw/window/adapters/IWindowFrameAdapter.h"
+#    include <memory>
 #    include <span>
-#    include <vector>
 #    include <windows.h>
 
 struct GLFWwindow;
@@ -152,19 +152,16 @@ private:
                                        LPARAM lParam, UINT_PTR uIdSubclass,
                                        DWORD_PTR dwRefData);
 
-    /**
-     * @brief 处理拖拽区域更新事件
-     * @param e 拖拽区域更新事件
-     */
-    void onUpdateDragArea(const Event::UpdateDragAreaEvent& e);
-
 private:
-    GLFWwindow* m_window{ nullptr };           ///< 关联的 GLFW 窗口指针
-    HWND        m_hwnd{ nullptr };             ///< 关联的 Win32 原生窗口句柄
-    std::vector<Event::DragArea> m_dragAreas;  ///< 缓存的允许拖拽的矩形区域列表
+    GLFWwindow* m_window{ nullptr };  ///< 关联的 GLFW 窗口指针
+    HWND        m_hwnd{ nullptr };    ///< 关联的 Win32 原生窗口句柄
 
-    /// @brief 缓存的标题栏拖拽排除区域列表。
-    std::vector<Event::DragArea> m_blockedDragAreas;
+    /// @brief 独立收件状态，在途回调只操作这种状态，不借用适配器。
+    struct DragAreaState;
+    /// @brief 窗口独享命中区域；销毁后重建窗口使用新的收件状态。
+    std::shared_ptr<DragAreaState> m_dragAreaState;
+    /// @brief 析构时注销的区域更新订阅。
+    Event::SubscriptionID m_dragAreaSubscription{};
 
     /// @brief 最近一次非最小化尺寸消息是否表示窗口处于最大化。
     bool m_lastKnownMaximized{ false };

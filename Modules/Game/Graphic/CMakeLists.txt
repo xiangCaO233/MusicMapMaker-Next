@@ -94,6 +94,13 @@ if(WIN32)
   # Win32 窗框使用 DWM 与通用控件 API，注册表主题探测使用 Advapi32。 Shell32
   # 提供更新后首次启动的图标缓存失效通知，避免要求用户重启 Explorer。
   target_link_libraries(Graphic PRIVATE dwmapi comctl32 advapi32 shell32)
+  # 用真实的 GLFW 隐藏窗口和 HWND 命中测试覆盖注销后的在途事件。 测试只在 Windows 创建窗口，不初始化 Vulkan 或 OpenGL
+  # 渲染设备。
+  mmm_add_test_executable(Graphic Win32DragAreaLifetimeTest
+                          tests/Win32DragAreaLifetimeTest.cpp)
+  target_link_libraries(Win32DragAreaLifetimeTest PRIVATE Graphic)
+  mmm_register_test_case(NAME Win32DragAreaLifetimeTest COMMAND
+                         Win32DragAreaLifetimeTest)
 endif()
 
 # 主题插件测试覆盖 Lua 解析、内置主题继承以及重载时清除旧实例。 mmm_add_test_executable
