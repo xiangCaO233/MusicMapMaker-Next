@@ -685,7 +685,9 @@
 
 ### P3 · R26 · 崩溃转储未写成功也提示已保存
 
-- [ ] Windows 路径忽略创建或写转储失败，时间转换也未核实，用户可能被引导寻找不存在或不完整的转储。分别验证不可写目录、写出失败及成功文案。
+- [x] Windows 路径忽略创建或写转储失败，时间转换也未核实，用户可能被引导寻找不存在或不完整的转储。分别验证不可写目录、写出失败及成功文案。
+
+  已验证。Linux RelWithDebInfo 全量构建和 3 项启动相关 CTest 通过。使用 debsrv 现有 Runner 的 LLVM-MinGW x64 交叉编译，在原生 Win10 19045 通过 CrashDumpStatusTest：ACL 拒绝创建、注入部分写入后清理、真实 DbgHelp MDMP 头及成功文案、保护已有同名文件。覆盖实际转储函数与提示选择，验证以无交互方式运行。
 
 [Modules/Game/include/game/CrashHandler.h:28](../Modules/Game/include/game/CrashHandler.h#L28) [Modules/Game/include/game/CrashHandler.h:50](../Modules/Game/include/game/CrashHandler.h#L50) [Modules/Game/include/game/CrashHandler.h:63](../Modules/Game/include/game/CrashHandler.h#L63)
 
