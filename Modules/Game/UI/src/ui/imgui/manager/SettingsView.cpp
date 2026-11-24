@@ -737,7 +737,7 @@ SettingsView::LayoutMetricsCache SettingsView::buildLayoutMetrics(
     const float categorySize    = std::floor(sidebarBaseW * scale);
     const float categorySpacing = std::floor(snapshot.itemSpacing * scale);
     const float categoryHeight  = std::floor(8.0f * scale) * 2.0f +
-                                  categorySize * 8.0f + categorySpacing * 7.0f;
+                                 categorySize * 8.0f + categorySpacing * 7.0f;
 
     // 标签列额外留出间隔，使文字与右侧控件不贴合。
     cache.tabLabelWidth =
@@ -993,6 +993,11 @@ void SettingsView::update(UIManager* sourceManager)
     // 重命名同样不能在 Clay 行回调持锁期间执行磁盘事务。
     renderBeatmapResourceRename(dpiScale);
     if ( !m_isOpen ) {
+        // 关闭即废弃未绑定的媒体结果。文件任务不持有窗口地址，无需等待。
+        m_pendingImportLifetime.reset();
+        m_pendingImportSource.reset();
+        m_pendingImport = {};
+        m_pendingRename = {};
         // 关闭窗口立即结束快捷键录制，避免全局按键被隐藏页面截获。
         m_recordingShortcutTarget = ShortcutRecordTarget::None;
         ShortcutUtils::setShortcutRecordingActive(false);
@@ -1164,9 +1169,9 @@ void SettingsView::drawContent()
                 // 标签在分隔线右侧留出固定缩放 padding，并垂直居中。
                 ImVec2 labelSize       = ImGui::CalcTextSize(label.c_str());
                 float  textLeftPadding = std::floor(8.0f * dpiScale);
-                ImVec2 labelPos = { sepX + textLeftPadding,
-                                    rect.y +
-                                        (rect.height - labelSize.y) * 0.5f };
+                ImVec2 labelPos        = { sepX + textLeftPadding,
+                                           rect.y +
+                                               (rect.height - labelSize.y) * 0.5f };
                 ImGui::GetWindowDrawList()->AddText(
                     menuFont,
                     ImGui::GetFontSize(),

@@ -37,6 +37,12 @@ namespace MMM
 struct AudioResource;
 }
 
+namespace MMM::UI::Utils
+{
+struct ProjectMediaImportResult;
+struct ProjectMediaRenameResult;
+}  // namespace MMM::UI::Utils
+
 namespace MMM::UI
 {
 /// @brief 搜索目录通过独立实现维护，公开视图头不包含目录解析依赖。
@@ -482,6 +488,21 @@ private:
     /// @param source 用户选中的本地文件。
     /// @warning 低频导入路径：可能复制文件并保存项目资源表。
     void importBeatmapResource(const std::filesystem::path& source);
+    /// @brief 非阻塞消费复制结果，只有源谱面仍活跃时才提交资源差量。
+    void pollBeatmapResourceImport();
+    /// @brief 只持有选择的会话弱身份和后台结果，不借用项目。
+    std::shared_ptr<const Logic::BeatmapSettingsSnapshot> m_pendingImportSource;
+    /// @brief 提交时的工程寿命代次，重开同一目录也视为新工程。
+    std::uint64_t m_pendingImportGeneration{};
+    /// @brief 完成时恢复本次媒体用途，避免读到新的选择控件值。
+    BeatmapResourceTarget m_pendingImportTarget{ BeatmapResourceTarget::None };
+    /// @brief 视频背景导入不同时替换封面字段。
+    bool m_pendingImportVideo{};
+    /// @brief 持有独立文件任务，普通绘制只做零超时就绪查询。
+    std::future<std::shared_ptr<Utils::ProjectMediaImportResult>>
+        m_pendingImport;
+    /// @brief 关闭后失效，后台在开始磁盘复制前拒绝未开始的旧请求。
+    std::shared_ptr<const bool> m_pendingImportLifetime;
 
     /// @brief 在会话锁外绘制资源重命名弹窗，确认时执行低频文件事务。
     /// @param dpiScale 当前内容缩放。
@@ -493,13 +514,14 @@ private:
     /// @return 操作成功时返回 true；失败原因保留在资源错误信息中。
     /// @warning 低频确认路径：可能扫描项目谱面并保存资源引用。
     bool renameBeatmapResource(bool confirmCopy = false);
-    /// @brief 建立已明确确认的副本并只更新当前会话的资源引用。
-    /// @param plan 本次在会话锁内重新检查的路径与共享来源。
-    /// @param audio 需要保留配置并登记新主轨时的旧资源；视觉资源为空。
-    /// @return 文件及登记成功时为真，失败保留旧绑定及原文件。
-    /// @warning 低频确认路径，复制媒体及配套测量数据，不在绘制帧执行。
-    bool copyRenameBeatmapResource(const Logic::SharedResourceRenamePlan& plan,
-                                   const AudioResource* audio);
+    /// @brief 在结果就绪后回收确认页状态，拒绝跨项目和跨谱面的结果。
+    bool pollBeatmapResourceRename();
+    /// @brief 预检或复制任务；只有明确用户操作会提交新的任务。
+    std::future<std::shared_ptr<Utils::ProjectMediaRenameResult>>
+        m_pendingRename;
+    /// @brief 打开弹窗时的会话弱身份，覆盖同路径换谱。
+    std::shared_ptr<const Logic::BeatmapSettingsSnapshot>
+        m_resourceRenameSource;
 
     /// @brief 绘制编辑器设置页。
     void drawEditorSettings();

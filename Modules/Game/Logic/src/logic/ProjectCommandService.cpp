@@ -132,6 +132,23 @@ std::filesystem::path makeRelativeToProjectRoot(
     return {};
 }
 
+/// @brief 为已确认的工程音频路径建立默认轨道设置。
+/// @note 普通导入和后台导入共用同一初始配置。
+AudioResource makeImportedAudioResource(const std::filesystem::path& relative,
+                                        AudioTrackType               type)
+{
+    AudioResource resource;
+    resource.m_id   = Config::pathToUtf8(relative.filename());
+    resource.m_path = Config::pathToUtf8(relative.lexically_normal());
+    resource.m_type = type;
+    // 初始音量保留之前的导入默认值，其余设置防止继承另一个资源的状态。
+    resource.m_config.volume        = 0.5f;
+    resource.m_config.playbackSpeed = 1.f;
+    resource.m_config.playbackPitch = 0.f;
+    resource.m_config.muted         = false;
+    return resource;
+}
+
 /// @brief 将项目中已存储的 UTF-8 路径归一化为项目根相对路径键。
 /// @param project 当前项目。
 /// @param path 已存储的 UTF-8 路径。
@@ -425,10 +442,10 @@ bool validateTemplatePlayerObjectTracks(const BeatMap& source,
                 const auto& subNote = subNoteReference.get();
                 const bool  valid   = subNote.m_type == NoteType::FLICK
                                           ? isTemplateFlickTrackValid(
-                                                static_cast<const Flick&>(subNote),
-                                                targetPlayerTrackCount)
+                                             static_cast<const Flick&>(subNote),
+                                             targetPlayerTrackCount)
                                           : isTemplateNoteTrackValid(
-                                                subNote, targetPlayerTrackCount);
+                                             subNote, targetPlayerTrackCount);
                 if ( valid ) continue;
 
                 errorMessage = "模板 Polyline 子物件超出新谱面的玩家轨道范围";
@@ -912,16 +929,8 @@ ProjectCommandService::ImportAudioResult ProjectCommandService::importAudio(
         }
     }
 
-    /// @brief 新导入的项目音频资源。
-    AudioResource resource;
-    resource.m_id = Config::pathToUtf8(finalRelativePath.filename());
     // 选取音轨类型来自命令，不通过扩展名或所在目录猜测 Main/Effect。
-    resource.m_path                 = relPathUtf8;
-    resource.m_type                 = cmd.trackType;
-    resource.m_config.volume        = 0.5f;
-    resource.m_config.playbackSpeed = 1.0f;
-    resource.m_config.playbackPitch = 0.0f;
-    resource.m_config.muted         = false;
+    auto resource = makeImportedAudioResource(finalRelativePath, cmd.trackType);
 
     // 资源配置先登记，再生成音效加载请求；加载器的后续失败不由此函数回滚。
     project.m_audioResources.push_back(resource);
@@ -941,6 +950,36 @@ ProjectCommandService::ImportAudioResult ProjectCommandService::importAudio(
           relPathUtf8,
           resource.m_id);
     return result;
+}
+
+/// @brief 提交背景任务已确认的主音频，避免锁内再次检查媒体。
+std::string ProjectCommandService::registerPreparedMainAudio(
+    Project& project, const std::filesystem::path& relative)
+{
+    // 工作者已经解析项目根。应用时只接受相对路径，防止注册到另一个安装位置。
+    // 绝对旧配置只参与查重，新的持久化记录统一使用工程相对路径。
+    // 这一段由持有会话锁的完成方调用，不能重新读取媒体文件。
+    const auto path = relative.lexically_normal();
+    if ( !isRelativePathInsideRoot(path) ) return {};
+    const auto target   = (project.m_projectRoot / path).lexically_normal();
+    const auto existing = std::find_if(
+        project.m_audioResources.begin(),
+        project.m_audioResources.end(),
+        [&](const auto& item) {
+            // 相对路径和旧配置中的绝对形式都使用同一词法基准比较。
+            // 文件线程已完成真实路径验证，这里不重新跟随符号链接。
+            return (project.m_projectRoot / Config::utf8ToPath(item.m_path))
+                       .lexically_normal() == target;
+        });
+    if ( existing != project.m_audioResources.end() &&
+         existing->m_type != AudioTrackType::Main )
+        return {};
+    // 显式选择恢复目录自动发现权限；工作线程从不改动排除表本身。
+    removeExcludedPath(project.m_excludedAudioPaths, Config::pathToUtf8(path));
+    if ( existing != project.m_audioResources.end() ) return existing->m_id;
+    project.m_audioResources.push_back(
+        makeImportedAudioResource(path, AudioTrackType::Main));
+    return project.m_audioResources.back().m_id;
 }
 
 /// @brief 将单个谱面文件同步到项目谱面列表。

@@ -34,30 +34,32 @@ std::filesystem::path resolve(const std::filesystem::path& root,
 }
 
 /// @brief 判断谱面当前是否直接或隐式引用源文件，不使用项目默认音频兜底。
-/// @param map 由磁盘加载或打开会话提供的只读模型。
+/// @param map 已从真实磁盘模型或打开会话提取的引用值。
+/// @note 打开的实体注册表可能继续编辑，但该证据只属于确认时的不可变快照。
 /// @param project 提供音频 ID 与路径解析规则的项目。
 /// @param audio 音频资源；空值表示检查视觉字段。
 /// @param source 已解析的源文件绝对路径。
 /// @param destination 仅供视觉路径重映射预演，不产生实际写入。
 /// @return 存在引用时为真，不能据此修改来源谱面。
-bool references(const BeatMap& map, const Project& project,
-                const AudioResource* audio, const std::filesystem::path& source,
+bool references(const OpenResourceReferenceSnapshot& map,
+                const Project& project, const AudioResource* audio,
+                const std::filesystem::path& source,
                 const std::filesystem::path& destination)
 {
     if ( audio ) {
-        // 收集歌曲提示、自动采样和玩家绑定，不能只检查主歌曲字段。
-        // 解析器负责 IMD 隐式歌曲，匹配器统一兼容资源 ID 和旧路径。
-        const auto refs = ProjectResourceService::collectBeatmapAudioReferences(
-            map, Config::pathToUtf8(map.m_baseMapMetadata.map_path));
-        return std::any_of(refs.begin(), refs.end(), [&](const auto& ref) {
-            return ProjectResourceService::audioReferenceMatchesResource(
-                project, ref, *audio);
-        });
+        // 打开会话的引用早已冻结，后台只解析其路径身份。
+        return std::any_of(
+            map.m_audioReferences.begin(),
+            map.m_audioReferences.end(),
+            [&](const auto& ref) {
+                return ProjectResourceService::audioReferenceMatchesResource(
+                    project, ref, *audio);
+            });
     }
     // 预演只复制轻量元数据，绝不为了检查共享而保存或规范化原谱面。
     // 当前 IMD 的封面和背景由加载器填入实际找到的文件，空推测路径不会误命中。
     // 复用原有视觉匹配器，保持项目相对、谱面相对和历史目录前缀兼容一致。
-    auto metadata = map.m_baseMapMetadata;
+    auto metadata = map.m_metadata;
     return VisualResourceRenameService::remapMetadata(
         metadata, project.m_projectRoot, source, destination);
 }
@@ -71,6 +73,44 @@ SharedResourceRenamePlan SharedResourceRenameService::inspect(
     const Project& project, const std::filesystem::path& currentMap,
     const std::filesystem::path& source, const std::string& newName,
     const AudioResource* audio, std::span<const BeatMap* const> openMaps)
+{
+    // 同步调用方仍可提供模型观察指针；先提取完全独立的值，
+    // 使后续的事务与使用文件池的设置页面共享同一口径。
+    std::vector<OpenResourceReferenceSnapshot> snapshots;
+    snapshots.reserve(openMaps.size());
+    for ( const auto* map : openMaps )
+        if ( map ) snapshots.push_back(capture(*map, audio != nullptr));
+    return inspectCaptured(
+        project, currentMap, source, newName, audio, snapshots);
+}
+
+/// @brief 在绑定仍稳定时提取音频引用或视觉元数据。
+/// @param map 由调用方稳定的谱面，捕获完成后可关闭或继续编辑。
+/// @param audio 音频需要探测全部显式和兼容引用；视觉只复制元数据。
+/// @details 捕获只读取领域值，不调用解析器、不跟随符号链接。返回值不保存
+/// ECS 实体或折线子节点指针，也不延长打开谱面的生命周期。
+/// 音频引用需在复制前采集，避免并发未保存修改只出现在运行时而漏过冲突。
+// 视觉检查所需路径已在基础元数据中，捕获时无需建立物件引用索引。
+OpenResourceReferenceSnapshot SharedResourceRenameService::capture(
+    const BeatMap& map, bool audio)
+{
+    OpenResourceReferenceSnapshot result{ .m_metadata = map.m_baseMapMetadata };
+    if ( audio )
+        result.m_audioReferences =
+            ProjectResourceService::collectBeatmapAudioReferences(
+                map, Config::pathToUtf8(result.m_metadata.map_path));
+    return result;
+}
+
+/// @brief 在后台检查冻结的工程清单及打开谱面引用。
+/// @param openMaps 从 UI 确认时的项目会话中已捕获的引用和文件身份。
+/// @details 磁盘证据保留尚未被保存覆盖的旧引用，值快照保留尚未落盘的新引用。
+/// 用户同意建立副本前应重新确认共享情况，源与目标路径可能已发生变化。
+SharedResourceRenamePlan SharedResourceRenameService::inspectCaptured(
+    const Project& project, const std::filesystem::path& currentMap,
+    const std::filesystem::path& source, const std::string& newName,
+    const AudioResource*                           audio,
+    std::span<const OpenResourceReferenceSnapshot> openMaps)
 {
     // 每次确认独立建立结果，不能把之前预检成功视为文件仍然存在的保证。
     // 结果只保存路径与标签，谱面或项目切换后不会留下悬挂的来源指针。
@@ -135,8 +175,8 @@ SharedResourceRenamePlan SharedResourceRenameService::inspect(
             .lexically_normal();
     /// @brief 合并一份谱面的引用证据，同时检查复制目标是否会影响 IMD 选名。
     /// @details 不修改 map，重复的磁盘和内存证据按规范路径合并展示。
-    const auto checkMap = [&](const BeatMap&               map,
-                              const std::filesystem::path& path) {
+    const auto checkMap = [&](const OpenResourceReferenceSnapshot& map,
+                              const std::filesystem::path&         path) {
         auto extension = Config::pathToUtf8(path.extension());
         std::transform(
             extension.begin(),
@@ -191,22 +231,19 @@ SharedResourceRenamePlan SharedResourceRenameService::inspect(
             result.m_error = "无法读取项目谱面：" + entry.m_filePath;
             return result;
         }
-        checkMap(map, path);
+        // 磁盘谱面也使用同一提取器，避免与打开会话对采样的判断产生两套定义。
+        checkMap(capture(map, audio != nullptr), path);
         if ( !result.m_error.empty() ) return result;
     }
     // 额外检查尚未保存或尚未登记的新谱面，覆盖只存在内存中的资源关联。
-    // 指针寿命由调用者的会话锁保证，离开本函数后不保存它们。
-    // 对于同一谱面，磁盘仍有引用而内存已删除引用时，原文件仍必须保留。
-    // 反过来只有内存新增的引用也需要保护，不能等到保存后才认为共享。
-    for ( const auto* map : openMaps ) {
-        if ( !map ) continue;
-        const auto path = (map->m_baseMapMetadata.map_path.is_absolute()
-                               ? map->m_baseMapMetadata.map_path
-                               : root / map->m_baseMapMetadata.map_path)
+    // 文件任务只读取捕获时的引用，不在后台访问打开会话的对象。
+    // 磁盘保留旧引用与内存新增引用各自独立保护，不能只采用其中一个来源。
+    for ( const auto& map : openMaps ) {
+        const auto path = (map.m_metadata.map_path.is_absolute()
+                               ? map.m_metadata.map_path
+                               : root / map.m_metadata.map_path)
                               .lexically_normal();
-        // 未保存会话可以不在项目目录清单中，路径用于去重而不是作为已登记证明。
-        // 当前普通谱面仍由 checkMap 排除，只有其它会话或 IMD 固定命名触发复制。
-        checkMap(*map, path);
+        checkMap(map, path);
         if ( !result.m_error.empty() ) return result;
     }
     return result;
