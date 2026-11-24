@@ -105,32 +105,38 @@ void EventBus::unsubscribeImpl(uint64_t typeId, SubscriptionID id)
 }
 
 /// @brief 向精确类型及其父类订阅者同步分发事件。
-/// @param relatedTypes 按具体类型到父类顺序排列的类型编号。
+/// @param routes 按具体类型到父类顺序排列的分发路由。
 /// @param eventPtr 在本次调用返回前保持有效的事件对象地址。
 /// @warning 输入热路径可能频繁调用；此处会复制回调快照，回调自身不得阻塞。
-void EventBus::publishImpl(const std::vector<uint64_t>& relatedTypes,
-                           const void*                  eventPtr)
+void EventBus::publishImpl(const std::vector<DispatchRoute>& routes,
+                           const void*                       eventPtr)
 {
     // 快照让回调可以安全地订阅或取消，而不会在持锁状态下重入订阅表。
-    std::vector<Impl::SubscriberInfo> subscribersToCall;
+    struct Invocation {
+        /// @brief 在释放锁后执行的回调副本。
+        std::function<void(const void*)> callback;
+        /// @brief 借用发布事件中的正确子对象，随发布结束失效。
+        const void* address;
+    };
+    std::vector<Invocation> subscribersToCall;
     {
         // 共享锁允许多个发布者并发收集快照，并阻止订阅表在复制时变化。
         std::shared_lock lock(m_impl->mutex);
-        for ( const uint64_t targetType : relatedTypes ) {
-            const auto subscriberIt = m_impl->subscribers.find(targetType);
+        for ( const auto& route : routes ) {
+            const auto subscriberIt = m_impl->subscribers.find(route.typeId);
             // 没有订阅者的父类分支无需创建空表项。
             if ( subscriberIt == m_impl->subscribers.end() ) continue;
 
             // 保持类型层级与各分组内部的登记顺序，不额外排序回调。
-            subscribersToCall.insert(subscribersToCall.end(),
-                                     subscriberIt->second.begin(),
-                                     subscriberIt->second.end());
+            const auto* address = route.adjust(eventPtr);
+            for ( const auto& subscriber : subscriberIt->second )
+                subscribersToCall.push_back({ subscriber.callback, address });
         }
     }
 
     // 锁外执行用户回调，避免长回调阻塞其他线程增删订阅。
     for ( const auto& subscriber : subscribersToCall ) {
-        subscriber.callback(eventPtr);
+        subscriber.callback(subscriber.address);
     }
 }
 }  // namespace MMM::Event
