@@ -11,6 +11,7 @@
 #include <ice/manage/AudioPool.hpp>
 #include <ice/manage/AudioTrack.hpp>
 #include <ice/thread/ThreadPool.hpp>
+#include <vector>
 
 /**
  * @file AudioTimelineResourceProcessorTest.cpp
@@ -195,6 +196,47 @@ bool testResourceEqualizer(const std::shared_ptr<ice::AudioTrack>& track)
     return true;
 }
 
+/// @brief 用小配额验证先拒绝超限输入，再拒绝变速后不能容纳的输出。
+/// @return EQ 可复用输入空间，变速只有在输入与输出都能容纳时成功。
+/// @note 小夹具足以触发配额边界，测试无需实际分配数百 MiB。
+bool testExportPcmBudget()
+{
+    constexpr std::size_t FRAMES      = 4096U;
+    constexpr std::size_t INPUT_BYTES = FRAMES * 2U * sizeof(float);
+    // 立体声数组的输入大小刚好是 INPUT_BYTES，不根据估计的容器长度计费。
+    const std::vector<std::vector<float>> source(
+        2U, std::vector<float>(FRAMES, 0.25F));
+    MMM::AudioTrackConfig config;
+    config.eqEnabled   = true;
+    config.eqPreset    = 1;
+    config.eqBandGains = { 6.0F };
+
+    auto samples = source;
+    // 少一个字节必须明确失败；预算恰好等于输入时 EQ 可以原地执行。
+    if ( MMM::Audio::processExportTimelineResource(
+             samples, config, INPUT_BYTES - 1U) ||
+         !MMM::Audio::processExportTimelineResource(
+             samples, config, INPUT_BYTES) ) {
+        XERROR("Invalid offline PCM input budget handling");
+        return false;
+    }
+
+    config.eqEnabled     = false;
+    config.playbackSpeed = 0.5F;
+    samples              = source;
+    // 半速理论上需要两份输入大小的输出，同时分析仍持有原始输入数组。
+    if ( MMM::Audio::processExportTimelineResource(
+             samples, config, 3U * INPUT_BYTES - 1U) ||
+         !MMM::Audio::processExportTimelineResource(
+             samples, config, 4U * INPUT_BYTES) ) {
+        XERROR("Invalid offline PCM stretch budget handling");
+        return false;
+    }
+    // 有余额时返回可消费的独立平面，验证失败没有污染下一次处理。
+    return frameCountNear(samples.front().size(), 2U * FRAMES) &&
+           samples.front().size() == samples.back().size();
+}
+
 }  // namespace
 
 /// @brief 运行自动采样资源级离线 DSP 测试。
@@ -221,6 +263,6 @@ int main(int argc, char** argv)
     const bool passed = testVolumeAndMuteRemainSeparate(track) &&
                         testResourcePlaybackSpeed(track) &&
                         testResourcePitch(track) &&
-                        testResourceEqualizer(track);
+                        testResourceEqualizer(track) && testExportPcmBudget();
     return passed ? 0 : 1;
 }

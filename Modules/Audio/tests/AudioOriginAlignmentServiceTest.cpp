@@ -1,11 +1,17 @@
 #include "audio/AudioOriginAlignmentService.h"
 
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
-#include "runtime/AppThreadPool.h"
 
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <ice/config/config.hpp>
+#include <ice/manage/AudioBuffer.hpp>
+#include <ice/manage/dec/IDecoderInstance.hpp>
+#include <ice/manage/dec/ffmpeg/FFmpegDecoderFactory.hpp>
 #include <string>
 
 namespace
@@ -80,24 +86,69 @@ bool expect(bool condition, const std::string& message)
     return condition;
 }
 
+/// @brief 回读输出，核对裁头/静音处的采样值以及实际总长度。
+/// @param path 导出服务应已完成发布的 WAV。
+/// @param totalFrames 预期总帧数。
+/// @param silentFrames WAV 开头无源信号的长度。
+/// @param sourceStart 第一个有效输出帧对应的源 PCM 帧。
+/// @return WAV 全部声道符合合成源信号和帧数时为 true。
+bool verifyAlignmentPcm(const std::filesystem::path& path,
+                        std::size_t totalFrames, std::size_t silentFrames,
+                        std::size_t sourceStart)
+{
+    // 按与导出一致的采样率回读，避免重采样把预期的静音边界摊到相邻帧。
+    const auto&                     format = ice::ICEConfig::internal_format;
+    const ice::FFmpegDecoderFactory factory;
+    auto                            decoder =
+        factory.create_instance(MMM::Config::pathToUtf8(path), format);
+    // 初始化和显式定位都要成功，确保比较从文件的第一个 PCM 帧开始。
+    if ( !decoder || !decoder->seek(0U) ) return false;
+
+    // 多读一帧以区分准确长度和只能验证固定前缀的测试。
+    // 预期长度来自独立的相位计算，不能从被测返回值推导测试缓冲。
+    ice::AudioBuffer pcm(format, totalFrames + 1U);
+    if ( !pcm.raw_ptrs() ||
+         decoder->read(pcm.raw_ptrs(), totalFrames + 1U) != totalFrames )
+        return false;
+
+    // 使用 PCM16 的满量程，使归一化值与夹具中的整数样本逐一对应。
+    constexpr float PCM16_SCALE = 32768.0F;
+    for ( std::size_t frame = 0; frame < totalFrames; ++frame ) {
+        // 与输入夹具使用相同的 200 帧周期，在纯静音段也校验每一帧。
+        // 静音分支不参与减法，避免计算静音区间时无符号帧位置下溢。
+        const float expected =
+            frame < silentFrames
+                ? 0.0F
+                : (1000U + (sourceStart + frame - silentFrames) % 200U) /
+                      PCM16_SCALE;
+        for ( std::size_t channel = 0; channel < pcm.num_channels();
+              ++channel ) {
+            // 允许 WAV 整数重新量化中的一个最低有效位差异。
+            // 两个声道都检查，避免某一个声道的暂存读取错误被另一个声道掩盖。
+            if ( std::abs(expected - pcm.raw_ptrs()[channel][frame]) >
+                 1.0F / PCM16_SCALE )
+                return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行正相位裁头、负相位补静音和零相位保持长度测试。
 /// @return 三种符号路径及夹具创建均成功时返回零。
 ///
-/// 输入为 48000 Hz、4800 帧，即 100 ms。25 ms 精确对应 1200 帧，因此正相位
-/// 期望 3600 帧，负相位期望 6000 帧，零相位仍为 4800 帧。
+/// 输入为 48000 Hz、4800 帧，即 100 ms。25.5 ms 精确对应 1224 帧，因此正相位
+/// 期望 3576 帧，负相位期望 6024 帧，零相位仍为 4800 帧。
+/// 偏移刻意不等于源波形周期的整数倍，以便从首个有效样本识别错误定位。
 ///
-/// 三个输出文件使用不同路径，避免后一次导出覆盖前一次结果而掩盖状态错误。
-/// 测试只断言服务报告的帧数；实际编码和解码成功已经由 success 覆盖，具体
-/// PCM 混合行为属于 AudioTimelineExportService 的独立测试职责。
-/// AppThreadPool 在服务调用前初始化，因为真实资源解码沿用应用线程池入口。
+/// 每种相位使用不同路径并回读样本。零相位覆盖一个已存在的文件，验证
+/// 暂存发布能替换旧内容，使用未初始化线程池直接运行同步导出。
 /// 生成文件位于 MMM_TEST_OUTPUT_DIR，不向 tests/data 源码资源目录写入结果。
 /// 所有长度断言使用整数帧，避免通过浮点秒数再次计算期望而复制实现逻辑。
 int main()
 {
     XLogger::init("AudioOriginAlignmentServiceTest");
-    MMM::Runtime::AppThreadPool::instance().init();
 
     // 所有生成物写入构建树测试输出目录，测试前后清理以保持重复运行独立。
     const auto root = std::filesystem::path(MMM_TEST_OUTPUT_DIR) /
@@ -111,32 +162,39 @@ int main()
     const auto padPath    = root / "pad.wav";
     const auto sourcePath = root / "unchanged.wav";
 
-    // 正相位将内容向左移动 25 ms，开头 1200 帧落在时间线零点之前。
+    // 正相位将内容向左移动 25.5 ms，开头 1224 帧落在时间线零点之前。
     bool ok = expect(writeFixtureWav(inputPath, 4800U), "无法创建 WAV 输入");
     const auto trimResult =
         MMM::Audio::AudioOriginAlignmentService::alignToOrigin({
             .inputPath         = inputPath,
             .outputPath        = trimPath,
-            .phaseMilliseconds = 25.0,
+            .phaseMilliseconds = 25.5,
         });
     // 先累计成功状态，再检查长度，使失败日志保留底层导出的具体原因。
     ok &= expect(trimResult.success, trimResult.errorMessage);
-    ok &= expect(trimResult.outputFrames == 3600U,
+    ok &= expect(trimResult.outputFrames == 3576U,
                  "正相位没有裁掉正确的开头帧数");
 
-    // 负相位将内容向右移动 25 ms，导出器应在资源前补 1200 帧静音。
+    // 负相位将内容向右移动 25.5 ms，导出器应在资源前补 1224 帧静音。
     const auto padResult =
         MMM::Audio::AudioOriginAlignmentService::alignToOrigin({
             .inputPath         = inputPath,
             .outputPath        = padPath,
-            .phaseMilliseconds = -25.0,
+            .phaseMilliseconds = -25.5,
         });
-    // 补静音后的输出比输入多 1200 帧，符号若反转会直接得到裁切长度。
+    // 补静音后的输出比输入多 1224 帧，符号若反转会直接得到裁切长度。
     ok &= expect(padResult.success, padResult.errorMessage);
-    ok &= expect(padResult.outputFrames == 6000U,
+    ok &= expect(padResult.outputFrames == 6024U,
                  "负相位没有补入正确的开头静音帧数");
 
-    // 零相位是符号边界，验证统一时间线路径不会额外裁切或补帧。
+    // 报告正确帧数也可能源于错误补零，所以独立从两个文件中验证样本。
+    ok &= expect(verifyAlignmentPcm(trimPath, 3576U, 0U, 1224U),
+                 "裁头后波形没有从指定源帧开始");
+    ok &= expect(verifyAlignmentPcm(padPath, 6024U, 1224U, 0U),
+                 "补静音后波形未在预期帧开始");
+
+    // 写入较短的旧导出，零相位必须用新内容替换它，避免只检查返回帧数。
+    ok &= expect(writeFixtureWav(sourcePath, 60U), "无法创建待替换的目标");
     const auto unchangedResult =
         MMM::Audio::AudioOriginAlignmentService::alignToOrigin({
             .inputPath         = inputPath,
@@ -147,6 +205,10 @@ int main()
     ok &= expect(unchangedResult.success, unchangedResult.errorMessage);
     // 累计而非短路断言可在一次运行中报告三个符号分支的全部独立结果。
     ok &= expect(unchangedResult.outputFrames == 4800U, "零相位改变了音频帧数");
+
+    // 回读应遇到新文件的完整样本，若旧文件未替换，此处会在帧数检查失败。
+    ok &= expect(verifyAlignmentPcm(sourcePath, 4800U, 0U, 0U),
+                 "覆盖导出后读到的 PCM 与零相位输入不同");
 
     // 清理失败不覆盖功能断言结果，避免文件系统收尾掩盖对齐行为。
     std::filesystem::remove_all(root, filesystemError);
