@@ -89,6 +89,71 @@ bool waitForParent(DWORD pid)
     return result == WAIT_OBJECT_0;
 }
 
+/// @brief 在目标所在卷暂存完整文件，再原子发布 Windows 更新。
+/// @param downloadedFile 主程序已验证的下载包路径。
+/// @param targetPath 已退出的主程序所在路径。
+/// @return 失败时保全原安装与下载源，成功后清理旧版备份。
+/// @note 进程中断最多留下私有暂存目录，正式路径在发布前仍指向旧程序。
+bool installWindowsExecutable(const std::filesystem::path& downloadedFile,
+                              const std::filesystem::path& targetPath)
+{
+    namespace fs = std::filesystem;
+    std::error_code error;
+    auto            backup = targetPath;
+    backup += L".old";
+    const bool targetExists = fs::exists(targetPath, error);
+    if ( error ) {
+        writeStderr("Failed to check update target: " + error.message() + "\n");
+        return false;
+    }
+    // 旧更新器可能已把唯一可用的程序移到 .old，先恢复可启动路径。
+    // 恢复操作不允许覆盖目标，避免抹掉另一进程刚发布的完整程序。
+    if ( !targetExists && fs::exists(backup, error) &&
+         !MoveFileExW(
+             backup.c_str(), targetPath.c_str(), MOVEFILE_WRITE_THROUGH) )
+        error = { static_cast<int>(GetLastError()), std::system_category() };
+    if ( error ) {
+        writeStderr(
+            "Failed to recover previous executable: " + error.message() + "\n");
+        return false;
+    }
+
+    // 独占创建同卷目录，保证复制失败时不会留下半写的正式程序。
+    // 每个进程只清理自己的目录，旧的 .old 在提交前一直保留。
+    const auto staging =
+        targetPath.parent_path() /
+        (L".mmm-update-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
+         std::to_wstring(GetTickCount64()));
+    if ( !fs::create_directory(staging, error) ) {
+        writeStderr("Failed to create update staging directory: " +
+                    error.message() + "\n");
+        return false;
+    }
+    const auto staged = staging / L"executable";
+    fs::copy_file(downloadedFile, staged, error);
+    // 不允许跨卷回退为复制。正式路径只通过一次同卷改名提交。
+    if ( !error &&
+         !MoveFileExW(staged.c_str(),
+                      targetPath.c_str(),
+                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) )
+        error = { static_cast<int>(GetLastError()), std::system_category() };
+    std::error_code cleanupError;
+    fs::remove(staged, cleanupError);
+    fs::remove(staging, cleanupError);
+    if ( error ) {
+        writeStderr("Failed to replace executable: " + error.message() + "\n");
+        return false;
+    }
+
+    // 显式调用可能给源传入正式路径或旧备份。清理只在成功后进行，
+    // 正式目标的别名不能作为已消费的下载文件删掉。
+    if ( !fs::equivalent(downloadedFile, targetPath, cleanupError) &&
+         !cleanupError )
+        fs::remove(downloadedFile, cleanupError);
+    fs::remove(backup, cleanupError);
+    return true;
+}
+
 /// @brief 启动更新后的 Windows 可执行文件。
 /// @param targetPath 可执行文件路径。
 /// @return 成功请求系统启动时返回 true。
@@ -598,9 +663,9 @@ long parseParentPid(std::wstring_view text)
 /// @param argv 下载文件、更新目标和父进程 PID 参数。
 /// @return 更新并启动成功时返回 0，否则返回非零值。
 ///
-/// 主流程假设下载文件已经由主程序完成完整性校验。Windows 通过备份后复制
-/// 支持回滚，Linux 仅通过原子 rename 发布已备齐权限的文件，macOS 交给完整
-/// bundle 安装事务。替换完成后准备成功标记并启动新版本；启动失败撤下标记。
+/// 主流程假设下载文件已经由主程序完成完整性校验。Windows 与 Linux
+/// 均在目标卷准备完整文件， 再用同卷改名发布，macOS 交给完整 bundle
+/// 安装事务。替换完成后准备成功标记并启动新版本；启动失败撤下标记。
 ///
 /// 退出码约定：
 /// - 参数数量或 PID 非法返回 1，且不触碰下载文件与目标；
@@ -661,58 +726,8 @@ int main(int argc, char* argv[])
     // 父进程退出后留出短暂时间给系统释放映像和防病毒扫描句柄。
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-    std::error_code replaceError;
 #if defined(_WIN32)
-    // Windows 不能覆盖仍被占用的映像，先把旧文件移动到同目录备份。
-    auto backupPath = targetPath;
-    // 追加原生路径后缀，避免给已有的 UTF-16 字符做代码页往返。
-    backupPath += L".old";
-    std::error_code cleanupError;
-    // 旧备份只做尽力清理，后续 rename 会给出实际冲突错误。
-    std::filesystem::remove(backupPath, cleanupError);
-
-    std::error_code existsError;
-    const bool targetExists = std::filesystem::exists(targetPath, existsError);
-    if ( existsError ) {
-        writeStderr("Failed to check target executable: " +
-                    existsError.message() + "\n");
-        return 1;
-    }
-    if ( targetExists ) {
-        // 只有原目标存在时才建立回滚备份，新安装允许目标缺失。
-        std::filesystem::rename(targetPath, backupPath, replaceError);
-        if ( replaceError ) {
-            writeStderr("Failed to prepare update backup: " +
-                        replaceError.message() + "\n");
-            return 1;
-        }
-    }
-    // 下载文件复制到正式路径，保留下载源直到复制成功。
-    std::filesystem::copy_file(
-        downloadedFile,
-        targetPath,
-        std::filesystem::copy_options::overwrite_existing,
-        replaceError);
-    if ( replaceError ) {
-        writeStderr("Failed to copy update: " + replaceError.message() + "\n");
-        // 复制失败时尽力恢复旧可执行文件，原始下载仍保留供重试。
-        std::error_code backupExistsError;
-        if ( std::filesystem::exists(backupPath, backupExistsError) &&
-             !backupExistsError ) {
-            std::error_code restoreError;
-            std::filesystem::rename(backupPath, targetPath, restoreError);
-        }
-        return 1;
-    }
-    // 新文件就位后删除旧备份，再清理下载文件。
-    std::error_code backupExistsError;
-    if ( std::filesystem::exists(backupPath, backupExistsError) &&
-         !backupExistsError ) {
-        std::error_code removeBackupError;
-        std::filesystem::remove(backupPath, removeBackupError);
-    }
-    std::error_code removeDownloadError;
-    std::filesystem::remove(downloadedFile, removeDownloadError);
+    if ( !installWindowsExecutable(downloadedFile, targetPath) ) return 1;
 #elif defined(__APPLE__)
     // macOS 失败时尝试重新启动仍在目标路径的旧应用。
     if ( !installMacApplication(downloadedFile, targetPath) ) {
@@ -720,7 +735,8 @@ int main(int argc, char* argv[])
         return 1;
     }
 #else
-    replaceError = installLinuxExecutable(downloadedFile, targetPath);
+    const auto replaceError =
+        installLinuxExecutable(downloadedFile, targetPath);
     if ( replaceError ) {
         writeStderr("Failed to replace executable: " + replaceError.message() +
                     "\n");
