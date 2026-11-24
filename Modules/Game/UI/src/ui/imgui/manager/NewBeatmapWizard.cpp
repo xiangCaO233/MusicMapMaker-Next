@@ -36,7 +36,6 @@
 #include <cfloat>
 #include <chrono>
 #include <cmath>
-#include <cstring>
 #include <filesystem>
 #include <fmt/format.h>
 #include <ice/thread/ThreadPool.hpp>
@@ -76,26 +75,6 @@ bool isVideoBackgroundPath(const std::filesystem::path& path)
     return extension == ".mp4" || extension == ".avi" || extension == ".mkv" ||
            extension == ".webm" || extension == ".mov" || extension == ".flv" ||
            extension == ".m4v";
-}
-
-/// @brief 将字符串安全写入固定长度输入缓冲区。
-/// @param buffer 目标缓冲区。
-/// @param bufferSize 缓冲区长度。
-/// @param value 待写入文本。
-///
-/// ImGui InputText 使用固定字符数组，本 helper 始终为末尾预留 NUL，并允许按字节
-/// 截断过长 UTF-8 输入；调用方只用于显示和后续编辑，不承担规范化验证。
-void copyToBuffer(char* buffer, std::size_t bufferSize, std::string_view value)
-{
-    // 零长度缓冲区没有可写终止符位置。
-    if ( bufferSize == 0 ) return;
-
-    // 最大复制长度比容量小一，确保下面的终止符写入有效。
-    const auto copySize = std::min(bufferSize - 1, value.size());
-    // string_view 不保证 NUL 结尾，因此按明确字节数复制。
-    std::memcpy(buffer, value.data(), copySize);
-    // 无论源字符串是否被截断都建立合法 C 字符串。
-    buffer[copySize] = '\0';
 }
 
 /// @brief 判断两个项目内路径是否指向相同资源。
@@ -474,24 +453,21 @@ void NewBeatmapWizard::applyTemplateResourceDefaults(
     }
 
     // 以下文本字段只填补空输入，保护用户在选择模板前的编辑。
-    if ( m_titleBuf[0] == '\0' && !meta.title.empty() ) {
-        copyToBuffer(m_titleBuf, sizeof(m_titleBuf), meta.title);
+    if ( m_titleInput.empty() && !meta.title.empty() ) {
+        m_titleInput = meta.title;
     }
-    if ( m_titleUnicodeBuf[0] == '\0' && !meta.title_unicode.empty() ) {
-        copyToBuffer(
-            m_titleUnicodeBuf, sizeof(m_titleUnicodeBuf), meta.title_unicode);
+    if ( m_titleUnicodeInput.empty() && !meta.title_unicode.empty() ) {
+        m_titleUnicodeInput = meta.title_unicode;
     }
-    if ( m_artistBuf[0] == '\0' && !meta.artist.empty() ) {
-        copyToBuffer(m_artistBuf, sizeof(m_artistBuf), meta.artist);
+    if ( m_artistInput.empty() && !meta.artist.empty() ) {
+        m_artistInput = meta.artist;
     }
-    if ( m_artistUnicodeBuf[0] == '\0' && !meta.artist_unicode.empty() ) {
-        copyToBuffer(m_artistUnicodeBuf,
-                     sizeof(m_artistUnicodeBuf),
-                     meta.artist_unicode);
+    if ( m_artistUnicodeInput.empty() && !meta.artist_unicode.empty() ) {
+        m_artistUnicodeInput = meta.artist_unicode;
     }
-    if ( m_albumBuf[0] == '\0' && !meta.album.empty() ) {
+    if ( m_albumInput.empty() && !meta.album.empty() ) {
         // 模板专辑只填空栏，保留用户已输入或音频标签给出的值。
-        copyToBuffer(m_albumBuf, sizeof(m_albumBuf), meta.album);
+        m_albumInput = meta.album;
     }
 }
 
@@ -560,15 +536,15 @@ std::shared_ptr<MMM::BeatMap> NewBeatmapWizard::syncSelectedTemplateBeatmap()
 /// 函数只组装内存值，不访问磁盘或直接修改当前项目。
 void NewBeatmapWizard::syncMetaFromInputs()
 {
-    // 固定输入缓冲区均保证 NUL 终止，可直接赋给 std::string 字段。
-    m_meta.name           = m_nameBuf;
-    m_meta.title          = m_titleBuf;
-    m_meta.title_unicode  = m_titleUnicodeBuf;
-    m_meta.artist         = m_artistBuf;
-    m_meta.artist_unicode = m_artistUnicodeBuf;
-    m_meta.album          = m_albumBuf;
-    m_meta.author         = m_authorBuf;
-    m_meta.version        = m_versionBuf;
+    // 提交使用完整字符串，输入框只负责显示和更新草稿。
+    m_meta.name           = m_nameInput;
+    m_meta.title          = m_titleInput;
+    m_meta.title_unicode  = m_titleUnicodeInput;
+    m_meta.artist         = m_artistInput;
+    m_meta.artist_unicode = m_artistUnicodeInput;
+    m_meta.album          = m_albumInput;
+    m_meta.author         = m_authorInput;
+    m_meta.version        = m_versionInput;
     // 轨道数在 UI 侧也钳制，此处再次维护命令边界不变量。
     m_meta.track_count    = std::max(1, m_trackCount);
     m_meta.preference_bpm = m_bpm;
@@ -798,7 +774,7 @@ bool NewBeatmapWizard::hasInternalNameConflict() const
         return false;
 
     // 空内部名由其他创建校验处理，这里不制造重复提示。
-    std::string name(m_nameBuf);
+    const auto& name = m_nameInput;
     if ( name.empty() ) return false;
 
     // 使用精确大小写比较，与项目 m_name 身份规则保持一致。
@@ -976,7 +952,7 @@ void NewBeatmapWizard::renderDuplicateNameWarningPopup(UIManager* sourceManager)
         ImGui::Separator();
 
         // 从固定缓冲复制当前值，格式化期间不依赖后续控件修改。
-        std::string name(m_nameBuf);
+        const auto& name = m_nameInput;
         ImGui::TextWrapped(
             "%s",
             TR_FMT("ui.wizard.new_beatmap.duplicate_name.message", name)
@@ -1520,9 +1496,25 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         return;
     }
 
-    // 统一固定缓冲输入调用，标签由翻译键提供稳定可见文本。
-    auto DrawInput = [&](const char* label, char* buf, size_t bufSize) {
-        ImGui::InputText(label, buf, bufSize);
+    // ImGui 输入只借用本次提供的地址，编辑导致扩容时由回调交回新地址。
+    // 草稿始终持有完整 UTF-8，未编辑时不会因显示范围或旧缓冲上限被截断。
+    // 容量包含可写字符数，另给终止符一个位置。此处不预分配每帧缓冲。
+    // 回调只迁移当前控件对应的字符串，不修改其它字段或谱面对象。
+    const auto drawInput = [](const char* label, std::string& value) {
+        ImGui::InputText(
+            label,
+            value.data(),
+            value.capacity() + 1,
+            ImGuiInputTextFlags_CallbackResize,
+            [](ImGuiInputTextCallbackData* data) {
+                auto& text = *static_cast<std::string*>(data->UserData);
+                // ImGui 随后按 BufTextLen
+                // 写入，调整逻辑长度与容量必须先于拷贝。
+                text.resize(static_cast<std::size_t>(data->BufTextLen));
+                data->Buf = text.data();
+                return 0;
+            },
+            &value);
     };
 
     // 基础信息到视觉资源共同组成教程的“补充谱面信息”目标区域。
@@ -1538,37 +1530,24 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
          FeedbackButton(
              TR("ui.wizard.new_beatmap.fill_from_project").data()) ) {
         // 项目标题和艺术家没有独立 Unicode 字段，复制到两种谱面展示文本。
-        copyToBuffer(m_titleBuf, sizeof(m_titleBuf), project->m_title);
-        copyToBuffer(
-            m_titleUnicodeBuf, sizeof(m_titleUnicodeBuf), project->m_title);
-        copyToBuffer(m_artistBuf, sizeof(m_artistBuf), project->m_artist);
-        copyToBuffer(
-            m_artistUnicodeBuf, sizeof(m_artistUnicodeBuf), project->m_artist);
-        copyToBuffer(m_authorBuf, sizeof(m_authorBuf), project->m_mapper);
+        m_titleInput         = project->m_title;
+        m_titleUnicodeInput  = project->m_title;
+        m_artistInput        = project->m_artist;
+        m_artistUnicodeInput = project->m_artist;
+        m_authorInput        = project->m_mapper;
         // 本次按钮操作覆盖展示字段；随后重新选音频则由新音频标签更新这些字段。
         // 难度、BPM、资源和轨道数属于单张谱面，不从项目展示元数据推导。
     }
-    DrawInput(
-        TR("ui.settings.beatmap.name").data(), m_nameBuf, sizeof(m_nameBuf));
-    DrawInput(
-        TR("ui.settings.beatmap.title").data(), m_titleBuf, sizeof(m_titleBuf));
-    DrawInput(TR("ui.settings.beatmap.title_unicode").data(),
-              m_titleUnicodeBuf,
-              sizeof(m_titleUnicodeBuf));
-    DrawInput(TR("ui.settings.beatmap.artist").data(),
-              m_artistBuf,
-              sizeof(m_artistBuf));
-    DrawInput(TR("ui.settings.beatmap.artist_unicode").data(),
-              m_artistUnicodeBuf,
-              sizeof(m_artistUnicodeBuf));
-    DrawInput(
-        TR("ui.settings.beatmap.album").data(), m_albumBuf, sizeof(m_albumBuf));
-    DrawInput(TR("ui.settings.beatmap.mapper").data(),
-              m_authorBuf,
-              sizeof(m_authorBuf));
-    DrawInput(TR("ui.settings.beatmap.version").data(),
-              m_versionBuf,
-              sizeof(m_versionBuf));
+    drawInput(TR("ui.settings.beatmap.name").data(), m_nameInput);
+    drawInput(TR("ui.settings.beatmap.title").data(), m_titleInput);
+    drawInput(TR("ui.settings.beatmap.title_unicode").data(),
+              m_titleUnicodeInput);
+    drawInput(TR("ui.settings.beatmap.artist").data(), m_artistInput);
+    drawInput(TR("ui.settings.beatmap.artist_unicode").data(),
+              m_artistUnicodeInput);
+    drawInput(TR("ui.settings.beatmap.album").data(), m_albumInput);
+    drawInput(TR("ui.settings.beatmap.mapper").data(), m_authorInput);
+    drawInput(TR("ui.settings.beatmap.version").data(), m_versionInput);
 
     // 偏好区保存双精度 BPM，但 ImGui 控件临时使用 float。
     ImGui::SeparatorText(TR("ui.settings.beatmap.preference").data());
@@ -2161,17 +2140,15 @@ void NewBeatmapWizard::reset()
     m_trackCount = 4;
     m_measuredTimings.clear();
 
-    // 固定缓冲统一通过安全 helper 初始化并保证 NUL 结尾。
-    copyToBuffer(m_nameBuf, sizeof(m_nameBuf), "New Beatmap");
-    copyToBuffer(m_titleBuf, sizeof(m_titleBuf), "");
-    copyToBuffer(m_titleUnicodeBuf, sizeof(m_titleUnicodeBuf), "");
-    copyToBuffer(m_artistBuf, sizeof(m_artistBuf), "");
-    copyToBuffer(m_artistUnicodeBuf, sizeof(m_artistUnicodeBuf), "");
-    copyToBuffer(m_albumBuf, sizeof(m_albumBuf), "");
-    copyToBuffer(m_authorBuf,
-                 sizeof(m_authorBuf),
-                 defaultCreator.empty() ? "Unknown" : defaultCreator);
-    copyToBuffer(m_versionBuf, sizeof(m_versionBuf), "Easy");
+    // 新一轮创建从清空的草稿开始，导入的文本长度不影响下一次初始化。
+    m_nameInput          = "New Beatmap";
+    m_titleInput         = "";
+    m_titleUnicodeInput  = "";
+    m_artistInput        = "";
+    m_artistUnicodeInput = "";
+    m_albumInput         = "";
+    m_authorInput        = defaultCreator.empty() ? "Unknown" : defaultCreator;
+    m_versionInput       = "Easy";
     // 资源选择和探测时长全部从未绑定状态开始。
     m_selectedAudioPath.clear();
     m_selectedAudioTrackId.clear();
@@ -2232,7 +2209,10 @@ void NewBeatmapWizard::onAudioSelected(const std::filesystem::path& path)
 /// @param info 由音频选择或后台导入得到的独立探测结果。
 /// @details 同一份标签填充普通和 Unicode 字段，用户仍可独立修改它们。
 /// 专辑以音频为准，新选择不会沿用上一首歌的专辑。
-/// 内部名称去掉空白以保持已有命名习惯，展示字段保留原文本。
+/// 内部名称去掉 ASCII 空白以保持命名习惯，展示字段保留原文本。
+/// @details 元数据与文件名的限制不同。只为较短标题生成内部名，
+/// 否则保留草稿原名，用户仍可直接编辑文件名来源。
+/// 未知时长仍由提交端使用原有的有限值检查，不影响非 ASCII 标签。
 void NewBeatmapWizard::applyAudioInfo(const ::MMM::Utils::AudioInfo& info)
 {
     // 向导内部以秒保存，提交时再转为毫秒。
@@ -2240,24 +2220,29 @@ void NewBeatmapWizard::applyAudioInfo(const ::MMM::Utils::AudioInfo& info)
 
     // 选择音频是新的用户操作，标签应替换旧项目值或前一音频的文本。
     // 普通与 Unicode 栏先用同一标签，仍允许随后分别手动调整。
-    copyToBuffer(m_titleBuf, sizeof(m_titleBuf), info.title);
-    copyToBuffer(m_titleUnicodeBuf, sizeof(m_titleUnicodeBuf), info.title);
-    copyToBuffer(m_artistBuf, sizeof(m_artistBuf), info.artist);
-    copyToBuffer(m_artistUnicodeBuf, sizeof(m_artistUnicodeBuf), info.artist);
+    m_titleInput         = info.title;
+    m_titleUnicodeInput  = info.title;
+    m_artistInput        = info.artist;
+    m_artistUnicodeInput = info.artist;
     // 项目没有专辑字段，因此音频标签始终作为专辑初始值。
     // 重新选择音频时同步刷新专辑，避免显示前一个资源的标签。
-    copyToBuffer(m_albumBuf, sizeof(m_albumBuf), info.album);
+    m_albumInput = info.album;
 
     // 项目一键导入只覆盖展示字段，内部名称仍沿用音频标题的原有推导。
     // 去掉空白可避免生成包含空格的常见不便标识。
     std::string safeName = info.title;
     // remove_if 只修改本地副本，不改变展示标题。
-    safeName.erase(std::remove_if(safeName.begin(), safeName.end(), ::isspace),
-                   safeName.end());
-    if ( !safeName.empty() ) {
-        // 空标签不覆盖 reset 提供的默认内部名。
-        copyToBuffer(m_nameBuf, sizeof(m_nameBuf), safeName);
-    }
+    safeName.erase(
+        std::remove_if(safeName.begin(),
+                       safeName.end(),
+                       [](char ch) {
+                           return std::string_view(" \t\r\n\v\f").find(ch) !=
+                                  std::string_view::npos;
+                       }),
+        safeName.end());
+    // 过长音频标签完整保存在标题栏；内部名仍需为 .mmm 文件名保留空间。
+    if ( !safeName.empty() && safeName.size() <= 251 )
+        m_nameInput = std::move(safeName);
 }
 
 }  // namespace MMM::UI

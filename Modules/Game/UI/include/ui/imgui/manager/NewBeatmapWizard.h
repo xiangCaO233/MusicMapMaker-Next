@@ -322,21 +322,21 @@ private:
     bool m_shouldOpenTemplateOptions{ false };
 
     /// @brief 谱面内部名称输入缓冲区。
-    char m_nameBuf[256] = { 0 };
+    std::string m_nameInput;
     /// @brief 标题输入缓冲区。
-    char m_titleBuf[256] = { 0 };
+    std::string m_titleInput;
     /// @brief Unicode 标题输入缓冲区。
-    char m_titleUnicodeBuf[256] = { 0 };
+    std::string m_titleUnicodeInput;
     /// @brief 艺术家输入缓冲区。
-    char m_artistBuf[256] = { 0 };
+    std::string m_artistInput;
     /// @brief Unicode 艺术家输入缓冲区。
-    char m_artistUnicodeBuf[256] = { 0 };
+    std::string m_artistUnicodeInput;
     /// @brief 音频标签或手工输入的专辑缓冲区。
-    char m_albumBuf[256] = { 0 };
+    std::string m_albumInput;
     /// @brief 谱师输入缓冲区。
-    char m_authorBuf[256] = { 0 };
+    std::string m_authorInput;
     /// @brief 难度名输入缓冲区。
-    char m_versionBuf[256] = { 0 };
+    std::string m_versionInput;
 
     /// @brief 谱面默认 BPM。
     double m_bpm = 120.0;
