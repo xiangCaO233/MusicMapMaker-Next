@@ -146,11 +146,13 @@
 
   已验证。倍速导出先在目标卷编码，结束并关闭后才替换目标；Linux 写入故障回归和独立关闭故障探针均确认原文件字节保留，正常覆盖和暂存清理通过。
 
-- [ ] **R49 · P2 · 文件管理器注销订阅后，在途回调仍可写已销毁对象**
+- [x] **R49 · P2 · 文件管理器注销订阅后，在途回调仍可写已销毁对象**
 
   工程保存事件可从其他线程发布。解除订阅只影响后续发布，已取得的订阅快照仍持有捕获 this 的回调。 参照新谱面向导的独立收件箱，回调只持有安全的收件状态；UI 线程负责消费。用同步屏障停在发布已取快照之后，销毁视图再放行，旧回调安全结束。
 
   [FileManagerView.cpp L72](../Modules/Game/UI/src/ui/imgui/manager/FileManagerView.cpp#L72)、[ProjectController_DirectoryRefresh.cpp L145](../Modules/Game/Logic/src/logic/ProjectController_DirectoryRefresh.cpp#L145)
+
+  已验证。文件管理器回调只写独立收件箱；测试在事件总线取快照后销毁视图并放行在途回调。
 
 - [ ] **R50 · P2 · 新建工程向导静置时反复查询目录，部分查询错误判为可用**
 

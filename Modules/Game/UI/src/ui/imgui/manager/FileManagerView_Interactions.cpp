@@ -76,7 +76,8 @@ bool isTemporaryPackagePath(const std::filesystem::path& path)
 void FileManagerView::handleDragDrop(UIManager* sourceManager)
 {
     // 绝大多数帧没有拖放，避免额外窗口和文件系统处理。
-    if ( m_pendingDrops.empty() ) return;
+    PendingDrop paths;
+    if ( !m_eventInbox->drops.try_dequeue(paths) ) return;
 
     // 根窗口与子窗口都视为文件管理器区域，活动控件不阻止拖放命中。
     bool isHovered =
@@ -84,15 +85,15 @@ void FileManagerView::handleDragDrop(UIManager* sourceManager)
                                ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
 
     // 按 GLFW 投递顺序处理本帧积累的拖放批次。
-    for ( const auto& drop : m_pendingDrops ) {
+    do {
         // 批次原始坐标不用于命中，当前窗口 Hover 状态是权威依据。
-        if ( drop.paths.empty() ) {
+        if ( paths.empty() ) {
             // 防御平台回调给出空路径数组。
             continue;
         }
 
         // 当前交互只以批次首个路径决定打开项目和目标页签。
-        std::filesystem::path p = Config::utf8ToPath(drop.paths[0]);
+        std::filesystem::path p = Config::utf8ToPath(paths[0]);
         // 文件管理器是独立拖放入口，演练期间不得绕过 CanonRock 白名单。
         // 该入口先于普通项目路由消费悬浮区域内的同一批系统拖放事件。
         if ( !Walkthrough::openProjectGuideAllows(p) ) continue;
@@ -158,9 +159,7 @@ void FileManagerView::handleDragDrop(UIManager* sourceManager)
         // 拖放始终要求显示目标，而不是切换当前可见状态。
         evt.showSubView = true;
         Event::EventBus::instance().publish(evt);
-    }
-    // 所有批次无论是否命中都在本帧消费，避免后续帧重复打开项目。
-    m_pendingDrops.clear();
+    } while ( m_eventInbox->drops.try_dequeue(paths) );
 }
 
 /// @brief 渲染未打开项目时的文件浏览器占位内容。

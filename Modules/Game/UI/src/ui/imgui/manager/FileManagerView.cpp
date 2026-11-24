@@ -61,40 +61,41 @@ FileManagerView::FileManagerView(const std::string& subViewName)
     // 项目状态首次同步前使用进程当前目录作为保守初始根路径。
     m_currentRoot = std::filesystem::current_path();
 
-    // GLFW 拖放事件可能在外层回调到达，先保存路径和屏幕位置供 UI 帧消费。
+    // GLFW 拖放事件可能在外层回调到达，先保存路径供 UI 帧消费。
     m_dropSubId = Event::EventBus::instance().subscribe<Event::GLFWDropEvent>(
-        [this](const Event::GLFWDropEvent& e) {
+        [inbox = m_eventInbox](const Event::GLFWDropEvent& e) {
             // 队列项按值拥有路径数组，事件返回后数据仍然有效。
-            m_pendingDrops.push_back({ e.paths, e.pos });
+            inbox->drops.enqueue(e.paths);
         });
     // 任意成功保存可能新增或替换文件，需要低频刷新目录缓存。
     m_saveResultSubId =
         Event::EventBus::instance().subscribe<Event::BeatmapSaveResultEvent>(
-            [this](const Event::BeatmapSaveResultEvent& e) {
+            [inbox = m_eventInbox](const Event::BeatmapSaveResultEvent& e) {
                 if ( e.success ) {
                     // 回调只写并发队列，不在事件线程执行文件系统遍历。
-                    m_pendingDirectoryRefreshes.enqueue(true);
+                    inbox->directoryRefreshes.enqueue(true);
                 }
             });
     // 项目设置等保存也可能改变项目目录可见内容。
     m_projectSavedSubId =
         Event::EventBus::instance().subscribe<Event::ProjectSavedEvent>(
-            [this](const Event::ProjectSavedEvent&) {
+            [inbox = m_eventInbox](const Event::ProjectSavedEvent&) {
                 // 值本身无语义，队列只作为可合并刷新信号。
-                m_pendingDirectoryRefreshes.enqueue(true);
+                inbox->directoryRefreshes.enqueue(true);
             });
     // 显式目录刷新事件同样通过统一 UI 帧入口失效缓存。
     m_projectDirectoryRefreshedSubId =
         Event::EventBus::instance()
             .subscribe<Event::ProjectDirectoryRefreshedEvent>(
-                [this](const Event::ProjectDirectoryRefreshedEvent&) {
+                [inbox = m_eventInbox](
+                    const Event::ProjectDirectoryRefreshedEvent&) {
                     // 多个连续信号由消费函数合并为一次缓存失效。
-                    m_pendingDirectoryRefreshes.enqueue(true);
+                    inbox->directoryRefreshes.enqueue(true);
                 });
 }
 
 /// @brief 取消文件管理器创建的全部事件订阅。
-/// @note 对象地址在取消前保持稳定，避免回调访问已销毁的待处理队列。
+/// @note 已复制的回调只持有收件状态，注销后也不会访问视图。
 FileManagerView::~FileManagerView()
 {
     // 订阅类型与构造时保存的 ID 一一对应。

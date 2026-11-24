@@ -1196,7 +1196,7 @@ void FileManagerView::consumePendingDirectoryRefreshes()
     // 输出值内容不参与语义，只需记录是否成功取到任一元素。
     bool hasRefreshRequest = false;
     bool refreshRequest    = false;
-    while ( m_pendingDirectoryRefreshes.try_dequeue(refreshRequest) ) {
+    while ( m_eventInbox->directoryRefreshes.try_dequeue(refreshRequest) ) {
         // 多个通知折叠为一个失效标志。
         hasRefreshRequest = true;
     }

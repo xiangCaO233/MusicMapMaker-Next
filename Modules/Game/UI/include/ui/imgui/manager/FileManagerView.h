@@ -10,6 +10,7 @@
 #include <deque>
 #include <filesystem>
 #include <glm/glm.hpp>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -345,20 +346,24 @@ private:
     /// @brief 按目录完整路径缓存的文件树快照。
     std::unordered_map<std::string, DirectorySnapshot> m_directoryCache;
 
-    /// @brief 保存事件跨线程投递的目录刷新请求。
-    moodycamel::ConcurrentQueue<bool> m_pendingDirectoryRefreshes;
-
     // --- 布局池 ---
     std::deque<CLayHBox> m_rows;
 
-    struct PendingDrop {
-        std::vector<std::string> paths;
-        glm::vec2                pos;
+    /// @brief 拖放批次只需保留路径，命中由消费时的窗口状态判定。
+    using PendingDrop = std::vector<std::string>;
+
+    /// @brief 事件回调独立持有的收件状态，允许已开始的分发在视图销毁后结束。
+    struct EventInbox {
+        /// @brief 跨线程保存和重扫通知，在 UI 帧合并。
+        moodycamel::ConcurrentQueue<bool> directoryRefreshes;
+        /// @brief 等待 UI 判断归属窗口的拖放批次。
+        moodycamel::ConcurrentQueue<PendingDrop> drops;
     };
-    std::vector<PendingDrop> m_pendingDrops;
-    Event::SubscriptionID    m_dropSubId{ 0 };
-    Event::SubscriptionID    m_saveResultSubId{ 0 };
-    Event::SubscriptionID    m_projectSavedSubId{ 0 };
+    /// @brief 只有当前视图消费队列；EventBus 快照可延长收件状态的寿命。
+    std::shared_ptr<EventInbox> m_eventInbox{ std::make_shared<EventInbox>() };
+    Event::SubscriptionID       m_dropSubId{ 0 };
+    Event::SubscriptionID       m_saveResultSubId{ 0 };
+    Event::SubscriptionID       m_projectSavedSubId{ 0 };
 
     /// @brief 项目目录重扫事件订阅 ID。
     Event::SubscriptionID m_projectDirectoryRefreshedSubId{ 0 };
