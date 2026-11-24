@@ -1,3 +1,4 @@
+#include "../imguivk/context/VKContextStartupDiagnostics.h"
 #include "graphic/imguivk/VKContext.h"
 #include "log/colorful-log.h"
 #include <SDL3/SDL.h>
@@ -19,8 +20,8 @@ void VKContext::initGLFW()
     }
     // 诊断仍使用原上下文的收集流程，手机初始化错误可以从同一日志入口定位。
     // 窗口创建在视频子系统成功后由既有 NativeWindow 生命周期完成。
-    addStartupDiagnostic("Window backend: SDL3 Android");
-    collectVulkanLoaderDiagnostics();
+    m_diagnostics->addStartupDiagnostic("Window backend: SDL3 Android");
+    m_diagnostics->collectVulkanLoaderDiagnostics();
 }
 /// @brief 从 SDL 查询真实 Android WSI 扩展，不借用宿主的 X11 或 Wayland 列表。
 void VKContext::registerGLFWExtensions()

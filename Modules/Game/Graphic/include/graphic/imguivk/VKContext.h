@@ -2,16 +2,12 @@
 
 #include "graphic/imguivk/VKQueueFamilyDef.h"
 #include "graphic/window/WindowPlatform.h"
-#include <array>
-#include <atomic>
-#include <chrono>
 #include <cstdint>
 #include <expected>
 #include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <vector>
 
 #ifndef VULKAN_HPP_NO_EXCEPTIONS
@@ -34,7 +30,6 @@ class VKRenderer;
 class VKRenderPass;
 class VKSwapchain;
 struct ThemePluginReloadResult;
-enum class SystemTheme : std::uint8_t;
 
 /// @brief 窗口图形资源的初始化模式。
 enum class VKWindowResourceMode : std::uint8_t {
@@ -195,6 +190,16 @@ public:
     void release();
 
 private:
+    /// @brief 持有字体 atlas 状态及主题实例，图形上下文初始化时创建一次。
+    struct Appearance;
+    /// @brief 渲染线程访问，其他线程只投递字体重建请求。
+    std::unique_ptr<Appearance> m_appearance;
+
+    /// @brief 持有启动诊断快照、验证层配置和与实例绑定的调试消息器。
+    struct StartupDiagnostics;
+    /// @brief 在 Vulkan 实例释放之前清理其调试消息器。
+    std::unique_ptr<StartupDiagnostics> m_diagnostics;
+
     /// @brief 资源是否已释放
     bool m_isReleased{ false };
 
@@ -231,33 +236,6 @@ private:
         return !m_initializationError.empty();
     }
 
-private:
-    /// @brief 字体重建请求标志
-    /// @warning
-    /// 热路径/原子：每帧检查、设置页写入；只作为脏位，禁止在此承载字体资源生命周期同步。
-    std::atomic<bool> m_fontRebuildRequested{ false };
-
-    /// @brief 最近一次自动模式实际应用的系统主题。
-    SystemTheme m_appliedSystemTheme{};
-
-    /// @brief 下一次允许刷新平台主题状态的单调时钟时间点。
-    /// @warning 渲染热路径每帧读取，用于把平台查询限制为每秒一次。
-    std::chrono::steady_clock::time_point m_nextSystemThemeCheck{};
-
-    /// @brief 当前图形上下文持有的内置与 Lua 插件主题实例。
-    std::unique_ptr<ImGuiThemeRegistry> m_themeRegistry;
-
-    /// @brief 当前 ImGui 字体 atlas 生命周期内固定的主字体倍率。
-    /// @warning 运行时设置变更不得直接修改该值，否则 ImGui 1.92
-    /// dynamic atlas 可能在渲染中重新打包字体纹理。
-    float m_fontAtlasScaleMain{ 1.0f };
-
-    /// @brief 当前 ImGui 字体 atlas 生命周期内固定的字体 UI 缩放。
-    /// @warning 运行时设置变更不得直接修改该值，避免已有 ImFont
-    /// 在渲染中切换到新的动态烘焙尺寸。
-    float m_fontAtlasBaseScale{ 1.0f };
-
-private:
     /// @brief 根据帧率限制策略选择当前设备支持的呈现模式。
     /// @param frameLimit 帧率限制策略。
     /// @return 当前设备可用的 Vulkan 呈现模式。
@@ -277,49 +255,6 @@ private:
      * @brief 释放 GLFW 资源
      */
     static void releaseGLFW();
-
-    /// @brief 追加一行启动阶段图形诊断信息。
-    /// @param line 诊断信息文本。
-    void addStartupDiagnostic(std::string line);
-
-    /// @brief 采集 GLFW 版本、平台和 Vulkan loader 可用性。
-    void collectGLFWDiagnostics();
-
-    /// @brief 采集 GLFW 最近一次错误信息。
-    /// @param context 触发 GLFW 错误查询的上下文。
-    void collectLastGLFWErrorDiagnostic(const char* context);
-
-    /// @brief 采集 Vulkan loader 版本、instance 扩展和 layer 信息。
-    void collectVulkanLoaderDiagnostics();
-
-    /// @brief 采集 Vulkan instance 创建请求信息。
-    void collectVulkanInstanceCreateDiagnostics();
-
-    /// @brief 采集 Vulkan instance 创建后的物理设备基础信息。
-    /// @param includeSurfaceSupport 是否同时查询窗口 surface 呈现支持。
-    void collectPhysicalDeviceDiagnostics(bool includeSurfaceSupport);
-
-    /// @brief 采集选中物理设备的窗口 surface 支持信息。
-    /// @param width 请求的窗口宽度。
-    /// @param height 请求的窗口高度。
-    void collectSelectedSurfaceDiagnostics(int width, int height);
-
-    /// @brief 采集逻辑设备创建请求信息。
-    /// @param deviceExtensions 请求启用的 device 扩展。
-    /// @param queueFamilies 请求创建队列的队列族索引。
-    void collectLogicalDeviceCreateDiagnostics(
-        const std::vector<const char*>& deviceExtensions,
-        const std::vector<uint32_t>&    queueFamilies);
-
-    /// @brief 打印启动阶段已经采集到的诊断快照。
-    /// @param reason 导致打印诊断信息的失败原因。
-    void logStartupDiagnostics(const char* reason);
-
-    /// @brief 启动阶段图形诊断信息缓存。
-    std::vector<std::string> m_startupDiagnosticLines;
-
-    /// @brief 启动诊断信息是否已因失败打印过。
-    bool m_startupDiagnosticsPrinted{ false };
 
     /// @brief 原生窗口指针
     NativeWindow* m_nativeWindow_ptr{ nullptr };
@@ -356,48 +291,6 @@ private:
 
     /// @brief 当前启用的 Vulkan 扩展列表
     VKExtensions m_vkExtensions{};
-
-    /**
-     * @brief Vulkan Debug 回调函数
-     *
-     * 用于接收并处理 Validation Layer 发出的调试信息。
-     *
-     * @param messageSeverity 消息严重等级
-     * @param messageTypes 消息类型
-     * @param pCallbackData 回调数据（包含错误信息）
-     * @param pUserData 用户自定义数据指针
-     * @return VKAPI_ATTR VkBool32 是否中断 Vulkan 调用
-     */
-    static VKAPI_ATTR VkBool32 VKAPI_PTR
-    vkDebug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-                     VkDebugUtilsMessageTypeFlagsEXT        messageTypes,
-                     const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
-                     void*                                       pUserData);
-
-    /**
-     * @brief 启用 Vulkan Debug 扩展
-     */
-    void enableVKDebugExt();
-
-    /// @brief 返回构建时是否启用了 Vulkan 验证层及对应调试消息机制。
-    /// @return 启用验证层时为 true，否则为 false。
-    static bool validationLayersEnabled();
-
-    /// @brief Vulkan Debug Utils 创建信息
-    vk::DebugUtilsMessengerCreateInfoEXT m_vkDebugUtilCreateInfo{};
-
-    /// @brief Vulkan Debug Messenger 句柄
-    vk::DebugUtilsMessengerEXT m_vkDebugMessenger{};
-
-    /// @brief 请求启用的 Validation Layer 列表
-    const std::array<const char*, 1> m_vkValidationLayers{
-        "VK_LAYER_KHRONOS_validation",
-    };
-
-    /**
-     * @brief 启用并检查 Validation Layer
-     */
-    void enableVKValidateLayer();
 
     // =========================================================================
     // 物理设备与逻辑设备相关
@@ -472,18 +365,6 @@ private:
     /// @warning 启动低频路径：创建 ImGui 上下文并初始化后端，禁止重复调用。
     void imguiVulkanInit(PlatformWindowHandle* windowHandle,
                          VKWindowResourceMode  mode);
-
-    /// @brief 加载启动期系统首选字体。
-    /// @warning 启动低频路径：会查询系统字体并读取字体文件，禁止放入每帧
-    /// 渲染路径。
-    void setupBootstrapFonts();
-
-    /// @brief 应用不依赖皮肤资源的启动期最小样式。
-    /// @warning 启动低频路径：只修改 ImGui 样式状态。
-    void applyBootstrapTheme();
-
-    /// @brief 将全部编译期主题注册为独立实例。
-    void registerBuiltInThemes();
 
     friend class VKRenderer;
 };

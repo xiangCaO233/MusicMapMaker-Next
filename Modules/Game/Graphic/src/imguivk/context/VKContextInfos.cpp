@@ -1,3 +1,4 @@
+#include "VKContextStartupDiagnostics.h"
 #include "graphic/imguivk/VKContext.h"
 
 namespace MMM::Graphic
@@ -40,12 +41,7 @@ void VKContext::initVkInstanceCreateInfo()
 #endif  //__APPLE__
         ;
 
-    if ( validationLayersEnabled() ) {
-        // Debug messenger 创建信息通过 pNext 同时覆盖 instance 创建期间产生的
-        // 验证消息；正式 messenger 会在 instance 创建成功后单独建立。
-        m_vkInstanceCreateInfo.setPEnabledLayerNames(m_vkValidationLayers);
-        m_vkInstanceCreateInfo.setPNext(&m_vkDebugUtilCreateInfo);
-    }
+    m_diagnostics->configureInstance(m_vkInstanceCreateInfo);
 }
 
 }  // namespace MMM::Graphic

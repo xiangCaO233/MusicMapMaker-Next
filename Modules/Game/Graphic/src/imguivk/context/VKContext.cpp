@@ -1,5 +1,8 @@
 #include "graphic/imguivk/VKContext.h"
+#include "VKContextAppearance.h"
+#include "VKContextStartupDiagnostics.h"
 #include "common/LogicCommands.h"
+#include "common/MessageBox.h"
 #include "config/AppConfig.h"
 #include "config/EditorConfig.h"
 #include "config/EditorSettings.h"
@@ -12,8 +15,6 @@
 #include "graphic/imguivk/VKRenderPass.h"
 #include "graphic/imguivk/VKRenderer.h"
 #include "graphic/imguivk/VKSwapchain.h"
-#include "graphic/system/SystemTheme.h"
-#include "graphic/theme/ImGuiThemeRegistry.h"
 #include "imgui.h"
 
 #ifdef __ANDROID__
@@ -113,7 +114,7 @@ void VKContext::failInitialization(std::string message)
 
 /// @brief 返回当前构建是否请求 Vulkan 验证层。
 /// @return 启用验证层及 Debug Utils 时为 true，否则为 false。
-bool VKContext::validationLayersEnabled()
+bool VKContext::StartupDiagnostics::validationLayersEnabled()
 {
 #ifdef MMM_ENABLE_VULKAN_VALIDATION_LAYERS
     return true;
@@ -133,8 +134,12 @@ bool VKContext::validationLayersEnabled()
 ///
 /// @warning 进程启动低频路径：包含窗口系统初始化、Vulkan instance 创建和事件
 /// 订阅，只能由单例首次构造执行。
-VKContext::VKContext() : m_themeRegistry(std::make_unique<ImGuiThemeRegistry>())
+VKContext::VKContext()
+    : m_appearance(std::make_unique<Appearance>())
+    , m_diagnostics(std::make_unique<StartupDiagnostics>())
 {
+    // 先建立外观与诊断组件，失败路径也可以记录窗口系统尚未启动的信息。
+    // 诊断组件不会销毁 GLFW，窗口库生命周期仍由上下文按关闭顺序协调。
     // GLFW 必须先成功，后续才能查询平台要求的 Vulkan surface 扩展。
     initGLFW();
     if ( hasInitializationError() ) return;
@@ -145,10 +150,22 @@ VKContext::VKContext() : m_themeRegistry(std::make_unique<ImGuiThemeRegistry>())
 
     // 仅在构建选项开启时请求 Debug Utils 与验证层，避免默认构建依赖 SDK
     // 验证层。
-    if ( validationLayersEnabled() ) {
-        enableVKDebugExt();
-        enableVKValidateLayer();
-        if ( hasInitializationError() ) return;
+    if ( StartupDiagnostics::validationLayersEnabled() ) {
+        // 诊断组件保存回调配置，实例扩展列表仍属于实例创建方。
+        m_diagnostics->enableVKDebugExt(m_vkExtensions);
+        if ( !m_diagnostics->checkValidationLayers() ) {
+            // 先保留完整诊断和平台提示，此时尚未建立 Vulkan 实例。
+            UI::showFatalError(
+                "MusicMapMaker - Vulkan Validation Layer Missing",
+                "Vulkan validation layers are missing.\n"
+                "This build enables Vulkan validation layers, so they are "
+                "required.\n"
+                "Install VK_LAYER_KHRONOS_validation on the target system.");
+            releaseGLFW();
+            failInitialization(
+                "Fatal: Not all requested validation layers are available!");
+            return;
+        }
     }
 
     // 应用信息与 instance 创建参数都是上下文成员，保证内部指针跨过创建调用。
@@ -156,22 +173,27 @@ VKContext::VKContext() : m_themeRegistry(std::make_unique<ImGuiThemeRegistry>())
 
     initVkInstanceCreateInfo();
     // 在真正创建前记录完整请求，loader 返回失败时可与可用扩展列表交叉检查。
-    collectVulkanInstanceCreateDiagnostics();
+    // 借用准备完毕的应用信息和扩展列表，组件不会保留它们的地址。
+    m_diagnostics->collectVulkanInstanceCreateDiagnostics(m_vkAppInfo,
+                                                          m_vkExtensions);
 
     // Vulkan-Hpp 配置为无异常模式，必须同时检查 result 并只在成功后发布句柄。
     auto instanceResult = vk::createInstance(m_vkInstanceCreateInfo);
     if ( instanceResult.result != vk::Result::eSuccess ) {
-        addStartupDiagnostic(fmt::format("vkCreateInstance failed: {}",
-                                         vk::to_string(instanceResult.result)));
-        logStartupDiagnostics("vkCreateInstance failed.");
+        m_diagnostics->addStartupDiagnostic(
+            fmt::format("vkCreateInstance failed: {}",
+                        vk::to_string(instanceResult.result)));
+        m_diagnostics->logStartupDiagnostics("vkCreateInstance failed.");
         releaseGLFW();
         failInitialization("Fatal: Failed to create Vulkan instance.");
         return;
     }
     m_vkInstance = instanceResult.value;
-    addStartupDiagnostic("Vulkan instance created successfully.");
+    m_diagnostics->addStartupDiagnostic(
+        "Vulkan instance created successfully.");
     XDEBUG("VK Instance created.");
-    collectPhysicalDeviceDiagnostics(false);
+    m_diagnostics->collectPhysicalDeviceDiagnostics(
+        m_vkInstance, m_vkSurface, false);
 
     // Debug Utils 属于 instance 扩展，动态分派器只能在 instance
     // 创建后解析入口；即使未启用验证层、不建立
@@ -179,24 +201,25 @@ VKContext::VKContext() : m_themeRegistry(std::make_unique<ImGuiThemeRegistry>())
     m_vkDldy.init(m_vkInstance, vkGetInstanceProcAddr);
     XDEBUG("VK dldy initialized.");
 
-    if ( validationLayersEnabled() ) {
+    if ( StartupDiagnostics::validationLayersEnabled() ) {
         // 创建参数已通过 instance pNext 捕获创建阶段消息；正式 messenger 接管
         // instance 生命周期剩余阶段。显式传入动态分派器以调用扩展入口。
-        auto debugMessengerResult = m_vkInstance.createDebugUtilsMessengerEXT(
-            m_vkDebugUtilCreateInfo, nullptr, m_vkDldy);
-        if ( debugMessengerResult.result != vk::Result::eSuccess ) {
-            addStartupDiagnostic(
+        const auto debugMessengerResult =
+            m_diagnostics->createMessenger(m_vkInstance, m_vkDldy);
+        if ( debugMessengerResult != vk::Result::eSuccess ) {
+            m_diagnostics->addStartupDiagnostic(
                 fmt::format("vkCreateDebugUtilsMessengerEXT failed: {}",
-                            vk::to_string(debugMessengerResult.result)));
-            logStartupDiagnostics("vkCreateDebugUtilsMessengerEXT failed.");
+                            vk::to_string(debugMessengerResult)));
+            m_diagnostics->logStartupDiagnostics(
+                "vkCreateDebugUtilsMessengerEXT failed.");
             release();
             releaseGLFW();
             failInitialization(
                 "Fatal: Failed to create Vulkan debug messenger.");
             return;
         }
-        m_vkDebugMessenger = debugMessengerResult.value;
-        addStartupDiagnostic("Vulkan debug messenger created successfully.");
+        m_diagnostics->addStartupDiagnostic(
+            "Vulkan debug messenger created successfully.");
         XDEBUG("Vulkan Debug Messenger Initialize Successed");
     }
 
@@ -394,12 +417,8 @@ void VKContext::release()
     }
 
     // messenger 使用 instance 扩展入口销毁，必须早于其所属 instance。
-    if ( validationLayersEnabled() && m_vkDebugMessenger ) {
-        m_vkInstance.destroyDebugUtilsMessengerEXT(
-            m_vkDebugMessenger, nullptr, m_vkDldy);
-        m_vkDebugMessenger = nullptr;
-        XDEBUG("VK Debug Messenger destroyed.");
-    }
+    // 只有诊断组件知道消息器是否成功创建，实例始终由上下文销毁。
+    m_diagnostics->destroyMessenger(m_vkInstance, m_vkDldy);
 
     // instance 是 Vulkan 对象树根节点，放在资源释放链最后。
     if ( m_vkInstance ) {
@@ -431,11 +450,12 @@ void VKContext::imguiAutoSelect()
     auto devicesResult = m_vkInstance.enumeratePhysicalDevices();
     if ( devicesResult.result != vk::Result::eSuccess ||
          devicesResult.value.empty() ) {
-        addStartupDiagnostic(
+        m_diagnostics->addStartupDiagnostic(
             fmt::format("Physical device selection failed: result={}, count={}",
                         vk::to_string(devicesResult.result),
                         devicesResult.value.size()));
-        logStartupDiagnostics("No usable Vulkan physical device.");
+        m_diagnostics->logStartupDiagnostics(
+            "No usable Vulkan physical device.");
         failInitialization(
             "Fatal: No usable Vulkan physical device was found.");
         return;
@@ -485,7 +505,7 @@ void VKContext::imguiAutoSelect()
 
         if ( !selection.isValid() ) {
             // 诊断同时记录两种角色是否存在，便于区分纯计算设备与窗口后端不支持。
-            addStartupDiagnostic(fmt::format(
+            m_diagnostics->addStartupDiagnostic(fmt::format(
                 "Rejected GPU \"{}\": graphicsQueue={}, presentQueue={}",
                 selection.deviceName,
                 selection.indices.graphicsQueueIndex.has_value(),
@@ -507,7 +527,7 @@ void VKContext::imguiAutoSelect()
     const DeviceSelection selected =
         preferredSelection.isValid() ? preferredSelection : fallbackSelection;
     if ( !selected.isValid() ) {
-        logStartupDiagnostics(
+        m_diagnostics->logStartupDiagnostics(
             "No Vulkan physical device has graphics and present queues.");
         failInitialization(
             "Fatal: No Vulkan physical device has graphics and present "
@@ -520,7 +540,7 @@ void VKContext::imguiAutoSelect()
     m_queueFamilyIndices = selected.indices;
 
     const auto properties = m_vkPhysicalDevice.getProperties();
-    addStartupDiagnostic(fmt::format(
+    m_diagnostics->addStartupDiagnostic(fmt::format(
         "Selected GPU: \"{}\", type={}, graphicsQueue={}, presentQueue={}",
         properties.deviceName.data(),
         physicalDeviceTypeText(properties.deviceType),
@@ -566,12 +586,12 @@ bool VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h,
 
     // 先记录诊断请求，但在解引用前验证窗口封装和底层 GLFW 句柄。
     m_nativeWindow_ptr = native_window_ptr;
-    addStartupDiagnostic(
+    m_diagnostics->addStartupDiagnostic(
         fmt::format("Initializing Vulkan window resources: {}x{}", w, h));
 
     if ( !native_window_ptr || !native_window_ptr->getWindowHandle() ) {
-        addStartupDiagnostic("Native window handle is null.");
-        logStartupDiagnostics("Native window handle is null.");
+        m_diagnostics->addStartupDiagnostic("Native window handle is null.");
+        m_diagnostics->logStartupDiagnostics("Native window handle is null.");
         failInitialization(
             "Failed to initialize Vulkan window resources: "
             "native window is null.");
@@ -595,11 +615,12 @@ bool VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h,
         m_vkInstance, native_window_ptr->getWindowHandle(), nullptr, &surface);
 #endif
     if ( surfaceResult != VK_SUCCESS ) {
-        addStartupDiagnostic(
+        m_diagnostics->addStartupDiagnostic(
             fmt::format("Platform Vulkan surface creation failed: {}",
                         vk::to_string(static_cast<vk::Result>(surfaceResult))));
-        collectLastGLFWErrorDiagnostic("glfwCreateWindowSurface failed.");
-        logStartupDiagnostics("glfwCreateWindowSurface failed.");
+        m_diagnostics->collectLastGLFWErrorDiagnostic(
+            "glfwCreateWindowSurface failed.");
+        m_diagnostics->logStartupDiagnostics("glfwCreateWindowSurface failed.");
         failInitialization("Failed to create window surface!");
         return false;
     }
@@ -613,16 +634,20 @@ bool VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h,
     // Wayland 没有可附加的桌面 shape，留给下面的透明交换链。
     native_window_ptr->refreshWindowFrameShape();
 #endif
-    addStartupDiagnostic("Vulkan window surface created successfully.");
+    m_diagnostics->addStartupDiagnostic(
+        "Vulkan window surface created successfully.");
     XDEBUG("Vulkan Surface created.");
-    collectPhysicalDeviceDiagnostics(true);
+    m_diagnostics->collectPhysicalDeviceDiagnostics(
+        m_vkInstance, m_vkSurface, true);
 
     // 设备候选必须同时满足图形与当前 surface 的呈现要求。
     imguiAutoSelect();
     if ( hasInitializationError() ) {
         return false;
     }
-    collectSelectedSurfaceDiagnostics(w, h);
+    // 只在选定设备后采集窗口表面能力，使诊断对应实际呈现设备。
+    m_diagnostics->collectSelectedSurfaceDiagnostics(
+        m_vkPhysicalDevice, m_vkSurface, w, h);
 
     // 在首次交换链创建前确定呈现模式，避免启动完成后为同一配置立即重建一次。
     updateGlobalPresentMode(
@@ -931,7 +956,7 @@ void VKContext::drawCenterNotification()
         ImDrawList* drawList = ImGui::GetWindowDrawList();
         ImVec2      minPos   = ImGui::GetWindowPos();
         ImVec2      maxPos   = ImVec2(minPos.x + ImGui::GetWindowWidth(),
-                                      minPos.y + ImGui::GetWindowHeight());
+                               minPos.y + ImGui::GetWindowHeight());
 
         // 背景和边框共享淡出 Alpha，但保留不同基准透明度以维持层次。
         ImU32 bgColor = ImGui::ColorConvertFloat4ToU32(

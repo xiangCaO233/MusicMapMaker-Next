@@ -1,3 +1,4 @@
+#include "VKContextStartupDiagnostics.h"
 #include "graphic/imguivk/VKContext.h"
 #include "log/colorful-log.h"
 #include <algorithm>
@@ -78,10 +79,10 @@ void VKContext::initLogicDevice()
         m_vkPhysicalDevice.enumerateDeviceExtensionProperties();
     if ( availableDeviceExtensionsResult.result != vk::Result::eSuccess ) {
         // 枚举失败时没有可信的能力集合，不能继续猜测扩展支持并创建 device。
-        addStartupDiagnostic(fmt::format(
+        m_diagnostics->addStartupDiagnostic(fmt::format(
             "Failed to enumerate selected GPU device extensions: {}",
             vk::to_string(availableDeviceExtensionsResult.result)));
-        logStartupDiagnostics(
+        m_diagnostics->logStartupDiagnostics(
             "Failed to enumerate selected GPU device extensions.");
         failInitialization(
             "Fatal: Failed to enumerate Vulkan device extensions.");
@@ -89,7 +90,7 @@ void VKContext::initLogicDevice()
     }
     // 引用只在 result 容器的当前作用域内使用，避免复制可能较长的属性列表。
     auto& availableDeviceExtensions = availableDeviceExtensionsResult.value;
-    addStartupDiagnostic(
+    m_diagnostics->addStartupDiagnostic(
         fmt::format("Selected GPU device extensions reported: {}",
                     availableDeviceExtensions.size()));
 
@@ -97,10 +98,10 @@ void VKContext::initLogicDevice()
                              VK_KHR_SWAPCHAIN_EXTENSION_NAME) ) {
         // surface 创建成功并不代表 device 支持交换链；缺少扩展时要在创建逻辑
         // 设备前报告明确原因，避免把失败延迟到 swapchain 初始化。
-        addStartupDiagnostic(
+        m_diagnostics->addStartupDiagnostic(
             fmt::format("Required device extension missing: {}",
                         VK_KHR_SWAPCHAIN_EXTENSION_NAME));
-        logStartupDiagnostics(
+        m_diagnostics->logStartupDiagnostics(
             "Required Vulkan swapchain device extension is "
             "missing.");
         failInitialization(
@@ -120,7 +121,8 @@ void VKContext::initLogicDevice()
     // 诊断层只需要稳定的索引值，不应依赖 set 的内部表示或创建信息指针。
     std::vector<uint32_t> queueFamilyList(uniqueQueueFamilies.begin(),
                                           uniqueQueueFamilies.end());
-    collectLogicalDeviceCreateDiagnostics(deviceExtensions, queueFamilyList);
+    m_diagnostics->collectLogicalDeviceCreateDiagnostics(deviceExtensions,
+                                                         queueFamilyList);
 
     // DeviceCreateInfo 引用上方两个 vector；它不会在 createDevice 返回后继续
     // 持有这些临时容器。
@@ -136,14 +138,15 @@ void VKContext::initLogicDevice()
     // 句柄，保证 release 路径不会销毁半初始化对象。
     auto deviceResult = m_vkPhysicalDevice.createDevice(vkDeviceCreateInfo);
     if ( deviceResult.result != vk::Result::eSuccess ) {
-        addStartupDiagnostic(fmt::format("vkCreateDevice failed: {}",
-                                         vk::to_string(deviceResult.result)));
-        logStartupDiagnostics("vkCreateDevice failed.");
+        m_diagnostics->addStartupDiagnostic(fmt::format(
+            "vkCreateDevice failed: {}", vk::to_string(deviceResult.result)));
+        m_diagnostics->logStartupDiagnostics("vkCreateDevice failed.");
         failInitialization("Fatal: Failed to create Vulkan logical device.");
         return;
     }
     m_vkLogicalDevice = deviceResult.value;
-    addStartupDiagnostic("Vulkan logical device created successfully.");
+    m_diagnostics->addStartupDiagnostic(
+        "Vulkan logical device created successfully.");
     XDEBUG("VK Logic Device Initialized.");
 
     // getQueue 不创建新资源，只取回建 device 时已经申请的队列索引 0。
