@@ -11,7 +11,6 @@
 #include "mmm/project/Project.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cstdint>
 #include <deque>
 #include <limits>
@@ -1633,12 +1632,9 @@ void ProjectCommandService::normalizeBeatmapMetadataPathsForProject(
     /// @brief 谱面文件所在目录。
     auto mapDirectory = absoluteMapPath.parent_path();
     /// @brief 谱面扩展名，用于判断资源路径解析优先级。
-    auto mapExtension = Config::pathToUtf8(absoluteMapPath.extension());
     // 扩展名比较不区分大小写，避免 .MMM 使用外部格式的解析优先级。
-    std::transform(mapExtension.begin(),
-                   mapExtension.end(),
-                   mapExtension.begin(),
-                   ::tolower);
+    const auto mapExtension =
+        Config::lowercaseAscii(Config::pathToUtf8(absoluteMapPath.extension()));
     /// @brief 是否优先按项目根目录解析资源路径。
     bool preferProjectRoot = (mapExtension == ".mmm");
 

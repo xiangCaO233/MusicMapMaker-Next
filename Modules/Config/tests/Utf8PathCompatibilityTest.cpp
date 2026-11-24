@@ -16,7 +16,9 @@
 // clang-format on
 #endif
 
+#include <bit>
 #include <cmath>
+#include <string>
 #include <type_traits>
 
 namespace
@@ -53,6 +55,24 @@ int main()
     if ( MMM::Config::utf8ToPath(MMM::Config::pathToUtf8(path)) != path )
         return 2;
     if ( !MMM::Config::utf8ToPath("").empty() ) return 3;
+    // 覆盖带非 ASCII 字符的真实 UTF-8 扩展名；大小写折叠只修改末尾 ASCII。
+    const auto mixed = MMM::Config::utf8ToPath("谱面.É中IMD");
+    if ( MMM::Config::lowercaseAscii(
+             MMM::Config::pathToUtf8(mixed.extension())) != ".É中imd" )
+        return 5;
+
+    // 逐一覆盖所有字节，特别是有符号 char 下的负值和 0xff（cctype 的 EOF
+    // 边界）。 直接构造字符串以兼容不接受非法 UTF-8 的平台路径接口。
+    for ( unsigned int byte = 0; byte <= 0xff; ++byte ) {
+        const auto input =
+            std::bit_cast<char>(static_cast<unsigned char>(byte));
+        const auto folded = MMM::Config::lowercaseAscii(std::string(1, input));
+        const auto expected =
+            (byte >= 'A' && byte <= 'Z') ? byte + 'a' - 'A' : byte;
+        if ( folded.size() != 1 ||
+             static_cast<unsigned char>(folded[0]) != expected )
+            return 6;
+    }
     // 显式 SDK 包含后的普通 C++ 计算仍应保持可用。
     return valuesNear(0.25 + 0.25, 0.5) ? 0 : 4;
 }

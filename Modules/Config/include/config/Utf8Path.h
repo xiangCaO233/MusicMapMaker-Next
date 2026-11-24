@@ -40,4 +40,9 @@ inline std::string pathToUtf8Generic(const std::filesystem::path& p)
 /// @note 平台转换实现在独立路径库中，公共头不引入 Windows SDK 或其宏。
 std::filesystem::path utf8ToPath(const std::string& s);
 
+/// @brief 仅折叠 UTF-8 文本中的 ASCII 大写字母，供文件扩展名比较使用。
+/// @param value 可原位复用的字符串；内容允许含任意字节。
+/// @return 大写 A 到 Z 被转换为小写，其余字节逐一保留，不依赖区域设置。
+[[nodiscard]] std::string lowercaseAscii(std::string value);
+
 }  // namespace MMM::Config

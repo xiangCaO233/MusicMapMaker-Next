@@ -2083,11 +2083,8 @@ void ProjectResourceService::normalizeBeatmapMetadataPathsForProject(
     /// @brief 谱面文件所在目录。
     auto mapDirectory = absoluteMapPath.parent_path();
     /// @brief 谱面扩展名，用于判断资源路径解析优先级。
-    auto mapExtension = Config::pathToUtf8(absoluteMapPath.extension());
-    std::transform(mapExtension.begin(),
-                   mapExtension.end(),
-                   mapExtension.begin(),
-                   ::tolower);
+    const auto mapExtension =
+        Config::lowercaseAscii(Config::pathToUtf8(absoluteMapPath.extension()));
     /// @brief 是否优先按项目根目录解析资源路径。
     // MMM
     // 内部格式按项目根解释，其余导入格式先按谱面目录解释，兼容各自引用习惯。

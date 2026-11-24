@@ -677,7 +677,9 @@
 
 ### P3 · R25 · 三份路径规范化均直接把 char 传给 ::tolower
 
-- [ ] 遇非 ASCII 扩展名且 char 为有符号时，负值可能超出标准库允许的参数范围。提取一个按无符号字节处理 ASCII 的函数，覆盖高位字节。
+- [x] 遇非 ASCII 扩展名且 char 为有符号时，负值可能超出标准库允许的参数范围。提取一个按无符号字节处理 ASCII 的函数，覆盖高位字节。
+
+  已验证。Linux RelWithDebInfo 全量构建和 5 项相关 CTest 通过。单独以有符号和无符号 char 构建并运行 UBSan 验证，覆盖全部 256 种字节、ASCII 大小写及真实 UTF-8 路径扩展名。三处谱面路径规范化统一复用同一入口。
 
 [Modules/Game/Logic/src/logic/EditorEngine.cpp:803](../Modules/Game/Logic/src/logic/EditorEngine.cpp#L803) [Modules/Game/Logic/src/logic/ProjectCommandService.cpp:1602](../Modules/Game/Logic/src/logic/ProjectCommandService.cpp#L1602) [Modules/Game/Logic/src/logic/ProjectResourceService.cpp:2090](../Modules/Game/Logic/src/logic/ProjectResourceService.cpp#L2090)
 
