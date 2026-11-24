@@ -70,11 +70,13 @@
 
   已验证。音效草稿和调色板会话归入工具栏私有实现，移动端布局继续使用原入口。配置定义也从工具栏公开头移出。Linux RelWithDebInfo 全量构建与 11 项相关 CTest 通过。Ninja 活动对象依赖数为 EditorSettings.h 269,EditorConfig.h 178,ToolbarView.h 15,EditorConfigChangedEvent.h 1。
 
-- [ ] **R70 · P0 · Basic2DCanvas 的视频提交和教学动作识别缺少各自的所有者**
+- [x] **R70 · P0 · Basic2DCanvas 的视频提交和教学动作识别缺少各自的所有者**
 
   6 个对象依赖；解码已有 BackgroundVideoPlayer，画布仍维护上传/跳转代次，同时跟踪独立的演练动作。 将视频帧提交和 GPU 确认状态放在单个私有组件；演练识别器只接收交互和谱面身份。覆盖迟到视频帧、GPU 在途资源释放与换谱后的演练重置。
 
   [Basic2DCanvas.h L361](../Modules/Game/Canvas/include/canvas/Basic2DCanvas.h#L361)
+
+  已验证。背景视频提交、GPU 确认与演练动作使用各自的画布私有组件，保留现有解码器和视图入口。Linux RelWithDebInfo 全量构建与 12 项相关 CTest 通过。Ninja 活动对象依赖数为 Basic2DCanvas.h 6,Basic2DCanvas_Private.h 4。
 
 - [ ] **R71 · P0 · VKContext 同时拥有设备寿命、启动诊断与主题字体状态**
 
