@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mmm/beatmap/BeatmapOutputFile.h"
+#include "mmm/beatmap/OsuManiaTracks.h"
 
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
@@ -155,6 +156,16 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
         return default_val;
     };
 
+    // 纯时间轴的领域模型用 -1 表示还未选轨数，导出采用常规 4K。
+    // 有物件时不能猜测列数，否则会改写已经决定的落轨位置。
+    auto keyCount = beatMap.m_baseMapMetadata.track_count;
+    if ( keyCount == -1 && beatMap.m_allNotes.empty() )
+        keyCount = Internal::OSU_DEFAULT_KEYS;
+    if ( keyCount < 1 || keyCount > Internal::OSU_PLAYFIELD_WIDTH ) {
+        XERROR("osu! 导出失败：键数 {} 无法映射到横坐标", keyCount);
+        return false;
+    }
+
     // 指针只观察 beatMap 拥有的稳定 vector 元素，写出期间不修改容器。
     const AudioSampleEvent* legacyAudioSample = nullptr;
     if ( beatMap.m_audioSamples.size() > 1 ) {
@@ -167,9 +178,8 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
     if ( !beatMap.m_audioSamples.empty() ) {
         // 唯一事件必须等价于 osu! 的隐式全局音频播放语义。
         legacyAudioSample = &beatMap.m_audioSamples.front();
-        // 第一条 BGM 轨紧跟玩家轨，负玩家轨数防御性收敛到零。
-        const uint32_t firstBgmTrack = static_cast<uint32_t>(
-            std::max(0, beatMap.m_baseMapMetadata.track_count));
+        // 第一条 BGM 轨紧跟已校验的玩家轨数。
+        const auto firstBgmTrack = static_cast<uint32_t>(keyCount);
         // 所有约束一次检查，失败日志输出实际字段便于定位不可表达原因。
         if ( legacyAudioSample->m_audioResourceId.empty() ||
              !std::isfinite(legacyAudioSample->m_timestamp) ||
@@ -314,7 +324,7 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
     ofs << "[Difficulty]\n";
     // 键数由当前谱面生成，其他难度数值保留原文本精度。
     ofs << "HPDrainRate:" << get_prop("Difficulty::HPDrainRate", "5") << "\n";
-    ofs << "CircleSize:" << beatMap.m_baseMapMetadata.track_count << "\n";
+    ofs << "CircleSize:" << keyCount << "\n";
     ofs << "OverallDifficulty:"
         << get_prop("Difficulty::OverallDifficulty", "8") << "\n";
     ofs << "ApproachRate:" << get_prop("Difficulty::ApproachRate", "5") << "\n";
@@ -439,19 +449,14 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
                      });
 
     for ( const auto& noteRef : export_notes ) {
-        Note& note = noteRef.get();
-        if ( note.m_type == NoteType::HOLD ) {
-            // 只有真实 Hold 才访问持续时间派生字段。
-            Hold& hold = static_cast<Hold&>(note);
-            ofs << hold.to_osu_description(
-                       beatMap.m_baseMapMetadata.track_count)
-                << "\n";
-        } else {
-            // 普通 Note 与降级 Flick 共用瞬时 HitObject 写出格式。
-            ofs << note.to_osu_description(
-                       beatMap.m_baseMapMetadata.track_count)
-                << "\n";
+        // 虚函数按真实物件类型生成单键或长条；两者均会检查轨号。
+        // 如果遇到玩家轨之外的物件，退出会回收已写前缀并保留上一次导出。
+        const auto description = noteRef.get().to_osu_description(keyCount);
+        if ( description.empty() ) {
+            XERROR("osu! 导出失败：物件轨号不在玩家轨道内");
+            return false;
         }
+        ofs << description << '\n';
     }
 
     // 先确认关闭时的缓冲写入，再记录目标文件已替换。

@@ -1,5 +1,6 @@
 #include "config/ColorPaletteFile.h"
 
+#include "config/StagedFile.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 
@@ -124,63 +125,21 @@ bool exportColorPaletteFile(const std::filesystem::path& path,
     paletteFile.scheme            = scheme;
     const nlohmann::json document = paletteFile;
 
-    // 临时文件与目标位于同一目录，通常允许原子 rename 完成替换。
-    std::filesystem::path temporaryPath = path;
-    temporaryPath += ".tmp";
-    // 写入结果跨文件流作用域保存，确保 close 后再决定是否替换目标。
-    bool writeSucceeded = false;
-    {
-        // 二进制截断避免平台换行转换，并覆盖可能存在的旧临时内容。
-        std::ofstream output(temporaryPath, std::ios::binary | std::ios::trunc);
-        if ( !output.is_open() ) {
-            // 正式目标尚未触碰，打开临时文件失败不会破坏旧方案。
-            XERROR("Failed to open color palette export file: {}",
-                   pathToUtf8(temporaryPath));
-            return false;
-        }
-
-        // 四空格缩进便于人工分享和审查，末尾换行保持文本工具兼容。
-        output << std::setw(4) << document << '\n';
-        // 流关闭前记录完整写入状态，析构随后刷新并释放文件句柄。
-        writeSucceeded = output.good();
-    }
-
-    if ( !writeSucceeded ) {
-        // 部分临时文件不得留作下次导入候选，失败后尽力清理。
-        std::error_code removeError;
-        std::filesystem::remove(temporaryPath, removeError);
-        // 清理错误不取代原始写入失败，调用方仍得到统一 false。
-        XERROR("Failed to write color palette export file: {}",
-               pathToUtf8(temporaryPath));
+    StagedOutputFile output(path, std::ios::binary | std::ios::trunc);
+    if ( !output.stream().is_open() ) {
+        XERROR("Failed to stage color palette file: {}. Error: {}",
+               pathToUtf8(path),
+               output.error().message());
         return false;
     }
-
-    // 首选同目录重命名，成功时读者只会看到旧文件或完整新文件。
-    std::error_code replaceError;
-    std::filesystem::rename(temporaryPath, path, replaceError);
-    if ( replaceError ) {
-        // Windows 可能拒绝 rename 覆盖现有目标，退化为显式覆盖复制。
-        std::error_code copyError;
-        std::filesystem::copy_file(
-            temporaryPath,
-            path,
-            std::filesystem::copy_options::overwrite_existing,
-            copyError);
-        // 复制后无论成功失败都移除临时文件，避免残留被误当正式方案。
-        std::error_code removeError;
-        std::filesystem::remove(temporaryPath, removeError);
-        if ( copyError ) {
-            // 原目标可能仍保持旧内容，调用方根据 false 不更新当前方案。
-            XERROR(
-                "Failed to replace color palette export file: {}. "
-                "Error: {}",
-                pathToUtf8(path),
-                copyError.message());
-            return false;
-        }
-        // 覆盖复制成功后正式目标已完整，rename 的原始错误无需继续上报。
+    // 二进制流保留既有换行约定；原子提交前统一核对写入和关闭。
+    output.stream() << std::setw(4) << document << '\n';
+    if ( !output.commit() ) {
+        XERROR("Failed to publish color palette file: {}. Error: {}",
+               pathToUtf8(path),
+               output.error().message());
+        return false;
     }
-
     // 仅最终目标已完整可用时记录成功，日志路径统一转为 UTF-8。
     XINFO("Color palette exported: {}", pathToUtf8(path));
     return true;

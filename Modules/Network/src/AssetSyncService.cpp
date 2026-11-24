@@ -1,6 +1,7 @@
 #include "network/AssetSyncService.h"
 #include "AssetPathSafety.h"
 #include "config/AppPaths.h"
+#include "config/StagedFile.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "network/CurlHandle.h"
@@ -276,6 +277,8 @@ bool writeBytesToFile(const std::filesystem::path& path, const void* data,
         file.write(static_cast<const char*>(data),
                    static_cast<std::streamsize>(size));
     }
+    // 明确完成关闭，下载进度只在本地文件真正写完后报告完成。
+    file.close();
     return file.good();
 }
 
@@ -607,7 +610,8 @@ bool downloadFile(
     const CURLcode result  = performRoutedDownload(curl, url, file, routing);
 
     // 先关闭文件和 curl，随后处理失败并删除部分输出。
-    std::fclose(file);
+    // libcurl 只知道回调接收的数据量，标准库缓冲区可能在关闭时才报磁盘错误。
+    const bool closed = std::fclose(file) == 0;
     curl_easy_cleanup(curl);
 
     if ( result == CURLE_ABORTED_BY_CALLBACK && cancellationCallback &&
@@ -618,9 +622,11 @@ bool downloadFile(
         // 删除失败不覆盖取消主语义，临时路径不会被发布给后续流程。
         return false;
     }
-    if ( result != CURLE_OK ) {
+    if ( result != CURLE_OK || !closed ) {
         errorMessage =
-            std::string("Download error: ") + curl_easy_strerror(result);
+            result != CURLE_OK
+                ? std::string("Download error: ") + curl_easy_strerror(result)
+                : "Could not close downloaded asset file";
         std::error_code removeError;
         std::filesystem::remove(path, removeError);
         // 任何传输错误都不得保留可被摘要阶段误读的不完整文件。
@@ -629,70 +635,91 @@ bool downloadFile(
     return true;
 }
 
-/// @brief 获取临时下载文件路径。
-/// @details 优先使用系统临时目录下的 MusicMapMaker 子目录；查询失败时回落到
-/// 当前目录。创建错误由真正打开文件的下载函数再次报告。
-/// @param fileName 固定临时文件名。
-/// @return 用于本次下载的候选路径。
-std::filesystem::path temporaryDownloadPath(const char* fileName)
+/// @brief 找到临时下载根，错误直接由同步结果报告。
+/// @details 下载目录由调用方排他创建，绝不共享系统临时根下的固定文件名。
+/// @param errorMessage 临时根不可查询时接收诊断；成功时保持原内容。
+/// @return 解析出的临时根；错误时为空。
+/// @details 一个同步可能和多个其他启动操作重叠。下载、摘要验证、解压或取消
+/// 的任何阶段都只能访问已经取得排他所有权的路径。
+std::filesystem::path temporaryDownloadRoot(std::string& errorMessage)
 {
-    std::error_code       tempPathError;
-    std::filesystem::path path =
-        std::filesystem::temp_directory_path(tempPathError);
-    if ( tempPathError ) path = ".";
-    // 使用专用子目录避免与系统临时根其他程序文件冲突。
-    path /= "MusicMapMaker";
-
-    std::error_code createError;
-    std::filesystem::create_directories(path, createError);
-    path /= fileName;
-    return path;
+    std::error_code error;
+    // 系统临时根不可确定时不尝试从进程工作目录推断位置。
+    // 下载可能在用户资料之外运行，工作目录不属于本轮同步的清理范围。
+    auto root = std::filesystem::temp_directory_path(error);
+    if ( error )
+        errorMessage =
+            "Could not locate asset download directory: " + error.message();
+    return root;
 }
 
-/// @brief 移动文件，跨文件系统时回退到复制。
-/// @details 先确保目标父目录存在，优先 rename 保持原子性和低开销；若源与目标
-/// 跨文件系统，则覆盖复制到目标并尽力删除源临时文件。
-/// @par 发布不变量
-/// - 目标父目录必须先成功建立。
-/// - 同文件系统优先以 rename 一步发布。
-/// - rename 失败才进入覆盖复制回退。
-/// - copy_file 失败时保留源临时文件用于诊断。
-/// - copy_file 成功后目标已经完整，源删除失败不撤销成功。
-/// - errorMessage 只记录阻止目标完整发布的错误。
-bool moveDownloadedFile(const std::filesystem::path& source,
-                        const std::filesystem::path& destination,
-                        std::string&                 errorMessage)
+/// @brief 将已下载且校验的文件复制到目标卷、复验并原子发布。
+/// @details 直接覆盖复制会在写入中途损毁旧文件。暂存文件与正式路径同卷，只有
+/// 完整复验、最终目录检查和取消检查都通过，才进入单次重命名。
+/// @param source 独占下载文件，已通过清单摘要校验。
+/// @param root 用户选择并解析过的安装根。
+/// @param relative 已验证的清单路径，下载来源不决定最终文件名。
+/// @param file 提供复验摘要以及诊断所用的原路径文本。
+/// @param options 提供本轮取消查询。
+/// @param errorMessage 接收目录拒绝、暂存失败、摘要不符或发布失败原因。
+/// @return 完整的暂存内容已完成重命名时为真。
+bool installDownloadedAsset(const std::filesystem::path& source,
+                            const std::filesystem::path& root,
+                            const std::filesystem::path& relative,
+                            const AssetFileEntry&        file,
+                            const AssetSyncOptions&      options,
+                            std::string&                 errorMessage)
 {
-    const auto parentPath = destination.parent_path();
-    if ( !parentPath.empty() ) {
-        std::error_code createError;
-        std::filesystem::create_directories(parentPath, createError);
-        if ( createError ) {
-            errorMessage = createError.message();
-            return false;
-        }
-    }
-
-    std::error_code renameError;
-    // 同文件系统重命名成功即完成，无需再次复制数据。
-    std::filesystem::rename(source, destination, renameError);
-    if ( !renameError ) return true;
-
-    std::error_code copyError;
-    std::filesystem::copy_file(
-        source,
-        destination,
-        std::filesystem::copy_options::overwrite_existing,
-        copyError);
-    if ( copyError ) {
-        errorMessage = copyError.message();
+    std::error_code error;
+    // 前后两次复用同一检查，确保传输回调结束后仍以原目标边界为准。
+    const auto checkDestination = [&] {
+        if ( AssetPaths::isUnredirectedDestination(root, relative, error) )
+            return true;
+        errorMessage =
+            "Unsafe asset destination: " + file.path + ": " + error.message();
+        return false;
+    };
+    if ( !checkDestination() ) return false;
+    // 清单路径原样转换为原生路径，安装不改变文件名大小写。
+    const auto destination = root / relative;
+    const auto parent      = destination.parent_path();
+    std::filesystem::create_directories(parent, error);
+    if ( error ) {
+        errorMessage = error.message();
         return false;
     }
 
-    std::error_code removeError;
-    // 复制已成功发布目标，源清理失败不使更新结果回退为失败。
-    std::filesystem::remove(source, removeError);
-    return true;
+    // 在确认真实父目录后才建立独占暂存。与系统下载目录相比，
+    // 这个目录保证与最终文件位于同卷，安装边界不依赖跨卷重命名。
+    const Config::ScopedTemporaryDirectory staging(parent,
+                                                   ".mmm-asset-install-");
+    if ( staging.error() ) {
+        errorMessage = staging.error().message();
+        return false;
+    }
+    // 使用实现内部文件名。copy_file 采用默认拒绝覆盖语义，
+    // 如果意外出现同名文件，不会写进已有条目。
+    const auto staged = staging.path() / "content.tmp";
+    // 允许下载卷与安装卷不同。任何写入失败只影响当前任务的独占文件。
+    if ( !std::filesystem::copy_file(source, staged, error) ) {
+        errorMessage =
+            "Could not stage asset file: " + file.path + ": " + error.message();
+        return false;
+    }
+    // 复制成功还需要复验目标卷的字节，源 ZIP 或下载目录的摘要
+    // 不能替代对即将提交的文件的确认。
+    const auto digest = hashAssetFile(staged, options.cancellationCallback);
+    if ( !digest || *digest != file.sha256 ) {
+        errorMessage = "Staged asset file checksum failed: " + file.path;
+        return false;
+    }
+    // 校验回调可能运行用户代码，提交前再检查取消和最终路径。
+    if ( isCancellationRequested(options) || !checkDestination() ) return false;
+    // 最后一个操作才写正式文件名。遇到外部占用和其他发布错误时，
+    // 原路径仍可读取完整内容，后续启动可以重新下载。
+    std::filesystem::rename(staged, destination, error);
+    if ( error ) errorMessage = error.message();
+    return !error;
 }
 
 /// @brief 写入本地资源版本文件。
@@ -839,7 +866,21 @@ AssetSyncResult downloadFullPackage(const AssetSyncOptions& options,
         return result;
     }
 
-    const auto tempZipPath = temporaryDownloadPath("assets.zip");
+    const auto tempRoot = temporaryDownloadRoot(result.errorMessage);
+    if ( tempRoot.empty() ) {
+        result.status = AssetSyncStatus::kError;
+        return result;
+    }
+    const Config::ScopedTemporaryDirectory download(tempRoot,
+                                                    ".mmm-asset-download-");
+    if ( download.error() ) {
+        result.status       = AssetSyncStatus::kError;
+        result.errorMessage = download.error().message();
+        return result;
+    }
+    // 固定 ZIP 名只在本轮目录内使用。退出时统一回收，
+    // 包括下载失败、摘要出错和解压部分条目后取消。
+    const auto tempZipPath = download.path() / "assets.zip";
     // 下载阶段先发布无总量进度，libcurl 回调获得总长后再更新字节字段。
     XINFO("AssetSync: downloading full asset package from {}", packageUrl);
     emitProgress(options,
@@ -919,10 +960,6 @@ AssetSyncResult downloadFullPackage(const AssetSyncOptions& options,
         return result;
     }
 
-    // 只有全部条目成功后才删除临时 ZIP；清理失败不使已安装资源回退。
-    std::error_code removeError;
-    std::filesystem::remove(tempZipPath, removeError);
-
     writeLocalVersionFile(options.assetsRootPath, result.remoteVersion);
     // 版本标记写入后发布 Finished，使下次启动可使用快速版本路径。
     // 该标记描述完整包版本，与单个 ZIP 条目或暂存文件的存在状态无关。
@@ -963,24 +1000,15 @@ bool importLocalPackage(const AssetSyncOptions& options, bool assetsExist,
     // 使用单调时钟后缀只为隔离同名导入任务，目录创建仍检查是否已存在。
     // 目录名不取自 ZIP，归档不能指定待清理的上级目录。
     // 仅回收本次独占创建的目录，不能在重试或其他进程运行时误删其工作区。
-    const auto stamp =
-        std::chrono::steady_clock::now().time_since_epoch().count();
-    const auto staging =
-        parent / (".mmm-assets-import-" + std::to_string(stamp));
-    if ( !std::filesystem::create_directory(staging, ec) ) {
-        errorMessage =
-            ec ? ec.message() : "Asset import directory already exists";
+    const Config::ScopedTemporaryDirectory import(parent,
+                                                  ".mmm-assets-import-");
+    if ( import.error() ) {
+        errorMessage = import.error().message();
         return false;
     }
-    struct RemoveStaging {
-        std::filesystem::path m_path;  ///< 当前任务独占的解压目录。
-        /// @brief 成功、失败、取消均回收解压中间文件。
-        ~RemoveStaging()
-        {
-            std::error_code cleanupError;
-            std::filesystem::remove_all(m_path, cleanupError);
-        }
-    } cleanup{ staging };
+    // 本地导入也需要隔离多个同路径发起的重试。解压树的目录归属
+    // 从创建开始明确，清理不会触及已装资源。
+    const auto& staging = import.path();
 
     emitProgress(options,
                  { AssetSyncProgressStage::kImportingPackage,
@@ -1014,7 +1042,7 @@ bool importLocalPackage(const AssetSyncOptions& options, bool assetsExist,
     // 配置根本身可能位于管理员或用户配置的软链接路径下，因此先解析根。
     // 在这个根以下不沿用目录重定向，防止覆盖参照资产目录之外的自定义文件。
     const auto canonicalRoot =
-        std::filesystem::weakly_canonical(options.assetsRootPath, ec);
+        AssetPaths::resolveRoot(options.assetsRootPath, ec);
     if ( ec || !canonicalRoot.is_absolute() ) {
         // 路径转换失败不能继续遍历；迭代器构造会重设错误码。
         // 资源根不明确时也绝不能把相对条目写入进程工作目录。
@@ -1029,11 +1057,9 @@ bool importLocalPackage(const AssetSyncOptions& options, bool assetsExist,
           !ec && it != end;
           it.increment(ec) ) {
         if ( isCancellationRequested(options) ) return false;
-        const auto relative    = it->path().lexically_relative(extracted);
-        const auto destination = canonicalRoot / relative;
-        const auto canonicalTarget =
-            std::filesystem::weakly_canonical(destination, ec);
-        if ( ec || canonicalTarget != destination ) {
+        const auto relative = it->path().lexically_relative(extracted);
+        if ( !AssetPaths::isUnredirectedDestination(
+                 canonicalRoot, relative, ec) ) {
             errorMessage = "Asset import destination contains a redirect: " +
                            Config::pathToUtf8(relative);
             return false;
@@ -1059,6 +1085,9 @@ bool importLocalPackage(const AssetSyncOptions& options, bool assetsExist,
         // 取消或 I/O 失败时不恢复被淘汰的版本号，避免下次跳过剩余差异。
         for ( const auto& relative : files ) {
             if ( ec || isCancellationRequested(options) ) break;
+            if ( !AssetPaths::isUnredirectedDestination(
+                     canonicalRoot, relative, ec) )
+                break;
             const auto destination = canonicalRoot / relative;
             std::filesystem::create_directories(destination.parent_path(), ec);
             if ( !ec )
@@ -1073,15 +1102,15 @@ bool importLocalPackage(const AssetSyncOptions& options, bool assetsExist,
 /// @brief 按清单下载缺失或变更的单文件。
 /// @details
 /// 先逐项检查安全路径、普通文件、大小和 SHA-256，按清单顺序收集过期项。
-/// 若全部当前则只更新版本标记并返回 kReady；否则逐文件下载到统一临时路径，
+/// 若全部当前则只更新版本标记并返回 kReady；否则逐文件下载到本轮独占目录，
 /// 校验摘要后移动到最终根内位置。每项发布文件索引和字节进度，任一取消或错误
 /// 立即停止，只有全部文件成功后才写版本并返回 kUpdated。
 /// @par 单文件事务
 /// - 每项开始前检查取消。
 /// - URL 补全不改变清单中的目标相对路径。
-/// - 下载只写统一临时文件，不直接截断现有资源。
+/// - 下载只写本轮独占文件，安装前核对真实目标。
 /// - 临时文件 SHA-256 必须与清单完全匹配。
-/// - 校验成功后才 rename 或跨文件系统复制到目标。
+/// - 在目标卷独占暂存并复验摘要，最后才重命名到目标。
 /// - 发布目标成功后才增加 updatedFileCount。
 /// @par 批次终态
 /// - 无过期项返回 kReady。
@@ -1107,14 +1136,35 @@ AssetSyncResult updateFromManifest(const AssetSyncOptions& options,
                      0,
                      manifest.files.size(),
                  });
+    std::error_code rootError;
+    const auto      root =
+        AssetPaths::resolveRoot(options.assetsRootPath, rootError);
+    if ( rootError ) {
+        result.status       = AssetSyncStatus::kError;
+        result.errorMessage = rootError.message();
+        return result;
+    }
+    // 已存在的资源也要检查真实位置，不能将根之外的同内容文件记为已安装。
+    for ( const auto& file : manifest.files ) {
+        if ( isCancellationRequested(options) ) return cancelledResult();
+        if ( !AssetPaths::isUnredirectedDestination(
+                 root, Config::utf8ToPath(file.path), rootError) ) {
+            result.status       = AssetSyncStatus::kError;
+            result.errorMessage = "Unsafe asset destination: " + file.path +
+                                  ": " + rootError.message();
+            return result;
+        }
+    }
     // 使用可取消的校验路径；已有匹配文件也可能在扫描大型内容时收到取消。
-    auto outdatedFiles = collectOutdatedFilesWithProgress(
-        manifest, options.assetsRootPath, options);
+    auto outdatedFiles =
+        collectOutdatedFilesWithProgress(manifest, root, options);
 
     // 空 optional 表示已在检查中取消；空列表才代表校验成功且无需更新。
     if ( !outdatedFiles || isCancellationRequested(options) )
         return cancelledResult();
 
+    // 没有差异时不分配下载目录，版本维护和只读校验沿用既有状态。
+    // 独占暂存仅服务实际的数据传输。
     if ( outdatedFiles->empty() ) {
         // 全部摘要匹配时刷新版本标记，后续启动可以跳过精确哈希。
         writeLocalVersionFile(options.assetsRootPath, manifest.version);
@@ -1134,14 +1184,28 @@ AssetSyncResult updateFromManifest(const AssetSyncOptions& options,
     XINFO("AssetSync: updating {} changed asset file(s)",
           outdatedFiles->size());
 
+    const auto tempRoot = temporaryDownloadRoot(result.errorMessage);
+    if ( tempRoot.empty() ) {
+        result.status = AssetSyncStatus::kError;
+        return result;
+    }
+    const Config::ScopedTemporaryDirectory download(tempRoot,
+                                                    ".mmm-asset-download-");
+    if ( download.error() ) {
+        result.status       = AssetSyncStatus::kError;
+        result.errorMessage = download.error().message();
+        return result;
+    }
+    // 一个任务内部串行处理文件；不同任务从不会打开彼此的暂存路径。
+    // 本轮文件串行发布后才复用文件名。不同目录里的同名 staging
+    // 没有任何数据共享，因此一个任务取消不会使另一个任务读到半成品。
+    const auto tempPath = download.path() / "asset-file.tmp";
     for ( const auto& file : *outdatedFiles ) {
         // 文件边界响应取消，避免开始下一项下载。
         if ( isCancellationRequested(options) ) return cancelledResult();
 
         const std::size_t currentFileIndex = result.updatedFileCount + 1;
-        // 同一时刻只串行下载一个文件，因此固定临时名不会发生竞争。
-        const auto tempPath = temporaryDownloadPath("asset-file.tmp");
-        const auto fileUrl =
+        const auto        fileUrl =
             AssetSyncService::resolveDownloadUrl(options.baseUrl, file.url);
         // parseManifest 已确保 URL 非空；此处补全相对地址供下载器使用。
         emitProgress(options,
@@ -1195,12 +1259,15 @@ AssetSyncResult updateFromManifest(const AssetSyncOptions& options,
             return result;
         }
 
-        const auto destinationPath =
-            (options.assetsRootPath / Config::utf8ToPath(file.path))
-                .lexically_normal();
-        // 清单解析已验证相对路径；规范化目标后再交给移动函数建立父目录。
-        if ( !moveDownloadedFile(
-                 tempPath, destinationPath, result.errorMessage) ) {
+        // 以本轮确认的根与已经通过词法校验的清单路径提交。
+        // 复制不同卷时仍把任何错误和取消留在各自的暂存范围内。
+        if ( !installDownloadedAsset(tempPath,
+                                     root,
+                                     Config::utf8ToPath(file.path),
+                                     file,
+                                     options,
+                                     result.errorMessage) ) {
+            if ( isCancellationRequested(options) ) return cancelledResult();
             result.status = AssetSyncStatus::kError;
             return result;
         }
@@ -1359,7 +1426,16 @@ AssetSyncResult AssetSyncService::sync(const AssetSyncOptions& options)
     }
 
     // libcurl 初始化只用于联网启动，本地包完成路径无需进入下载准备。
-    curl_global_init(CURL_GLOBAL_DEFAULT);
+    // 线程安全的静态初始化避免并行同步重复运行全局网络初始化；
+    // 失败时在创建下载句柄前返回，可由上游统一展示错误。
+    static const CURLcode curlInitialization =
+        curl_global_init(CURL_GLOBAL_DEFAULT);
+    if ( curlInitialization != CURLE_OK ) {
+        AssetSyncResult result;
+        result.status       = AssetSyncStatus::kError;
+        result.errorMessage = curl_easy_strerror(curlInitialization);
+        return result;
+    }
 
     std::string manifestText;
     std::string manifestDownloadError;

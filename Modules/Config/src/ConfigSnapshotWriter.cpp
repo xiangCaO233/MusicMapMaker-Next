@@ -1,9 +1,9 @@
 #include "ConfigSnapshotWriter.h"
+#include "config/StagedFile.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include <algorithm>
 #include <condition_variable>
-#include <fstream>
 #include <future>
 #include <iomanip>
 #include <iterator>
@@ -38,54 +38,23 @@ bool writeSnapshot(const std::filesystem::path& path, const nlohmann::json& j)
         }
     }
 
-    // 同目录临时文件使常见文件系统上的 rename 保持原子替换语义。
-    std::filesystem::path tempPath = path;
-    tempPath += ".tmp";
-    {
-        // trunc 确保上次失败残留的更长临时内容不会污染本轮 JSON。
-        std::ofstream file(tempPath);
-        if ( !file.is_open() ) {
-            // 打开失败前没有修改正式目标文件，旧配置仍可恢复。
-            XERROR("Failed to open config temp file for writing: {}",
-                   pathToUtf8(tempPath));
-            return false;
-        }
-
-        // 四空格缩进便于用户检查配置，末尾换行保持文本工具兼容。
-        file << std::setw(4) << j << '\n';
-        file.close();
-        if ( !file.good() ) {
-            // 流失败时临时文件可能不完整，绝不进入替换正式配置步骤。
-            XERROR("Failed to write config temp file: {}",
-                   pathToUtf8(tempPath));
-            return false;
-        }
+    StagedOutputFile output(path);
+    if ( !output.stream().is_open() ) {
+        XERROR("Failed to stage config file: {}. Error: {}",
+               pathToUtf8(path),
+               output.error().message());
+        return false;
     }
 
-    // 首选同文件系统原子重命名，成功时旧配置不会出现部分写入。
-    std::error_code replaceError;
-    std::filesystem::rename(tempPath, path, replaceError);
-    if ( replaceError ) {
-        // Windows 等平台可能拒绝覆盖现存目标，退化为显式覆盖复制。
-        std::error_code copyError;
-        std::filesystem::copy_file(
-            tempPath,
-            path,
-            std::filesystem::copy_options::overwrite_existing,
-            copyError);
-        // 无论复制结果如何都尝试清理本轮临时文件，避免持续积累残留。
-        std::error_code removeTempError;
-        std::filesystem::remove(tempPath, removeTempError);
-        // 临时清理错误不覆盖 copyError；正式文件成功优先决定保存结果。
-        if ( copyError ) {
-            // 复制失败保留原目标文件状态，并向调用方报告保存失败。
-            XERROR("Failed to replace config file: {}. Error: {}",
-                   pathToUtf8(path),
-                   copyError.message());
-            return false;
-        }
+    // 四空格缩进便于用户检查配置；保持文本模式，保留平台换行。
+    output.stream() << std::setw(4) << j << '\n';
+    if ( !output.commit() ) {
+        // 包括缓冲刷新及关闭失败；已有配置仍由正式路径访问。
+        XERROR("Failed to publish config file: {}. Error: {}",
+               pathToUtf8(path),
+               output.error().message());
+        return false;
     }
-
     return true;
 }
 /// @brief 串行写入配置，同一路径的编辑快照可在队列中合并。

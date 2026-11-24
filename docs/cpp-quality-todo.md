@@ -196,41 +196,53 @@
 
   ICE 源码通过 [IonCachyEngine #19](https://github.com/xiangCaO233/IonCachyEngine/pull/19) 合入。
 
-- [ ] **R55 · P2 · 资产下载临时名由并行调用和多个进程共用**
+- [x] **R55 · P2 · 资产下载临时名由并行调用和多个进程共用**
 
   两个不同安装根也会写同一个 assets.zip 或 asset-file.tmp，可能互相截断、挪走已验证文件或清掉另一方下载。 每次同步排他创建独立暂存目录，清理绑定本次所有权。两个不同根并行下载不同内容，分别在校验前后暂停并取消其中一个，另一份成功且摘要正确。
 
   [AssetSyncService.cpp L637](../Modules/Network/src/AssetSyncService.cpp#L637)
 
-- [ ] **R56 · P2 · 增量资产安装缺少完整包已有的真实父目录检查**
+  已验证。完整包及增量分别使用本轮独占下载目录。并行在摘要后、摘要前暂停第一份，取消第二份后第一份仍以自己的字节发布。Linux 与原生 Win10 均通过。
+
+- [x] **R56 · P2 · 增量资产安装缺少完整包已有的真实父目录检查**
 
   完整包检查实际目标；增量只做词法规范化，已有目录链接会把写入引至安装根外。跨卷回退直接覆盖目标，复制失败还可能损坏旧资产。 两个入口共用目标路径检查，下载内容先在目标卷暂存并复验，再原子替换。已有目录链接时外部文件原样保留；验证跨卷复制失败后原资产仍完整。
 
   [AssetSyncService.cpp L1016](../Modules/Network/src/AssetSyncService.cpp#L1016)
 
-- [ ] **R57 · P2 · 配置、工程设置与批注导出的写入失败保护不一致**
+  已验证。完整包、本地导入和增量共用实际目录检查。Linux 用目录链接验证根外原字节保留，在不同设备间注入复制短写后保留旧资源，恢复后重新同步并核对 SHA-256。原生 Win10 使用真实目录 junction，完整包和增量均拒绝目标，根外哨兵的 SHA-256 保持一致。
+
+- [x] **R57 · P2 · 配置、工程设置与批注导出的写入失败保护不一致**
 
   多处固定 .tmp 与覆盖复制回退，部分在 close 前判断成功，布局预设直接截断旧文件。R01 的脏状态和 R05 的请求合并没有解决这些目标文件的落盘事务。 复用现有同目录暂存与关闭检查的原则，收敛事务发布；同目标并发须明确提交顺序。对已有目标模拟写入、关闭和替换失败，核对原字节；并发写后目标应是一个完整版本。
 
   [ConfigSnapshotWriter.cpp L67](../Modules/Config/src/ConfigSnapshotWriter.cpp#L67)、[ColorPaletteFile.cpp L145](../Modules/Config/src/ColorPaletteFile.cpp#L145)、[LayoutPresets.cpp L456](../Modules/Config/src/LayoutPresets.cpp#L456)、[ProjectStorage.cpp L125](../Modules/Game/Logic/src/logic/ProjectStorage.cpp#L125)、[AnnotationExport.cpp L292](../Modules/Game/Canvas/src/AnnotationExport.cpp#L292)、[BeatmapOutputFile.h L86](../Modules/MMM/include/mmm/beatmap/BeatmapOutputFile.h#L86)
 
-- [ ] **R58 · P2 · osu! 首行的宽松签名检测可触发越界 substr**
+  已验证。配置快照、调色板、布局、工程分片、批注和谱面共用同卷暂存，检查关闭后再发布。同一目标的最后一次成功重命名生效。Linux 回归覆盖并发完整版本、写入、关闭、重命名失败及暂存清理。Win10 文件占用探针验证旧字节保留、暂存回收及释放后替换成功。配置加载在迁移写回前关闭读句柄，原生布局和调色板用例通过。
+
+- [x] **R58 · P2 · osu! 首行的宽松签名检测可触发越界 substr**
 
   只要首行包含 format 就从其位置加八取子串，尾部长短不足时标准库会抛异常。正常节区路径与签名误判混在一起。 用有边界检查的 string_view 解析完整签名，保留无签名谱面首行和 CRLF 行为。测试常规签名、短签名、普通首节和空文件，导入返回明确结果。
 
   [LoadOSUMap.hpp L247](../Modules/MMM/src/beatmap/LoadOSUMap.hpp#L247)、[BeatMap.cpp L151](../Modules/MMM/src/beatmap/BeatMap.cpp#L151)
 
-- [ ] **R59 · P2 · 工程扫描识别的混合大小写扩展名在打开和保存时被拒绝**
+  已验证。标准签名通过有界视图验证版本，正常无签名首节仍可读，截断声明和空文件返回失败。Linux 与原生 Win10 的实际文件测试覆盖 CRLF、BOM 和原越界触发文本。
+
+- [x] **R59 · P2 · 工程扫描识别的混合大小写扩展名在打开和保存时被拒绝**
 
   扫描统一小写，.osu/.mc/.imd/.mmm 的读写分派却比较原始扩展名；列表可见而打开失败。BMS 已有大小写兼容。 仅对用于分派的 ASCII 扩展名归一化，原生文件路径原样交给文件系统。测试四类扩展名混排、非 ASCII 主文件名、按原路径保存并重新打开。
 
   [ProjectDirectoryScanner.cpp L94](../Modules/Game/Logic/src/logic/ProjectDirectoryScanner.cpp#L94)、[BeatMap.cpp L135](../Modules/MMM/src/beatmap/BeatMap.cpp#L135)
 
-- [ ] **R60 · P2 · osu!mania 横坐标上边界会生成越界轨号**
+  已验证。读取和保存只规范分派用的 ASCII 后缀。四种混合大小写后缀在同一 Unicode 文件名上完成保存、重开、原路径覆盖和再次重开。Linux 与原生 Win10 均通过。
+
+- [x] **R60 · P2 · osu!mania 横坐标上边界会生成越界轨号**
 
   Note 和 Hold 独立使用 floor(x*键数/512)，4K 的 x=512 得到轨号 4；负数、异常键数还缺显式转换前检查。 两种物件共用校验与坐标映射；键数先验证，右边界落到末轨，对非法坐标明确兼容策略。以 4K 和其他合法键数测左右端、异常数字、单键和长条往返。
 
   [Note.cpp L71](../Modules/MMM/src/note/Note.cpp#L71)、[Hold.cpp L74](../Modules/MMM/src/note/Hold.cpp#L74)、[LoadOSUMap.hpp L384](../Modules/MMM/src/beatmap/LoadOSUMap.hpp#L384)
+
+  已验证。两类物件共享轨道映射，最右端进入末轨，非法横坐标跳过。1K、4K、7K 和 500K 的单键及长条往返通过，兼容旧版未设置轨数的纯时间轴。Linux 与原生 Win10 均通过。
 
 - [ ] **R61 · P2 · 资产版本标记写入失败仍返回同步成功**
 

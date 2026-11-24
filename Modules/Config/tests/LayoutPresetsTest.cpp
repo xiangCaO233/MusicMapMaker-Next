@@ -2,6 +2,7 @@
 #include "ConfigSnapshotWriter.h"
 #include "config/AppConfig.h"
 #include "config/EditorConfig.h"
+#include "config/StagedFile.h"
 #include "config/VisualConfig.h"
 #include "log/colorful-log.h"
 #include <algorithm>
@@ -9,8 +10,17 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <system_error>
+#include <thread>
+
+#if defined(__linux__)
+#    include <csignal>
+#    include <sys/resource.h>
+#    include <unistd.h>
+#endif
 
 namespace
 {
@@ -382,10 +392,18 @@ bool legacyMigration(const std::filesystem::path& root)
         const auto& library = app.getLayoutPresets();
         if ( (library.m_selected == "默认") != (kind == 0) ) return false;
         // 迁移已在 load 返回前落盘，不能只修改进程内状态。
-        std::ifstream input(file);
-        const auto    saved = nlohmann::json::parse(input, nullptr, false);
-        if ( saved["layoutPresets"]["selected"] != library.m_selected )
-            return false;
+        {
+            // 单独重读磁盘，确保加载返回成功时迁移后的配置已经可供其他进程读取。
+            std::ifstream input(file);
+            const auto    saved = nlohmann::json::parse(input, nullptr, false);
+            const auto    presets = saved.find("layoutPresets");
+            // 未写回时旧文件可能根本没有该字段，检查存在后再读取，明确报告回归。
+            if ( presets == saved.end() || !presets->is_object() ||
+                 presets->value("selected", nlohmann::json{}) !=
+                     library.m_selected )
+                return false;
+            // 再次启动前离开读取作用域，模拟已释放旧配置读句柄的真实进程。
+        }
         // 再加载同一份文件应具有幂等性，避免每次启动重复迁移。
         const auto size = library.m_items.size();
         if ( !app.load(file) || app.getLayoutPresets().m_items.size() != size )
@@ -486,6 +504,130 @@ bool multipleConfigTargets(const std::filesystem::path& root)
            revision(b) == nlohmann::json{ { "revision", 22 } };
 }
 
+/// @brief 读取正式目标的原字节，避免 JSON 宽松解析掩盖截断或路径变化。
+/// @param path 最终文件的路径，仅由测试 fixture 提供。
+/// @return 原始字节；不存在时得到空结果，本用例的正常版本均非空。
+std::string fileBytes(const std::filesystem::path& path)
+{
+    std::ifstream input(path, std::ios::binary);
+    return { std::istreambuf_iterator<char>(input),
+             std::istreambuf_iterator<char>() };
+}
+
+/// @brief 验证同一目标两个独立完整写入，以及失败时的旧内容与暂存回收。
+/// @param root 测试注册提供的独立输出根，绝不覆盖实际用户布局。
+/// @return 两份写入均完整且每种注入失败都保留旧字节时为真。
+/// @details 配置、批注、项目分片和谱面均复用同一事务对象。直接控制
+/// 事务的失败阶段，可将失败归因于写入、关闭刷新或替换的实际 I/O。
+/// 测试的两个版本长度和内容不同，便于识别并发导致的残留尾段。
+bool stagedFilePublication(const std::filesystem::path& root)
+{
+    const ScopedTemporaryDirectory fixture(root, ".staged-file-test-");
+    if ( fixture.error() ) return false;
+    // 只使用临时目录内的最终文件，两份调用除最终文件名外没有共享的流或状态。
+    const auto target = fixture.path() / "layout.json";
+    // 两个长度都足以越过常见的流缓冲上限，确保同时写入真实文件而非仅竞争内存。
+    const std::string first(8192, 'a');
+    const std::string second(12288, 'b');
+    {
+        // 两份流都在任何一次提交之前打开；固定暂存名会导致互相截断，
+        // 即使操作系统碰巧把两次正式发布串行化也无法隐藏竞争。
+        StagedOutputFile a(target);
+        StagedOutputFile b(target);
+        if ( !a.stream().is_open() || !b.stream().is_open() ) return false;
+        bool firstOK  = false;
+        bool secondOK = false;
+        // 每个线程只拥有一份流；允许任意提交顺序，但结果必须是完整版本。
+        // 两个输出对象已绑定不同暂存文件；实际序列化和发布在两个线程中独立完成。
+        // 不强制调度次序，任一版本只要完整都符合最后一个成功提交生效的契约。
+        std::jthread left([&] {
+            a.stream() << first;
+            firstOK = a.commit();
+        });
+        std::jthread right([&] {
+            b.stream() << second;
+            secondOK = b.commit();
+        });
+        // join 之后再读取结果，子线程中的提交状态通过线程终止同步。
+        left.join();
+        right.join();
+        if ( !firstOK || !secondOK ) return false;
+    }
+    // 直接比较保存后的字节。即使某个前缀恰好仍可解析为 JSON，也不能算通过。
+    const auto previous = fileBytes(target);
+    if ( previous != first && previous != second ) return false;
+    {
+        StagedOutputFile output(target);
+        if ( !output.stream().is_open() ) return false;
+        // 先写部分内容再模拟序列化报错，避免空输出和短输出在测试中互相混淆。
+        output.stream() << "partial";
+        // 序列化层的短写状态必须阻止提交，而不是发布缓冲区已有前缀。
+        // 显式设置底层流失败状态，可以稳定覆盖序列化已经写出部分内容的场景。
+        output.stream().setstate(std::ios::badbit);
+        if ( output.commit() || fileBytes(target) != previous ) return false;
+    }
+
+#if defined(__linux__)
+    {
+        // 小写入先留在缓冲；Linux 文件限额使 close 无法把内容完整刷新。
+        StagedOutputFile output(target);
+        if ( !output.stream().is_open() ) return false;
+        // 在并发线程退出之后改变进程限额，避免牵连本测试的其他写入。
+        // SIGXFSZ 只在本作用域被忽略，使内核错误由文件流检测。
+        struct rlimit saved{};
+        if ( getrlimit(RLIMIT_FSIZE, &saved) != 0 ) return false;
+        const auto oldSignal = std::signal(SIGXFSZ, SIG_IGN);
+        if ( oldSignal == SIG_ERR ) return false;
+        // 保留硬限制，只暂时降低软限制，普通进程随后仍然有权恢复。
+        // 仅降低软上限，验收结束时普通用户也能恢复到原值。
+        // 四字节能留下实际短文件，而不是令首次 open 直接失败。
+        auto limit         = saved;
+        limit.rlim_cur     = 4;
+        const bool limited = setrlimit(RLIMIT_FSIZE, &limit) == 0;
+        output.stream() << "requires closing";
+        // 必须先观察流正常，才能证明错误发生在缓冲刷新或关闭阶段。
+        // 首次写入应留在缓冲中，若已失败就不能宣称验证了关闭阶段。
+        const bool buffered  = output.stream().good();
+        const bool committed = output.commit();
+        // 先恢复进程限额及信号处理，再评估各项断言，以免注入影响其他用例。
+        const bool restored = setrlimit(RLIMIT_FSIZE, &saved) == 0;
+        std::signal(SIGXFSZ, oldSignal);
+        // 如果环境不能注入关闭错误，整项明确失败，避免把未执行的探针报告为通过。
+        if ( !limited || !buffered || committed || !restored ||
+             fileBytes(target) != previous )
+            return false;
+    }
+    // 权限注入依赖普通用户，特权进程会绕过目录限制导致伪失败。
+    if ( geteuid() != 0 ) {
+        // 继续使用同一个正式文件，直接验证权限失败不会改变其内容。
+        StagedOutputFile output(target);
+        if ( !output.stream().is_open() ) return false;
+        output.stream() << "publication blocked";
+        std::error_code error;
+        // 只关闭父目录的写权限，文件数据仍可关闭，真正失败发生在重命名。
+        std::filesystem::permissions(fixture.path(),
+                                     std::filesystem::perms::owner_read |
+                                         std::filesystem::perms::owner_exec,
+                                     error);
+        if ( error ) return false;
+        // 关闭暂存文件仍可成功，只有正式名称的替换被拒绝。
+        // 验证后恢复权限，析构才有机会清理相应暂存。
+        const bool committed = output.commit();
+        std::filesystem::permissions(
+            fixture.path(), std::filesystem::perms::owner_all, error);
+        // 最终路径还应接受读取，才能说明拒绝的是写入发布而非整个目录消失。
+        if ( committed || error || fileBytes(target) != previous ) return false;
+    }
+#endif
+    // 写、关闭、替换失败后均只剩正式文件，不会积累坏的暂存目录。
+    std::error_code error;
+    // 按目录项检查清理结果；不存在临时目录才说明后续工作不会误用半成品。
+    // 两个成功事务与三个失败事务共用此目录，残余条目会暴露任一清理路径的缺漏。
+    std::filesystem::directory_iterator it(fixture.path(), error), end;
+    if ( error || it == end || it->path() != target ) return false;
+    return it.increment(error) == end && !error;
+}
+
 }  // namespace
 /// @brief 在专用输出目录执行方案隔离和文件持久化回归。
 /// @note 测试使用值比较与真实文件，不依赖图形上下文或用户配置。
@@ -519,6 +661,10 @@ int main(int argc, char** argv)
     // 独立文件校验覆盖导入导出入口，而不是只测 JSON 往返。
     if ( !files(root) ) {
         XERROR("Layout preset file validation failed");
+        return 1;
+    }
+    if ( !stagedFilePublication(root) ) {
+        XERROR("Staged file publication failed");
         return 1;
     }
     // 旧版用户布局与新用户默认必须分开验证。

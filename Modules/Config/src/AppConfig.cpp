@@ -222,21 +222,26 @@ bool AppConfig::load(const std::filesystem::path& path)
         return false;
     }
 
-    // 流对象生命周期只覆盖本次解析，不在持锁区执行磁盘读取。
-    std::ifstream file(finalPath);
-    if ( !file.is_open() ) {
-        // 存在但不可读与缺失分开记录，便于定位权限和文件占用问题。
-        XERROR("Failed to open config file for reading: {}",
-               pathToUtf8(finalPath));
-        return false;
-    }
+    nlohmann::json j;
+    {
+        // 读取句柄仅在解析时持有。迁移会原子替换同一文件，Windows 上尚未
+        // 关闭的读取句柄会阻止重命名，因此进入状态恢复前必须释放它。
+        std::ifstream file(finalPath);
+        if ( !file.is_open() ) {
+            // 存在但不可读与缺失分开记录，便于定位权限和文件占用问题。
+            XERROR("Failed to open config file for reading: {}",
+                   pathToUtf8(finalPath));
+            return false;
+        }
 
-    // 禁用异常解析；语法错误、非对象根或底层 I/O 错误都按加载失败处理。
-    nlohmann::json j = nlohmann::json::parse(file, nullptr, false);
-    if ( j.is_discarded() || !j.is_object() || file.bad() ) {
-        // 根数组和标量不符合 EditorConfig 契约，不能交给 from_json 部分恢复。
-        XERROR("Failed to parse config file: {}", pathToUtf8(finalPath));
-        return false;
+        // 禁用异常解析；语法错误、非对象根或底层 I/O 错误都按加载失败处理。
+        j = nlohmann::json::parse(file, nullptr, false);
+        if ( j.is_discarded() || !j.is_object() || file.bad() ) {
+            // 根数组和标量不符合 EditorConfig 契约，不能交给 from_json
+            // 部分恢复。
+            XERROR("Failed to parse config file: {}", pathToUtf8(finalPath));
+            return false;
+        }
     }
 
     // 协作者标识独立于 EditorConfig 序列化，先以可选字符串读取并规范化。
