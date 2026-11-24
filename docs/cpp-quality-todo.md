@@ -798,6 +798,8 @@
 
   已验证。ICE Linux RelWithDebInfo 独立全量构建、4 项 CTest 通过；流式回归连续通过 50 次，覆盖首读失败、后台短读保留 PCM、错误状态和循环播放不误发完成。 主仓 Linux 全量构建及 6 项音频回归通过。ICE [#13](https://github.com/xiangCaO233/IonCachyEngine/pull/13) 合并提交为 `20ad8f41aeceb59cf42b6b93730050aed63151ec`。仓库默认使用 ICE 预编译包，须由既定 Runner 刷新后默认构建才会采用此处的源码修复。
 
+  已补验先确认曲尾再回跳到未缓存区的读取错误。基线探针退出 7，修复后独立 ICE 全量构建、4 项 CTest 和 50 次连续流式回归均通过，主仓全量构建及 6 项音频相关回归通过。ICE [#14](https://github.com/xiangCaO233/IonCachyEngine/pull/14) 合并提交为 `595a041b9095c4190a8c1ad569282c0019e33e29`。
+
 ### P2 · R42 · macOS 多份安装共用更新成功标记
 
 - [x] 按应用包身份隔离标记，消费前校验所属安装，也兼容原来的单标记格式。
