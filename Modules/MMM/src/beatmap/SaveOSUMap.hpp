@@ -9,6 +9,7 @@
 #include "mmm/timing/Timing.h"
 #include <algorithm>
 #include <cmath>
+#include <compare>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -427,9 +428,11 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
                         const std::reference_wrapper<Note>& b_ref) {
                          const Note& a = a_ref.get();
                          const Note& b = b_ref.get();
-                         // 容差内时间视为同组，再使用轨道与类型次键。
-                         if ( std::abs(a.m_timestamp - b.m_timestamp) > 1e-4 )
-                             return a.m_timestamp < b.m_timestamp;
+                         // 精确时间为主键，弱序也给异常浮点值分组。
+                         if ( const auto order =
+                                  std::weak_order(a.m_timestamp, b.m_timestamp);
+                              order != 0 )
+                             return order < 0;
                          if ( a.m_track != b.m_track )
                              return a.m_track < b.m_track;
                          return a.m_type < b.m_type;

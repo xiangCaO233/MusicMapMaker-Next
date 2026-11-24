@@ -1,9 +1,11 @@
 #include "log/colorful-log.h"
+#include "mmm/annotation/BeatmapAnnotation.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/note/Flick.h"
 #include "mmm/note/Hold.h"
 #include "mmm/note/Polyline.h"
 #include "mmm/project/ProjectSettings.h"
+#include "mmm/sample/AudioSample.h"
 
 #include <algorithm>
 #include <array>
@@ -1666,6 +1668,56 @@ bool testBeatmapConverterFormatMatrix(
     return ok;
 }
 
+/// @brief 用原比较器的循环三元组验证物件索引与文件顺序。
+/// @param root 仅写入 CTest 分配的输出目录。
+/// @return 六种输入排列均按实际时间先后写出时为真。
+/// @details 轨道和 ID 恰好反向，使容差关系首尾不传递；该构造用于区分
+/// 严格有序的主键与只在当前输入排列碰巧得到同样结果的比较器。
+bool nearbyTimestampOrdering(const std::filesystem::path& root)
+{
+    constexpr std::array<double, 3> noteTimes{ 0.0, 0.000075, 0.00015 };
+    constexpr std::array<double, 3> sampleTimes{ 0.0, 0.00000075, 0.0000015 };
+    std::array<int, 3>              indices{ 0, 1, 2 };
+    const auto                      path = root / "nearby-timestamps.mmm";
+    do {
+        MMM::BeatMap map;
+        map.m_baseMapMetadata.track_count = 4;
+        // 以不同排列构造原始容器，sync 后的统一视图须独立于插入次序。
+        for ( const int index : indices ) {
+            auto& note             = map.m_noteData.notes.emplace_back();
+            note.m_timestamp       = noteTimes[index];
+            note.m_track           = 2 - index;
+            auto& sample           = map.m_audioSamples.emplace_back();
+            sample.m_timestamp     = sampleTimes[index];
+            sample.m_track         = 6 - index;
+            auto& annotation       = map.m_annotations.emplace_back();
+            annotation.m_timestamp = sampleTimes[index];
+            annotation.m_id        = std::to_string(2 - index);
+        }
+        map.sync();
+        for ( std::size_t i = 0; i < noteTimes.size(); ++i ) {
+            if ( map.m_allNotes[i].get().m_timestamp != noteTimes[i] )
+                return false;
+        }
+
+        // 从文件读取输出顺序，避免加载器二次排序掩盖写出器的回归。
+        if ( !map.saveToFile(path) ) return false;
+        std::ifstream input(path);
+        const auto    serialized = nlohmann::json::parse(input, nullptr, false);
+        if ( serialized.is_discarded() ||
+             !serialized.contains("audio_samples") ||
+             !serialized.contains("annotations") )
+            return false;
+        for ( std::size_t i = 0; i < sampleTimes.size(); ++i ) {
+            if ( serialized["audio_samples"][i]["timestamp"] !=
+                     sampleTimes[i] ||
+                 serialized["annotations"][i]["timestamp"] != sampleTimes[i] )
+                return false;
+        }
+    } while ( std::next_permutation(indices.begin(), indices.end()) );
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行背景元数据格式兼容测试。
@@ -1712,6 +1764,8 @@ int main(int argc, char* argv[])
     ok &= testMalodySaverDoesNotSynthesizeAudioSample(outputDirectory);
     ok &= testOSUSaverDoesNotSynthesizeAudioSample(outputDirectory);
     ok &= testBeatmapConverterFormatMatrix(outputDirectory);
+    ok &= check(nearbyTimestampOrdering(outputDirectory),
+                "nearby timestamp ordering stays stable across permutations");
     // 批注组验证折线层级以及同时间戳多目标的稳定身份。
     ok &= testMMMPolylineAnnotationRoundTrip(outputDirectory);
     // 无批注的合法正交折线仍保留原节点身份。

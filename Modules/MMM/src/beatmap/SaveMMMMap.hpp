@@ -8,6 +8,7 @@
 #include "mmm/timing/Timing.h"
 #include <algorithm>
 #include <cmath>
+#include <compare>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -260,14 +261,15 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
     for ( const auto& sample : beatMap.m_audioSamples ) {
         sortedSamples.push_back(&sample);
     }
-    // 时间近似相同时依次使用轨道、资源和偏移决胜，保证结果可重复。
+    // 精确时间相同时依次使用轨道、资源和偏移决胜，避免两两容差形成循环。
     std::stable_sort(
         sortedSamples.begin(),
         sortedSamples.end(),
         [](const AudioSampleEvent* lhs, const AudioSampleEvent* rhs) {
-            if ( std::abs(lhs->m_timestamp - rhs->m_timestamp) > 1e-6 ) {
-                return lhs->m_timestamp < rhs->m_timestamp;
-            }
+            if ( const auto order =
+                     std::weak_order(lhs->m_timestamp, rhs->m_timestamp);
+                 order != 0 )
+                return order < 0;
             if ( lhs->m_track != rhs->m_track ) {
                 return lhs->m_track < rhs->m_track;
             }
@@ -631,8 +633,8 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
     std::sort(serializedNotes.begin(),
               serializedNotes.end(),
               [](const json& a, const json& b) {
-                  return a["timestamp"].get<double>() <
-                         b["timestamp"].get<double>();
+                  return std::weak_order(a["timestamp"].get<double>(),
+                                         b["timestamp"].get<double>()) < 0;
               });
 
     // 排序后的对象依次移动到最终数组；这里保留现有复制语义以维持简单边界。
@@ -653,9 +655,10 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
         sortedAnnotations.begin(),
         sortedAnnotations.end(),
         [](const BeatmapAnnotation* lhs, const BeatmapAnnotation* rhs) {
-            if ( std::abs(lhs->m_timestamp - rhs->m_timestamp) > 1e-6 ) {
-                return lhs->m_timestamp < rhs->m_timestamp;
-            }
+            if ( const auto order =
+                     std::weak_order(lhs->m_timestamp, rhs->m_timestamp);
+                 order != 0 )
+                return order < 0;
             return lhs->m_id < rhs->m_id;
         });
     for ( const BeatmapAnnotation* annotation : sortedAnnotations ) {

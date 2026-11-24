@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <compare>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -1301,9 +1302,10 @@ inline bool buildMalodyMapDocument(const BeatMap& beatMap, json& fileData,
         sortedSamples.begin(),
         sortedSamples.end(),
         [](const AudioSampleEvent* lhs, const AudioSampleEvent* rhs) {
-            if ( std::abs(lhs->m_timestamp - rhs->m_timestamp) > 1e-6 ) {
-                return lhs->m_timestamp < rhs->m_timestamp;
-            }
+            if ( const auto order =
+                     std::weak_order(lhs->m_timestamp, rhs->m_timestamp);
+                 order != 0 )
+                return order < 0;
             if ( lhs->m_track != rhs->m_track ) {
                 return lhs->m_track < rhs->m_track;
             }
@@ -1365,8 +1367,10 @@ inline bool buildMalodyMapDocument(const BeatMap& beatMap, json& fileData,
     std::sort(sortedNotes.begin(),
               sortedNotes.end(),
               [](const auto& a, const auto& b) {
-                  if ( std::abs(a->m_timestamp - b->m_timestamp) > 1e-6 )
-                      return a->m_timestamp < b->m_timestamp;
+                  if ( const auto order =
+                           std::weak_order(a->m_timestamp, b->m_timestamp);
+                       order != 0 )
+                      return order < 0;
                   return a->m_track < b->m_track;
               });
 
