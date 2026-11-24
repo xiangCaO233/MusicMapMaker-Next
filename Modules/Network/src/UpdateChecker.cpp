@@ -1,4 +1,5 @@
 #include "network/UpdateChecker.h"
+#include "config/ExecutablePath.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmmversion.h"
@@ -37,8 +38,6 @@
 #    include <windows.h>
 #    include <shellapi.h>
 // clang-format on
-#elif defined(__APPLE__)
-#    include <mach-o/dyld.h>
 #endif
 #if !defined(_WIN32)
 #    include <spawn.h>
@@ -520,41 +519,13 @@ void UpdateChecker::openUrlInBrowser(const std::string& url)
 }
 
 /// @brief 查询当前运行主程序的绝对路径。
-/// @details
-/// 各平台使用原生进程接口：Windows 模块路径、macOS dyld 路径和 Linux
-/// `/proc/self/exe`。成功结果转换为 UTF-8；无法解析或规范化时返回空字符串。
+/// @details 与应用启动和资源定位共享原生解析器。Windows 和 macOS 使用动态
+/// 缓冲，Linux 和 macOS 尽量解析符号链接；此接口保持调用方所需的 UTF-8 表示。
+/// @note 系统无法返回路径时保留空字符串，更新不能拿当前工作目录推断安装位置。
 /// @return 当前可执行文件 UTF-8 路径，失败时为空。
 std::string UpdateChecker::currentExecutablePath()
 {
-#if defined(_WIN32)
-    // 宽字符 API 保留安装路径中的非 ASCII 文件名。
-    wchar_t bufW[MAX_PATH];
-    DWORD   len = GetModuleFileNameW(nullptr, bufW, MAX_PATH);
-    if ( len > 0 && len < MAX_PATH ) {
-        std::filesystem::path p(bufW);
-        return Config::pathToUtf8(p);
-    }
-    return "";
-#elif defined(__APPLE__)
-    // _NSGetExecutablePath 返回的路径可能含符号链接或相对片段，优先弱规范化。
-    char     buf[PATH_MAX];
-    uint32_t size = sizeof(buf);
-    if ( _NSGetExecutablePath(buf, &size) == 0 ) {
-        const std::filesystem::path rawPath = Config::utf8ToPath(buf);
-        std::error_code             canonicalError;
-        const auto                  canonicalPath =
-            std::filesystem::weakly_canonical(rawPath, canonicalError);
-        // 规范化失败仍返回原始 dyld 路径，保留后续诊断机会。
-        return Config::pathToUtf8(canonicalError ? rawPath : canonicalPath);
-    }
-    return "";
-#else
-    // canonical 同时解析 procfs 符号链接并返回实际程序路径。
-    std::error_code ec;
-    auto            path = std::filesystem::canonical("/proc/self/exe", ec);
-    if ( !ec ) return path.string();
-    return "";
-#endif
+    return Config::pathToUtf8(Config::currentExecutablePath());
 }
 
 /// @brief 启动独立更新器替换当前程序并退出进程。
