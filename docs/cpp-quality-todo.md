@@ -557,7 +557,9 @@
 
 ### P2 · R10 · 更新模块仍有一套固定长度的可执行路径实现
 
-- [ ] Windows 使用 MAX_PATH，macOS 使用固定 PATH_MAX，缓冲不足直接返回空；启动模块已有动态读取路径。长路径影响更新定位及依赖此值的调用方。统一路径查询，验证长路径、符号链接及失败。
+- [x] Windows 使用 MAX_PATH，macOS 使用固定 PATH_MAX，缓冲不足直接返回空；启动模块已有动态读取路径。长路径影响更新定位及依赖此值的调用方。统一路径查询，验证长路径、符号链接及失败。
+
+  已验证。Linux Clang 22 RelWithDebInfo 全量构建及 4 项回归通过。原生探针覆盖 406 字节路径、从符号链接启动及可执行文件删除后的空结果。debsrv 交叉构建的探针在 Win10 返回完整的 357 UTF-16 单元路径；未单独运行 macOS 原生探针。
 
 [Modules/Network/src/UpdateChecker.cpp:524](../Modules/Network/src/UpdateChecker.cpp#L524) [Modules/Config/src/AppPaths.cpp:27](../Modules/Config/src/AppPaths.cpp#L27)
 

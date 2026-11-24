@@ -6,6 +6,8 @@
  */
 
 #include "network/UpdateChecker.h"
+#include "config/ExecutablePath.h"
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include <filesystem>
 #include <fstream>
@@ -447,6 +449,27 @@ static int testNormalizeSha256()
     return fail;
 }
 
+/// @brief 核对更新路径和应用启动解析器使用同一个当前进程路径。
+/// @return 正常可执行文件可用且两边保留同一 UTF-8 路径时返回零。
+/// @details CTest 可从不同工作目录及符号链接启动，两个入口均不借用调用方参数。
+/// 对比完整可执行文件名和路径，确保更新器获得可以用于替换的目标。
+/// 启动侧原生路径可能含非 ASCII 字符；更新侧按现有接口转换为 UTF-8。
+/// 不依赖网络服务、已安装更新器或当前目录中的发行文件。
+static int testCurrentExecutablePath()
+{
+    const auto nativePath = MMM::Config::currentExecutablePath();
+    // 在可执行文件的路径上检查类型，避免只验证两个入口都返回空字符串。
+    std::error_code error;
+    if ( !nativePath.is_absolute() ||
+         !std::filesystem::is_regular_file(nativePath, error) ||
+         UpdateChecker::currentExecutablePath() !=
+             MMM::Config::pathToUtf8(nativePath) ) {
+        XERROR("Updater and application did not resolve the same executable");
+        return 1;
+    }
+    return 0;
+}
+
 /// @brief 验证更新成功标记文件的创建、删除和缺失检测边界。
 /// @return 文件系统操作或缺失标记判断失败的断言数量。
 /// @note 测试文件位于系统临时目录，不写入源码树和个人配置目录。
@@ -611,6 +634,7 @@ int main()
     }
     // 摘要规范化和标记文件覆盖发布完整性与启动收尾路径。
     totalFail += testNormalizeSha256();
+    totalFail += testCurrentExecutablePath();
     totalFail += testUpdateSuccessMarker();
 #if defined(__linux__) && !defined(__ANDROID__)
     totalFail += testInvalidUpdaterExec();
