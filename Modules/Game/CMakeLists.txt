@@ -53,3 +53,20 @@ endif()
 
 # 公开 include 根仅暴露 Game 门面与应用服务头。
 target_include_directories(Game PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+if(WIN32)
+  # 此诊断用例仅依赖系统 API，使用已有 Foundation 测试程序，避免链接 Game 聚合库。
+  mmm_add_test_executable(Common CrashDumpStatusTest
+                          tests/CrashDumpStatusTest.cpp)
+  target_include_directories(CrashDumpStatusTest
+                             PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+  # DbgHelp 负责真实转储，Advapi32 为权限用例构造确定拒绝写入的 ACL。
+  target_link_libraries(CrashDumpStatusTest PRIVATE dbghelp advapi32)
+  # ACL 与转储只在构建目录临时建立，支持无交互原生 Windows 运行。
+  file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test_output")
+  mmm_register_test_case(NAME CrashDumpStatusTest COMMAND CrashDumpStatusTest)
+  # 不随开发机目录或用户配置变动，夹具仅使用这次构建的可写路径。
+  set_tests_properties(
+    CrashDumpStatusTest PROPERTIES WORKING_DIRECTORY
+                                   "${CMAKE_BINARY_DIR}/test_output")
+endif()
