@@ -6,11 +6,13 @@
 
 每项单独开分支和提交，落后 main 时先 rebase。构建及本项回归通过后勾选，审阅后以 merge commit 合入。涉及公开头的条目须在相同配置下对比 Ninja 对象依赖，记录已解除依赖的消费者。私有重状态按组件生命周期构造，热路径复用现有存储。
 
-- [ ] **R62 · P0 · UIManager 的视图注册和工作区生命周期仍共享公开布局**
+- [x] **R62 · P0 · UIManager 的视图注册和工作区生命周期仍共享公开布局**
 
   69 个对象依赖此头。已有 Impl，但泛型 getView 直接查拥有视图的 map；视图顺序、帧准备缓存和工作区恢复状态仍在头中。 模板保留既有指针校正，改调非模板 findView；在既有 Impl 内由 ViewRegistry 拥有视图、顺序和借用缓存；另设工作区恢复协调器。检查注册/移除顺序、准备任务结束后才能销毁、延迟恢复和 GPU 资源释放。
 
   [UIManager.h L238](../Modules/Game/UI/include/ui/UIManager.h#L238)
+
+  已验证。视图注册表和工程工作区恢复协调器位于既有 Impl，视图借用与 GPU 等待仍走现有入口。Linux RelWithDebInfo 全量构建和 13 项相关 CTest 通过。Ninja 活动对象中 ProjectUiLifecycleState.h 从 70 降至 2，UIManager.h 保留 69 个公开入口消费者。
 
 - [ ] **R63 · P0 · BeatmapSession 的保存调度和表格投影可独立拥有**
 
