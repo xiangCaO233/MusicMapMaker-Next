@@ -709,7 +709,9 @@
 
 ### P3 · R29 · 全量解码失败与空音轨无法区分
 
-- [ ] 生产解码路径捕获 future 异常并永久缓存空结果，调用者失去故障原因。给资源准备结果保留失败状态，分别回归空文件、合法空轨、后台失败。
+- [x] 生产解码路径捕获 future 异常并永久缓存空结果，调用者失去故障原因。给资源准备结果保留失败状态，分别回归空文件、合法空轨、后台失败。
+
+  已验证。Linux RelWithDebInfo ICE 独立全量构建和 4 项 CTest 通过，新用例独立复跑 100 次通过。真实 FFmpeg 区分空文件与合法空 WAV，同时验证打开、格式、定位、读取、帧数异常及后台任务失败的诊断。旧读取接口保留帧数行为，新准备侧查询提供明确的结果。 主仓 Linux 全量构建和 6 项音频回归通过。ICE 来源 [IonCachyEngine #12](https://github.com/xiangCaO233/IonCachyEngine/pull/12)，指针指向合并提交 `568bc7fd24d55ed5df8d95b8c0e7a2f9d4565b29`。默认构建采用仓库内的预编译 ICE，源码修复待指定环境刷新预编译包后才由默认构建使用。
 
 [3rdpty/sources/IonCachyEngine/src/ice/manage/dec/CachyDecoder.cpp:153](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/CachyDecoder.cpp#L153)
 
