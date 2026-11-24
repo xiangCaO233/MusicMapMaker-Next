@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -101,8 +102,10 @@ public:
     /// @param dt 帧间隔时间 (秒)
     /// @param config 全局编辑器配置
     /// @param isActiveSession 当前会话是否是前台活跃会话。
+    /// @param configRevision 逻辑线程配置快照的修订号；缺省时每轮读取传入配置。
     void update(double dt, const Config::EditorConfig& config,
-                bool isActiveSession);
+                bool                         isActiveSession,
+                std::optional<std::uint64_t> configRevision = std::nullopt);
 
     /// @brief 向逻辑更新请求批注表，并读取上一份不可变发布。
     /// @warning UI 低频轮询。只有发布句柄的共享所有权跨线程，不等待会话锁。
@@ -193,11 +196,14 @@ private:
                                   bool isBusy);
 
     /// @brief 消费并路由指令队列中的所有命令
+    /// @param config 本轮的编辑器配置模板。
+    /// @param configNeedsLayout 已恢复配置模板；首条命令出队时按需置位。
     /// @return 如果处理了至少一个指令，则返回 true
     /// @warning 逻辑热路径：每个 Session update 调用；普通帧只检查空队列，
     /// 仅低频元数据命令允许同步自动采样领域数据，纯物件协作同步期间可复制一次
     /// 活跃画笔草稿以保持未结束手势。
-    bool processCommands();
+    bool processCommands(const Config::EditorConfig& config,
+                         bool&                       configNeedsLayout);
 
     /// @brief 在入队与消费边界统一拦截离线房间谱面的编辑命令。
     /// @param cmd 待检查命令。
@@ -332,6 +338,9 @@ private:
     /// @brief 当前离线周期是否已经发布过编辑拦截提示。
     /// @warning 多命令生产线程写入；用于把连续鼠标命令合并为一次 UI 提示。
     std::atomic_bool m_offlineEditBlockedNotificationSent{ false };
+
+    /// @brief 已应用到会话配置的快照修订，随会话更新由逻辑线程独占。
+    std::optional<std::uint64_t> m_appliedConfigRevision;
 
     bool   m_wasPlaying{ false };                   ///< 上一帧是否正在播放
     bool   m_hasDeferredBeatmapSyncTimer{ false };  ///< 是否已有延迟同步计时点

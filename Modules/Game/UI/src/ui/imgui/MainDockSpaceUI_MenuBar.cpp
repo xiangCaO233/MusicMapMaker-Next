@@ -12,6 +12,7 @@
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <cmath>
 #include <fmt/format.h>
 #include <memory>
 #include <string>
@@ -34,7 +35,7 @@ namespace MMM::UI
 /// 交互边界：
 /// - Logo 当前只承担品牌展示和统一悬停反馈，不发布业务动作；
 /// - 菜单动作由 MainMenuView 管理，本函数不解释或缓存动作状态；
-/// - 性能文本只读取 EditorEngine 已汇总的 UPS，不参与采样；
+/// - 性能文本读取 ImGui 的帧率和 EditorEngine 已汇总的 TPU，不参与采样；
 /// - 双击最大化和三个窗口按钮都通过 GLFWNativeEvent 请求平台操作；
 /// - 原生回调是最大化状态的权威来源，本函数不乐观修改 m_isMaximized；
 /// - Tooltip 贴靠按钮左侧，避免超出主视口右边缘。
@@ -201,26 +202,47 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         ImGui::TextUnformatted(titleText);
         float titleEndX = titleX + titleWidth;
 
-        // 性能文本放在窗口按钮左侧，显示帧耗时、FPS 与逻辑 UPS。
-        ImGuiIO&    io       = ImGui::GetIO();
-        float       logicUps = Logic::EditorEngine::instance().getLogicUps();
-        std::string fpsStr   = TR_FMT("ui.menu.frame_stats_fmt",
-                                      1000.0f / io.Framerate,
-                                      io.Framerate,
-                                      logicUps);
-        float       fpsWidth = ImGui::CalcTextSize(fpsStr.c_str()).x;
+        // FT 和 FPS 沿用 ImGui 的帧率统计，TPU 按逻辑更新预算单独着色。
+        // 只有严格超过各档预算倍数才升档，恰好达到边界仍使用较低档。
+        // 使用原始耗时判断，避免整数显示影响颜色切换。
+        const float     tpu = Logic::EditorEngine::instance().getLogicTpuUs();
+        constexpr float budget = Logic::EditorEngine::LOGIC_UPDATE_BUDGET_US;
+        ImVec4          tpuColor{ 0.38f, 0.84f, 0.42f, 1.0f };
+        if ( tpu > budget * 10.0f ) {
+            tpuColor = { 0.72f, 0.12f, 0.18f, 1.0f };
+        } else if ( tpu > budget * 5.0f ) {
+            tpuColor = { 1.0f, 0.34f, 0.34f, 1.0f };
+        } else if ( tpu > budget * 2.5f ) {
+            tpuColor = { 1.0f, 0.58f, 0.26f, 1.0f };
+        } else if ( tpu > budget ) {
+            tpuColor = { 0.98f, 0.83f, 0.25f, 1.0f };
+        }
+        // 整数显示向下取整，让临近阈值的读数与实际颜色区间一致。
+        // 更新耗时小于 1 微秒时保留量级信息，避免整数零暗示没有执行更新。
+        // 文本宽度随位数变化，右边缘固定在窗口控制区旁。
+        const auto tpuText =
+            tpu < 1.0f ? std::string("TPU: <1us")
+                       : fmt::format("TPU: {:.0f}us", std::floor(tpu));
+        // 帧耗时和帧率共用同一个平滑采样值，避免同栏读数互相矛盾。
+        const float fps = ImGui::GetIO().Framerate;
+        const auto  frameText =
+            fmt::format("FT: {:.2f}ms | FPS: {:.0f} | ", 1000.0f / fps, fps);
+        const float statsWidth = ImGui::CalcTextSize(frameText.c_str()).x +
+                                 ImGui::CalcTextSize(tpuText.c_str()).x;
 
         // 右侧区域固定容纳最小化、最大化和关闭三个等宽按钮。
         float numberOfButtons  = 3;
         float buttonsAreaWidth = buttonSize * numberOfButtons;
         float buttonsStartX    = barWidth - buttonsAreaWidth;
 
-        float fpsGap = std::floor(12.0f * dpiScale);
-        // 预留间距避免帧信息与窗口控制分隔线发生视觉粘连。
-        float fpsX = buttonsStartX - fpsGap - fpsWidth;
-        ImGui::SetCursorPosX(fpsX);
-        ImGui::TextUnformatted(fpsStr.c_str());
-        float fpsEndX = fpsX + fpsWidth;
+        // 文本右对齐，避免与窗口控制分隔线发生视觉粘连。
+        const float tpuGap = std::floor(12.0f * dpiScale);
+        const float statsX = buttonsStartX - tpuGap - statsWidth;
+        ImGui::SetCursorPosX(statsX);
+        ImGui::TextUnformatted(frameText.c_str());
+        // 分隔符两侧的空格已经包含在文本中，统计项之间不增加组件间距。
+        ImGui::SameLine(0.0f, 0.0f);
+        ImGui::TextColored(tpuColor, "%s", tpuText.c_str());
         if ( menuFont ) ImGui::PopFont();
 
         // 自绘标题栏把没有菜单或窗口按钮的部分声明为原生拖拽区域：
@@ -267,7 +289,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         }
 
         // 分隔线将性能文本与高风险的原生窗口控制区明确分组。
-        float  lineX     = buttonsStartX - fpsGap * 0.5f;
+        float  lineX     = buttonsStartX - tpuGap * 0.5f;
         ImVec2 windowPos = ImGui::GetWindowPos();
         ImVec4 sepCol    = ImGui::GetStyleColorVec4(ImGuiCol_Text);
         sepCol.w *= 0.5f;  // 降低分隔线透明度，避免比文字更醒目。

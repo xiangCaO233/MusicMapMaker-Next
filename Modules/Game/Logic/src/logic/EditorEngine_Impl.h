@@ -5,7 +5,6 @@
 #include "common/EditorTrackLayout.h"
 #include "common/NoteColor.h"
 #include "config/EditorConfig.h"
-#include "config/FrameLimitPreference.h"
 #include "logic/EditorClipboard.h"
 #include "logic/EditorEngine.h"
 #include "logic/RenderSyncRegistry.h"
@@ -100,13 +99,6 @@ struct EditorEngine::Impl {
 
     /// @brief 当前项目音频工具为新建物件设置的音量倍率。
     float m_brushAudioVolume{ 1.0F };
-
-    /// @brief 逻辑线程用于节流判断的帧率限制模式缓存。
-    /// @warning 逻辑热路径/原子：loop 每次迭代读取；只缓存配置枚举，使用
-    /// relaxed 降低栅栏成本。
-    std::atomic<Config::FrameLimitPreference> m_frameLimitPreference{
-        Config::FrameLimitPreference::Refresh2x
-    };
 
     /// @brief 渲染同步注册表，封装同步缓冲区、图集 UV 映射和视口尺寸缓存。
     RenderSyncRegistry m_renderSyncRegistry;
