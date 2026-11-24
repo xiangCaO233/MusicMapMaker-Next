@@ -621,7 +621,9 @@
 
 ### P2 · R18 · 波形统计忽略实际读取帧数
 
-- [ ] 末桶或短读时仍按请求长度复制、滤波和取极值，未覆盖区域可保留上桶样本。使用实际返回长度，比较短读、零帧、非整桶曲尾与参考包络。
+- [x] 末桶或短读时仍按请求长度复制、滤波和取极值，未覆盖区域可保留上桶样本。使用实际返回长度，比较短读、零帧、非整桶曲尾与参考包络。
+
+  已验证。Linux RelWithDebInfo 全量构建和 3 项相关 CTest 通过。短读、零帧、非整桶曲尾的左右包络均与逐样本参考一致，覆盖 EQ 开启和关闭；新增回归在修复前的分析实现上能复现错误。
 
 [Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp:758](../Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp#L758) [Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp:783](../Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp#L783) [3rdpty/sources/IonCachyEngine/src/ice/manage/AudioTrack.cpp:33](../3rdpty/sources/IonCachyEngine/src/ice/manage/AudioTrack.cpp#L33)
 

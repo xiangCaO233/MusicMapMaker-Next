@@ -12,7 +12,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
-#include <cstring>
 #include <limits>
 #include <utility>
 
@@ -71,12 +70,10 @@ std::vector<WaveformBin> calculateWaveform(
 
     // 等效滤波器在任务内创建，递推状态不与播放或其他分析请求共享。
     Audio::OfflineAnalysisEQ eq(eqSettings, sampleRate, format.channels);
-    ice::AudioBuffer         rawBuffer;
-    ice::AudioBuffer         processBuffer;
-    // 分开持有最大容量的输入与输出，音轨读取按容量而非输出有效长度检查。
-    // 滤波器只接收以实际块长呈现的输出，递推历史在每个时间桶末端自然延续。
-    rawBuffer.resize(format, WAVEFORM_EQ_BLOCK_FRAMES);
-    processBuffer.resize(format, WAVEFORM_EQ_BLOCK_FRAMES);
+    // 预留整块容量。读取只写有效前缀，随后缩短活动帧数供原位 EQ 消费。
+    // set_active_frames 不改变通道步长或底层存储，下一桶可以再读满整块。
+    ice::AudioBuffer buffer;
+    if ( !buffer.resize(format, WAVEFORM_EQ_BLOCK_FRAMES) ) return {};
 
     for ( std::size_t p = 0; p < bins.size(); ++p ) {
         // 取消后不发布部分结果。固定桶大小限制扫描阶段的取消延迟。
@@ -95,30 +92,23 @@ std::vector<WaveformBin> calculateWaveform(
             std::min(endFrame - startFrame, WAVEFORM_EQ_BLOCK_FRAMES);
 
         // 按桶的绝对帧位置读取，不修改任何正在播放的节点游标。
-        track->read(rawBuffer, startFrame, frames);
-        // 预留容量保持不变，resize 只重设提供给 EQ 的有效输出范围。
-        // 从原始缓冲复制，播放用的缓存数据永远不被离线滤波器改写。
-        processBuffer.resize(format, frames);
-        for ( std::uint16_t ch = 0; ch < rawBuffer.num_channels(); ++ch ) {
-            std::memcpy(processBuffer.raw_ptrs()[ch],
-                        rawBuffer.raw_ptrs()[ch],
-                        frames * sizeof(float));
-        }
-        // 空 EQ 链原样通过，随后两种模式共用同一极值统计算法。
-        eq.process(processBuffer);
+        // 短读只覆盖开头；空桶保持零基线，也不允许旧采样更新滤波器历史。
+        const auto validFrames = track->read(buffer, startFrame, frames);
+        if ( validFrames == 0 || !buffer.set_active_frames(validFrames) )
+            continue;
+        // 使用与包络统计相同的有效区间，避免对上个桶留下的尾部二次滤波。
+        eq.process(buffer);
 
         // 极值从零开始包含静音基线；单声道复用左声道，忽略左右以外的声道。
-        // 同一轮循环统计两个声道，保证窗口中每对上下界来自同一段音频。
         auto&  bin  = bins[p];
-        auto** data = processBuffer.raw_ptrs();
-        for ( std::size_t f = 0; f < frames; ++f ) {
-            const auto left = data[0][f];
-            const auto right =
-                processBuffer.num_channels() > 1 ? data[1][f] : left;
-            bin.minL = std::min(bin.minL, left);
-            bin.maxL = std::max(bin.maxL, left);
-            bin.minR = std::min(bin.minR, right);
-            bin.maxR = std::max(bin.maxR, right);
+        auto** data = buffer.raw_ptrs();
+        for ( std::size_t f = 0; f < validFrames; ++f ) {
+            const auto left  = data[0][f];
+            const auto right = buffer.num_channels() > 1 ? data[1][f] : left;
+            bin.minL         = std::min(bin.minL, left);
+            bin.maxL         = std::max(bin.maxL, left);
+            bin.minR         = std::min(bin.minR, right);
+            bin.maxR         = std::max(bin.maxR, right);
         }
     }
     // 返回值转移整个时间序列的所有权；只有观察端仍有对应 future 才能接收。
