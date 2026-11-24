@@ -422,7 +422,8 @@ void ProjectAudioToolView::renderTableView(
                     item.audioVolume = volume;
                     // 数值与画笔立即同步，拖动期间不保存项目或触发全部方块重建。
                     // 不提升层级，确保本帧行引用与表格排序继续有效。
-                    activateItem(index, false);
+                    // 此处只同步倍率和画笔，当前表格行不需要重新定位。
+                    (void)activateItem(index, false);
                 }
                 // 松手提交一次最终状态；方向键等非激活编辑则按实际修改提交。
                 // 即使释放帧数值未再变化，也要保存前面拖动产生的最终倍率。

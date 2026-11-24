@@ -6,7 +6,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
 #include <ice/config/config.hpp>
 #include <ice/core/SourceNode.hpp>
 #include <ice/manage/AudioBuffer.hpp>
@@ -441,10 +440,7 @@ int main(int argc, char** argv)
     // 使用生产 AudioPool 解码路径，加载工作在任何分配计数开始之前完成。
     ice::ThreadPool threadPool(2);
     ice::AudioPool  audioPool;
-    auto            track =
-        audioPool
-            .get_or_load(threadPool, std::filesystem::path(argv[1]).string())
-            .lock();
+    auto            track = audioPool.get_or_load(threadPool, argv[1]).lock();
     if ( !track || track->num_frames() < 128U ) {
         XERROR("Failed to load SourceNode realtime test sample");
         return 1;

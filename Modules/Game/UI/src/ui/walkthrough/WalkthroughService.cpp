@@ -236,7 +236,8 @@ struct Service::Impl {
         backup += ".previous";
         if ( std::filesystem::exists(backup, ec) ) {
             // 既有恢复文件可能包含用户唯一可用进度，不自动覆盖。
-            m_error = "存在演练恢复文件，请先检查 " + backup.string();
+            m_error =
+                "存在演练恢复文件，请先检查 " + MMM::Config::pathToUtf8(backup);
             return;
         }
         ec.clear();

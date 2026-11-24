@@ -157,7 +157,7 @@ bool validateApplication(const std::filesystem::path& applicationPath)
     // 检查在事务暂存路径上完成，失败时不会触碰原应用目录。
     if ( !runSystemTool(
              "/usr/bin/codesign",
-             { "--verify", "--deep", "--strict", applicationPath.string() }) ) {
+             { "--verify", "--deep", "--strict", applicationPath.native() }) ) {
         writeStderr("Extracted app failed code signature verification\n");
         return false;
     }
@@ -196,12 +196,12 @@ bool installMacApplication(const std::filesystem::path& archivePath,
     const std::string           uniqueSuffix =
         std::to_string(static_cast<long>(getpid()));
     const std::filesystem::path stagingRoot =
-        targetParent / ("." + targetApplication.filename().string() +
+        targetParent / ("." + targetApplication.filename().native() +
                         ".update-" + uniqueSuffix);
     // 备份名和 stagingRoot 分开。交换不可用时，回滚目标不会落入解压树。
     // 两者都依赖已规范化的目标，以免相同包的 Mach-O 路径产生不同事务根。
     const std::filesystem::path backupPath =
-        targetParent / ("." + targetApplication.filename().string() +
+        targetParent / ("." + targetApplication.filename().native() +
                         ".backup-" + uniqueSuffix);
 
     // 清除同 PID 遗留目录，避免上次异常退出内容混入本次验证。
@@ -224,8 +224,8 @@ bool installMacApplication(const std::filesystem::path& archivePath,
                         { "-x",
                           "-k",
                           "--noqtn",
-                          archivePath.string(),
-                          stagingRoot.string() }) ) {
+                          archivePath.native(),
+                          stagingRoot.native() }) ) {
         writeStderr("Failed to extract app update archive\n");
         removeTreeBestEffort(stagingRoot);
         return false;

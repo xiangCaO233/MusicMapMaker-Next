@@ -1,5 +1,6 @@
 #include "audio/AudioTimelineMixerNode.h"
 #include "audio/KeySoundControl.h"
+#include "config/Utf8Path.h"
 
 #include "log/colorful-log.h"
 
@@ -1059,7 +1060,9 @@ int main(int argc, char** argv)
     const std::filesystem::path samplePath(argv[1]);
     ice::ThreadPool             threadPool(2);
     ice::AudioPool              audioPool;
-    auto track = audioPool.get_or_load(threadPool, samplePath.string()).lock();
+    auto                        track =
+        audioPool.get_or_load(threadPool, MMM::Config::pathToUtf8(samplePath))
+            .lock();
     // 至少 64 帧保证重叠、Seek 与替换场景的参考读取均位于资源范围内。
     if ( !track || track->num_frames() < 64U ) {
         XERROR("Failed to prepare timeline mixer test sample");

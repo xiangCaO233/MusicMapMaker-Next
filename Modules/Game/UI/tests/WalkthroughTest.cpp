@@ -156,8 +156,8 @@ int main(int argc, char** argv)
     // 路径门禁测试只在隔离配置根下创建资源占位，绝不接触个人配置。
     // CanonRock 目录来自和生产代码相同的 AppPaths 配置根解析入口。
     const auto canonRock = canonRockDirectory();
-    if ( canonRock.string().find(std::filesystem::path(argv[1]).string()) !=
-         0U )
+    if ( !canonRock.native().starts_with(
+             std::filesystem::path(argv[1]).native()) )
         return 101;
     std::error_code pathError;
     // 只需制造真实文件系统身份，无需复制大型谱面或音频资源。

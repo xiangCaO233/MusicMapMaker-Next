@@ -1,5 +1,6 @@
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
+#include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
 #include "log/colorful-log.h"
 #include "ui/UIManager.h"
@@ -837,10 +838,10 @@ int main(int argc, char** argv)
         return 1;
     auto&      translator   = MMM::Translation::getActiveTranslator();
     const auto translations = std::filesystem::path(argv[1]);
-    if ( !translator.loadLanguage("zh_cn",
-                                  (translations / "zh_cn.lua").string()) ||
-         !translator.loadLanguage("en_us",
-                                  (translations / "en_us.lua").string()) )
+    if ( !translator.loadLanguage(
+             "zh_cn", MMM::Config::pathToUtf8(translations / "zh_cn.lua")) ||
+         !translator.loadLanguage(
+             "en_us", MMM::Config::pathToUtf8(translations / "en_us.lua")) )
         return 2;
     if ( !checkSynonyms() ) return 3;
     if ( !checkCacheAndRanking() ) return 4;

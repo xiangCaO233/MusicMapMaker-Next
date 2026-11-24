@@ -553,10 +553,12 @@ bool testRoundTripCacheAndIncrementalChanges()
     const auto firstSessionRoot =
         first.bundle.project->m_projectRoot.parent_path();
     // 接收项目根位于 session 目录下，pathRemap 提供其内部明文相对路径。
+    // 协议重映射键始终使用斜杠；本地文件名只需验证 ASCII 会话前缀。
     const auto effectRemap = first.bundle.pathRemap.find("audio/effect.wav");
     if ( effectRemap == first.bundle.pathRemap.end() ||
          firstSessionRoot.parent_path() != cacheRoot ||
-         !firstSessionRoot.filename().string().starts_with("session-") ) {
+         !MMM::Config::pathToUtf8(firstSessionRoot.filename())
+              .starts_with("session-") ) {
         return false;
     }
     const auto encryptedEffect =
@@ -725,7 +727,8 @@ bool testTamperRejection()
     if ( !std::filesystem::exists(chunkCache, error) || error ) return false;
     for ( const auto& entry :
           std::filesystem::recursive_directory_iterator(chunkCache, error) ) {
-        if ( error || entry.path().filename().string().contains(".part-") ) {
+        if ( error || MMM::Config::pathToUtf8(entry.path().filename())
+                          .contains(".part-") ) {
             return false;
         }
     }
@@ -824,7 +827,8 @@ bool testEncryptedContainerAuthentication()
         !Detail::materializeCollaborationResourceFile(
             encrypted, rejected, key, digest->size) &&
         !std::filesystem::exists(rejected) &&
-        !std::filesystem::exists(rejected.string() + ".part-materialize");
+        !std::filesystem::exists(
+            std::filesystem::path(rejected).concat(".part-materialize"));
     Detail::clearCollaborationResourceKey(key);
     // 失败路径既不能发布目标文件，也不能遗留可被误用的部分物化文件。
     return rejectedTamper &&

@@ -363,7 +363,8 @@ struct DecodeProbeResult {
 std::string lowerExtension(const std::filesystem::path& path)
 {
     // 按 unsigned char 调用 tolower，避免负 char 触发未定义行为。
-    std::string extension = path.extension().string();
+    // 资源目录允许 Unicode 文件名，扩展名解析不依赖当前系统代码页。
+    std::string extension = MMM::Config::pathToUtf8(path.extension());
     std::transform(
         extension.begin(),
         extension.end(),
@@ -687,10 +688,11 @@ bool runResourceAudioCoverage(const std::filesystem::path& resourceRoot,
               i + 1,
               files.size(),
               MMM::Config::pathToUtf8(files[i]));
-        if ( checkEngineDecode(files[i],
-                               1,
-                               "resource " + files[i].filename().string(),
-                               false) ) {
+        if ( checkEngineDecode(
+                 files[i],
+                 1,
+                 "resource " + MMM::Config::pathToUtf8(files[i].filename()),
+                 false) ) {
             ++passed;
         } else {
             ok = false;
@@ -909,9 +911,9 @@ int main(int argc, char* argv[])
     // 唯一目录仅为编码阶段服务，无论写出成功或失败都应回收。
     // 遍历真实目录，检查失败或成功遗留的 staging，而非内部标志。
     for ( const auto& entry : std::filesystem::directory_iterator(root) ) {
-        ok &= check(
-            !entry.path().filename().string().starts_with(".mmm-audio-export-"),
-            "staged audio directory removed");
+        ok &= check(!MMM::Config::pathToUtf8(entry.path().filename())
+                         .starts_with(".mmm-audio-export-"),
+                    "staged audio directory removed");
     }
 
     // 基准 WAV 场景使用不保音高图，2 倍速度理论长度精确减半。

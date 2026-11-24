@@ -727,6 +727,9 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle,
                     case Event::NativeEventType::GLFW_WINDOW_FOCUS_CHANGED:
                         // 这些类型只作为状态通知存在，即使缺失标志也不执行窗口命令。
                         break;
+                    case Event::NativeEventType::MOBILE_BACK_REQUEST:
+                        // 移动工作区负责处理返回请求，桌面 GLFW 窗口不消费。
+                        break;
                     }
                 });
     }

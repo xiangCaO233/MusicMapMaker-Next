@@ -482,18 +482,28 @@ bool UpdateChecker::isNewer(const std::string& remote, const std::string& local,
 /// @details Windows 交给 ShellExecute；macOS 与 Linux 调用系统提供的
 /// open/xdg-open。 URL 来自应用定义的更新入口，调用方负责只传递受信地址。
 /// @param url 要打开的完整网页地址。
+/// @note 该入口用于用户触发的链接打开，不应从渲染或下载回调主动调用。
+/// @note POSIX 命令失败时记录状态码，不在日志里输出可能含参数的完整 URL。
 void UpdateChecker::openUrlInBrowser(const std::string& url)
 {
 #if defined(_WIN32)
     // ShellExecute 使用系统关联，不需要应用知道具体浏览器路径。
     ShellExecuteA(
         nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-#elif defined(__APPLE__)
-    // macOS open 命令同步启动系统 URL 处理器。
-    std::system(("open \"" + url + "\"").c_str());
 #else
+#    if defined(__APPLE__)
+    // macOS open 命令同步启动系统 URL 处理器。
+    const std::string command = "open \"" + url + "\"";
+#    else
     // Linux 后台启动 xdg-open，避免命令进程占用当前调用线程。
-    std::system(("xdg-open \"" + url + "\" &").c_str());
+    const std::string command = "xdg-open \"" + url + "\" &";
+#    endif
+    // system 返回 shell 的等待状态，-1 表示无法启动或回收进程。
+    // 这里只区分零与非零，保留原始状态供系统级排查。
+    // Linux 后台模式只能确认 shell 提交状态，不能确认浏览器是否打开页面。
+    if ( const int status = std::system(command.c_str()); status != 0 ) {
+        XWARN("Could not launch the browser command (status {})", status);
+    }
 #endif
 }
 

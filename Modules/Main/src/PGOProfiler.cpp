@@ -41,6 +41,21 @@ int __llvm_profile_dump(void);
 #endif
 
 #ifdef MMM_PGO_INSTRUMENT
+/// @brief 为 compiler-rt、CRT 和 curl 生成原生窄路径。
+/// @details Windows 的窄接口仍使用原有系统代码页；POSIX
+/// 直接传递文件名原始字节。
+/// @param path 待交给窄接口的文件路径。
+/// @return 原生分隔符及对应平台窄接口所需的字节。
+static std::string profilePathBytes(const std::filesystem::path& path)
+{
+#    ifdef _WIN32
+    // 显式指定窄字符转换，保留旧版 MSVC STL 与 libstdc++ 的系统代码页行为。
+    return path.string<char>();
+#    else
+    return path.native();
+#    endif
+}
+
 /// @brief 在 main 之前为 compiler-rt 安装安全的临时 profile 路径模板。
 ///
 /// 全局对象构造早于普通初始化代码，可避免 instrumented 静态初始化和 DLL
@@ -59,10 +74,9 @@ struct EarlyPGOInitializer {
 
         // 时间戳区分连续启动，compiler-rt 占位符再区分模块和进程。
         auto now = std::chrono::system_clock::now().time_since_epoch().count();
-        std::string path =
-            (dir / ("mmm_pgo_" + std::string(MMM_VERSION_STRING) + "_" +
-                    std::to_string(now) + "_%m_%p.profraw"))
-                .string();
+        std::string path = profilePathBytes(
+            dir / ("mmm_pgo_" + std::string(MMM_VERSION_STRING) + "_" +
+                   std::to_string(now) + "_%m_%p.profraw"));
 
 #    ifdef _WIN32
         // Windows 使用 CRT 环境变量接口，避免直接修改环境内存。
@@ -165,9 +179,9 @@ std::string buildProfilePath()
     // system_clock 数值用于名称唯一性，不参与运行时长判断。
     auto now = std::chrono::system_clock::now().time_since_epoch().count();
 
-    return (dir / ("mmm_pgo_" + std::string(MMM_VERSION_STRING) + "_" +
-                   std::to_string(now) + ".profraw"))
-        .string();
+    return profilePathBytes(dir /
+                            ("mmm_pgo_" + std::string(MMM_VERSION_STRING) +
+                             "_" + std::to_string(now) + ".profraw"));
 }
 
 /// @brief 确定上传 URL，运行时环境变量可覆盖 CMake 编译期配置。
@@ -261,7 +275,8 @@ void addMimeProfilePart(curl_mime* mime, const std::string& filePath)
     curl_mimepart* part = curl_mime_addpart(mime);
     curl_mime_name(part, "profile");
     curl_mime_filename(
-        part, std::filesystem::path(filePath).filename().string().c_str());
+        part,
+        profilePathBytes(std::filesystem::path(filePath).filename()).c_str());
     curl_mime_filedata(part, filePath.c_str());
 }
 

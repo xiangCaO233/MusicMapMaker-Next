@@ -1,3 +1,4 @@
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/annotation/BeatmapAnnotation.h"
 #include "mmm/beatmap/BeatMap.h"
@@ -158,13 +159,16 @@ bool check(bool condition, std::string_view message)
 /// @return 文件是否写入成功。
 bool writeTextFile(const std::filesystem::path& path, std::string_view content)
 {
+    // 二进制模式使输入内容逐字节落盘，保留各格式夹具选择的换行风格。
+    // 每次重跑覆盖上次内容，文件名仍交给 stream 的 path 重载处理。
     std::ofstream file(path, std::ios::binary | std::ios::trunc);
     if ( !file.is_open() ) {
         XERROR("Failed to open metadata compatibility fixture: {}",
-               path.string());
+               MMM::Config::pathToUtf8(path));
         return false;
     }
 
+    // 写入长度来自字符串视图，允许夹具内容包含用于格式探测的零字节。
     file.write(content.data(), static_cast<std::streamsize>(content.size()));
     return file.good();
 }
@@ -412,29 +416,35 @@ bool testImageEventFallback(const std::filesystem::path& outputDirectory)
 bool testMMMVideoMetadataRoundTrip(const std::filesystem::path& outputDirectory)
 {
     // 原生格式没有外部格式降级，所有视频字段都应无损往返。
+    // 视频元数据场景使用独立产物，便于和旧版字段迁移夹具分别排查。
     const auto path = outputDirectory / "video_metadata_round_trip.mmm";
 
     // 补齐基础谱面元数据，使保存器按有效原生谱面路径输出。
     MMM::BeatMap source;
-    auto&        sourceMeta    = source.m_baseMapMetadata;
-    sourceMeta.name            = "Video metadata round trip";
+    auto&        sourceMeta = source.m_baseMapMetadata;
+    sourceMeta.name         = "Video metadata round trip";
+    // 专辑和标题使用不同值，可识别保存器把字段写到错误键名的情况。
     sourceMeta.album           = "Test Album";
     sourceMeta.main_cover_path = "videos/background.mp4";
+    // 背景类型与起播偏移必须一起保留，路径扩展名推断无法恢复这些值。
     sourceMeta.cover_type      = MMM::CoverType::VIDEO;
     sourceMeta.video_starttime = 2468;
-    sourceMeta.bgxoffset       = -17;
-    sourceMeta.bgyoffset       = 29;
-    sourceMeta.track_count     = 4;
-    sourceMeta.preference_bpm  = 120.0;
-    sourceMeta.map_length      = 30000.0;
+    // 两轴偏移的符号不同，能够同时捕获轴交换和负偏移丢失。
+    sourceMeta.bgxoffset      = -17;
+    sourceMeta.bgyoffset      = 29;
+    sourceMeta.track_count    = 4;
+    sourceMeta.preference_bpm = 120.0;
+    sourceMeta.map_length     = 30000.0;
 
     // 保存失败时路径可能不存在，后续加载没有验证价值，立即结束场景。
     if ( !source.saveToFile(path) ) {
+        // 转码仅服务日志，保存接口接收原始 path 对象。
         XERROR("Failed to save MMM metadata round-trip fixture: {}",
-               path.string());
+               MMM::Config::pathToUtf8(path));
         return false;
     }
 
+    // 先检查原始 JSON，再检查统一模型，便于区分写出错误与读回错误。
     // 直接查看落盘字段，防止加载器的默认值掩盖保存遗漏。
     json          saved;
     std::ifstream input(path);
@@ -510,6 +520,7 @@ bool testMMMVersion2AudioSampleRoundTrip(
         .sample_properties[MMM::SampleMetadataType::MALODY]["source_x"] = "4";
     source.m_audioSamples.push_back(stem);
 
+    // 两份资源共享同一个谱面输出，用于检查不同用途的样本能否同时保存。
     // 第二条自动采样位于更后的 BGM 轨，用于防止保存器只保留主音频。
     MMM::AudioSampleEvent effect;
     effect.m_timestamp       = 1000.0;
@@ -517,16 +528,20 @@ bool testMMMVersion2AudioSampleRoundTrip(
     effect.m_track           = 6;
     effect.m_audioResourceId = "effect.wav";
     effect.m_volume          = 0.35F;
+    // 标签属于样本私有字段；它和轨道、时间等通用字段需要一并保留。
     effect.m_metadata
         .sample_properties[MMM::SampleMetadataType::MMM]["editor_label"] =
         "effect layer";
+    // 轨道与触发时间都和主音频不同，读取结果可以独立核对两个事件。
     source.m_audioSamples.push_back(effect);
     // sync 建立统一索引，确保保存器看到的集合与实际编辑态一致。
     source.sync();
 
     // 先验证正式保存入口，再读取原始 JSON 检查规范字段布局。
     if ( !source.saveToFile(path) ) {
-        XERROR("Failed to save MMM v2 audio sample fixture: {}", path.string());
+        // 日志给出完整输出位置，便于直接检查测试目录里残留的文件。
+        XERROR("Failed to save MMM v2 audio sample fixture: {}",
+               MMM::Config::pathToUtf8(path));
         return false;
     }
 
@@ -539,6 +554,7 @@ bool testMMMVersion2AudioSampleRoundTrip(
     }
 
     bool ok = true;
+    // 先断言版本，再校验规范布局，避免加载器兼容分支掩盖旧结构输出。
     // 当前版本号是保存契约的一部分，旧版本读取能力不能成为继续输出旧结构的理由。
     ok &= check(saved.value("format_version", 0) == 3,
                 "MMM native saver should declare format_version 3");
@@ -1183,8 +1199,8 @@ bool testSingleAudioExporterCompatibility(
         const MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(boundOSUPath);
         const auto         binding =
             reloaded.m_allNotes.empty()
-                        ? std::optional<MMM::AudioSampleBinding>{}
-                        : reloaded.m_allNotes.front().get().getSampleBinding();
+                ? std::optional<MMM::AudioSampleBinding>{}
+                : reloaded.m_allNotes.front().get().getSampleBinding();
         ok &= check(
             binding.has_value() && binding->m_audioResourceId == "hit.wav",
             "osu! should round-trip a playable sample file");

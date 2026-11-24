@@ -1,4 +1,5 @@
 #include "mmm/beatmap/BeatmapSpeedTransform.h"
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 
 #include <nlohmann/json.hpp>
@@ -73,7 +74,8 @@ bool check(bool condition, const std::string& label)
 bool isSupportedBeatmapFile(const std::filesystem::path& path)
 {
     // 扩展名按 ASCII 小写规范化，覆盖测试资源中潜在的大写后缀。
-    std::string extension = path.extension().string();
+    // 只转换后缀供格式分流，完整路径继续由文件系统接口处理。
+    std::string extension = MMM::Config::pathToUtf8(path.extension());
     std::transform(
         extension.begin(),
         extension.end(),
@@ -583,9 +585,10 @@ bool validateResourceBeatmap(const std::filesystem::path& inputPath,
     // 空对象和空 Timing 资源仍可含自动采样，当前只记录覆盖强度提示。
     if ( source.m_allNotes.empty() && source.m_timings.empty() ) {
         XWARN("[speed-transform] Resource map has no notes or timings: {}",
-              inputPath.string());
+              MMM::Config::pathToUtf8(inputPath));
     } else {
-        ok &= check(true, "resource loaded: " + inputPath.string());
+        ok &= check(true,
+                    "resource loaded: " + MMM::Config::pathToUtf8(inputPath));
     }
 
     // 所有资源使用同一 1.5 倍和原生输出，便于跨格式比较结果。
@@ -705,7 +708,7 @@ bool validateResourceBeatmap(const std::filesystem::path& inputPath,
             XWARN(
                 "[speed-transform] transformed MMM reload note count differs "
                 "for {}: saved={} reloaded={}",
-                inputPath.string(),
+                MMM::Config::pathToUtf8(inputPath),
                 result.beatmap.m_allNotes.size(),
                 reloaded.m_allNotes.size());
         } else {
@@ -716,7 +719,7 @@ bool validateResourceBeatmap(const std::filesystem::path& inputPath,
             XWARN(
                 "[speed-transform] transformed MMM reload timing count "
                 "differs for {}: saved={} reloaded={}",
-                inputPath.string(),
+                MMM::Config::pathToUtf8(inputPath),
                 result.beatmap.m_timings.size(),
                 reloaded.m_timings.size());
         } else {
@@ -728,7 +731,7 @@ bool validateResourceBeatmap(const std::filesystem::path& inputPath,
             XWARN(
                 "[speed-transform] transformed MMM reload sample count "
                 "differs for {}: saved={} reloaded={}",
-                inputPath.string(),
+                MMM::Config::pathToUtf8(inputPath),
                 result.beatmap.m_audioSamples.size(),
                 reloaded.m_audioSamples.size());
         } else {
@@ -771,7 +774,7 @@ bool runResourceCoverage(const std::filesystem::path& resourceRoot,
         XINFO("[speed-transform] Resource case {} / {}: {}",
               i + 1,
               files.size(),
-              files[i].string());
+              MMM::Config::pathToUtf8(files[i]));
         // 统一保存为 MMM，将不同来源归一到完整领域格式后再加载检查。
         const auto outputPath =
             outputRoot / ("speed_transform_case_" + std::to_string(i) + ".mmm");

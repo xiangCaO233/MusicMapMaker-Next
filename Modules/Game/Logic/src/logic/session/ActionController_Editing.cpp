@@ -1493,15 +1493,18 @@ void replaceNoteComponents(SessionContext&                   ctx,
         }
         return candidate.entity;
     };
-    const auto findLegacyRoot = [&](const NoteComponent& desired) {
+    const auto findLegacyRoot =
+        [&](const NoteComponent& desired) -> entt::entity {
         // 旧谱面没有协作 ID 时只允许完整内容相等的根实体兼容复用。
-        const auto found = std::find_if(
-            existing.begin(), existing.end(), [&](const ExistingNote& entry) {
-                return !entry.component.m_isSubNote &&
-                       !retained.contains(entry.entity) &&
-                       isSameRootNoteComponent(entry.component, desired);
-            });
-        return found == existing.end() ? entt::null : found->entity;
+        // 顺序扫描并保留首个匹配项；复杂的物件比较无需标准库的强制循环展开。
+        for ( const auto& entry : existing ) {
+            if ( !entry.component.m_isSubNote &&
+                 !retained.contains(entry.entity) &&
+                 isSameRootNoteComponent(entry.component, desired) ) {
+                return entry.entity;
+            }
+        }
+        return entt::null;
     };
 
     for ( const auto& note : notes ) {

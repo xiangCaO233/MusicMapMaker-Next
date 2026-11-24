@@ -1,5 +1,6 @@
 #include "audio/AudioManager.h"
 #include "config/EditorSettings.h"
+#include "config/Utf8Path.h"
 
 #include "config/AppConfig.h"
 #include "log/colorful-log.h"
@@ -580,9 +581,9 @@ bool testCompositePlayback(MMM::Audio::AudioManager& manager,
     mutedConfig.volume = 1.0F;
     mutedConfig.muted  = true;
 
-    const auto missingPath = (std::filesystem::path(samplePath).parent_path() /
-                              "missing-audio-timeline-resource.wav")
-                                 .string();
+    const auto missingPath = MMM::Config::pathToUtf8(
+        MMM::Config::utf8ToPath(samplePath).parent_path() /
+        "missing-audio-timeline-resource.wav");
     // 缺失路径位于样本同目录且使用固定不存在文件名，避免平台临时目录差异。
     const auto result = manager.loadAudioTimeline(
         {
@@ -897,7 +898,7 @@ bool testSharedMainStretcher(MMM::Audio::AudioManager& manager,
         const double before = manager.getCurrentTime();
         passed              = passed && waitUntil([&] {
                      return manager.getCurrentTime() > before + 0.01;
-                 });
+                              });
         // 恢复后重新预约本拍，确认节拍仍通过绑定到主时间线的输入段推进。
         // 预约已到达的拍点也覆盖目标帧落在当前音频块之前的调度边界。
         // 断言源游标实际前进，能捕获总线接错或恢复后门控未打开。

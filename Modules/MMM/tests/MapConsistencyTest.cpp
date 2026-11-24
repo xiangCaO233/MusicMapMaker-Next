@@ -1,3 +1,4 @@
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
@@ -174,19 +175,23 @@ int main(int argc, char* argv[])
     fs::path outputPath = argv[2];
     // 输出位置应由 CTest 指向构建树，程序本身不重写文件名或父目录。
 
-    XINFO("Testing map consistency: {}", inputPath.string());
+    // 完整输入路径可区分不同目录下的同名谱面。
+    // 两份谱面仍直接使用 path 对象访问，避免日志编码影响实际往返。
+    XINFO("Testing map consistency: {}", MMM::Config::pathToUtf8(inputPath));
 
     // 基准模型允许纯 Timing、纯物件或纯自动采样，三者全空才视为加载失败。
     MMM::BeatMap map1 = MMM::BeatMap::loadFromFile(inputPath);
     if ( map1.m_timings.empty() && map1.m_allNotes.empty() &&
          map1.m_audioSamples.empty() ) {
-        XERROR("Failed to load map1 or map is empty: {}", inputPath.string());
+        XERROR("Failed to load map1 or map is empty: {}",
+               MMM::Config::pathToUtf8(inputPath));
         return 1;
     }
 
     // 保存失败时不继续读取可能存在的旧输出文件。
     if ( !map1.saveToFile(outputPath) ) {
-        XERROR("Failed to save map to: {}", outputPath.string());
+        XERROR("Failed to save map to: {}",
+               MMM::Config::pathToUtf8(outputPath));
         return 1;
     }
 
@@ -195,17 +200,19 @@ int main(int argc, char* argv[])
     // 空谱面判断包含自动采样，允许专门验证只有 BGM 事件的最小输入。
     if ( map2.m_timings.empty() && map2.m_allNotes.empty() &&
          map2.m_audioSamples.empty() ) {
-        XERROR("Failed to load map2 (re-imported): {}", outputPath.string());
+        XERROR("Failed to load map2 (re-imported): {}",
+               MMM::Config::pathToUtf8(outputPath));
         return 1;
     }
 
     // 最后只比较两份内存模型，将 JSON 表示差异与语义回归分离。
     if ( !compareBeatMaps(map1, map2) ) {
         XERROR("Consistency check failed for {}",
-               inputPath.filename().string());
+               MMM::Config::pathToUtf8(inputPath.filename()));
         return 1;
     }
 
-    XINFO("Consistency test PASSED for {}", inputPath.filename().string());
+    XINFO("Consistency test PASSED for {}",
+          MMM::Config::pathToUtf8(inputPath.filename()));
     return 0;
 }

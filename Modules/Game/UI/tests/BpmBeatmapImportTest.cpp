@@ -87,7 +87,7 @@ bool writeMap(const std::filesystem::path& path, const char* song, bool red)
     MMM::BeatMap map;
     // 每份谱面拥有独立名称，但关联由歌曲路径决定而不是标题相似度。
     // 明确轨道数和参考 BPM，让无红线来源仍是一份合法可加载谱面。
-    map.m_baseMapMetadata.name           = path.stem().string();
+    map.m_baseMapMetadata.name           = MMM::Config::pathToUtf8(path.stem());
     map.m_baseMapMetadata.map_path       = path;
     map.m_baseMapMetadata.song_file_hint = song;
     map.m_baseMapMetadata.track_count    = 4;

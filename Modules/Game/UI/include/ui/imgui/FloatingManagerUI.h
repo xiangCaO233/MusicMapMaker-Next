@@ -21,8 +21,10 @@ class FloatingManagerUI : public ITextureLoader,
 public:
     ///@brief 初始化时显示的的窗口id
     FloatingManagerUI(const std::string& name);
-    FloatingManagerUI(FloatingManagerUI&&)                 = default;
-    FloatingManagerUI(const FloatingManagerUI&)            = default;
+    /// @brief 管理器持有独立布局上下文和子视图，禁止从另一实例移动构造。
+    FloatingManagerUI(FloatingManagerUI&&) = delete;
+    /// @brief 子视图与注册状态不支持复制构造。
+    FloatingManagerUI(const FloatingManagerUI&)            = delete;
     FloatingManagerUI& operator=(FloatingManagerUI&&)      = delete;
     FloatingManagerUI& operator=(const FloatingManagerUI&) = delete;
     ~FloatingManagerUI() override;
