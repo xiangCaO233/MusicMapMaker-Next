@@ -3,9 +3,11 @@
 #include "log/colorful-log.h"
 #include <algorithm>
 #include <condition_variable>
-#include <cstdint>
 #include <fstream>
+#include <future>
 #include <iomanip>
+#include <iterator>
+#include <list>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -86,19 +88,22 @@ bool writeSnapshot(const std::filesystem::path& path, const nlohmann::json& j)
 
     return true;
 }
-/// @brief 串行保存最新配置，防止拖动快照积压与旧请求覆盖新状态。
-/// @note 队列只保留一个未消费请求，内存占用不随拖动时间增长。
-/// 写盘锁与队列锁分开，连续编辑发布请求不会等待磁盘完成。
-/// 每个请求自带不可变 JSON，工作线程不借用 AppConfig 或 UI 元素。
+/// @brief 串行写入配置，同一路径的编辑快照可在队列中合并。
+/// @details 显式保存和 flush
+/// 是顺序边界。不同路径分别保留，连续编辑不会等待磁盘。
+/// 文件线程独占序列化和临时文件，队列锁不覆盖耗时 I/O。
+/// 每个连续编辑区间至多保留同一路径的一份待处理文档。
+/// 路径采用调用者指定的原生路径，排队时不访问文件系统解析链接。
+/// 领取后正在写出的文档不会被撤回；后续同路径请求会在它之后写入。
 class SnapshotWriter
 {
 public:
-    /// @brief 第一次保存时创建专用文件线程，常态 UI 不再创建线程。
-    /// @note 成员声明顺序保证队列、条件变量和停止状态先于线程构造。
-    /// 线程入口仅等待请求，不在构造期间读取应用配置单例。
+    /// @brief 第一次保存时创建专用线程；同步对象均已初始化。
+    /// @note 线程只消费冻结的数据，静态析构时可以在 AppConfig 释放后完成队列。
     SnapshotWriter() : m_worker([this] { run(); }) {}
-    /// @brief 退出时唤醒线程并完成最后一个请求，不丢弃最终现场。
-    /// @warning 仅进程退出会等待文件线程，不在交互调用链触发。
+
+    /// @brief 停止接收工作并等待队列内最后的快照写出。
+    /// @warning 仅退出清理会等待文件线程。
     ~SnapshotWriter()
     {
         {
@@ -108,121 +113,110 @@ public:
         m_ready.notify_one();
         m_worker.join();
     }
-    /// @brief 发布一个请求；替换尚未写出的中间拖动状态。
-    /// @note 持锁范围仅覆盖移动 JSON 所有权，不做文件系统操作。
-    /// @param path 目标路径在发布时复制，后台不调用应用路径解析器。
-    /// @param json 已冻结的文档，调用者发布后不能再修改它。
-    /// @details 序号与队列替换处于同一短锁，消费者不会取得不匹配状态。
+
+    /// @brief 异步提交已冻结的配置，不借用调用线程的实时数据。
+    /// @param path 保留调用方选择的输出文件。
+    /// @param json 写入线程独立拥有的配置文档。
     void enqueue(const std::filesystem::path& path, nlohmann::json json)
     {
-        std::optional<Request> request{ Request{ path, std::move(json), 0 } };
-        {
-            std::lock_guard lock(m_mutex);
-            request->m_generation = ++m_generation;
-            // 旧文档移出锁外再销毁，队列锁不承担 JSON 树释放成本。
-            m_pending.swap(request);
-        }
-        m_ready.notify_one();
+        submit({ path, std::move(json), std::nullopt });
     }
-    /// @brief 同步保存也使用同一序号，废弃此前未完成的旧请求。
-    /// @return 实际写盘结果；失败保留原有配置并输出错误日志。
-    /// @warning 仅显式保存允许等待文件锁，连续编辑必须使用 enqueue。
-    /// @param path 显式目标路径，测试与客户端保存共用相同顺序规则。
-    /// @param json 本次同步调用的最终文档，不重新读取实时对象。
-    /// @details 先取得磁盘锁，再使此前待处理请求失效。
-    /// 同步写入期间收到的新请求具有更大序号，会在本次完成后继续写出。
+
+    /// @brief 同步提交整份配置，以同一队列保证旧快照不会覆盖它。
+    /// @param path 本次显式保存的文件。
+    /// @param json 本次同步保存的完整配置。
+    /// @return 本次目标的实际写盘结果，与其他路径的结果无关。
+    /// @warning 仅低频调用允许等待文件线程，拖动时使用异步发布。
     bool save(const std::filesystem::path& path, nlohmann::json json)
     {
-        std::lock_guard diskLock(m_diskMutex);
-        std::uint64_t   generation;
-        {
-            std::lock_guard lock(m_mutex);
-            generation = ++m_generation;
-            m_pending.reset();
-        }
-        const bool result = writeSnapshot(path, json);
-        complete(generation);
-        return result;
+        std::promise<bool> completion;
+        auto               result = completion.get_future();
+        submit({ path, std::move(json), std::move(completion) });
+        return result.get();
     }
-    /// @brief 测试或退出阶段等待调用时已经发布的请求完成。
-    /// @warning 条件变量只在此低频等待，UI 修改路径不会调用。
-    /// @note 只等待进入时已发布的序号，不阻止调用后继续发布请求。
-    /// 后台失败也必须标记完成，避免磁盘错误导致退出永久等待。
+
+    /// @brief 等待调用时已发布的快照耗尽，失败也视作已处理。
+    /// @note 使用队列内的空路径槽作屏障，之后的发布不会延长本次等待。
+    /// 保留屏障前已经排队的值，即使屏障后又收到同一路径的更新。
     void flush()
     {
-        std::unique_lock lock(m_mutex);
-        const auto       target = m_generation;
-        m_done.wait(lock, [&] { return m_completed >= target; });
+        std::promise<bool> completion;
+        auto               result = completion.get_future();
+        submit({ std::nullopt, {}, std::move(completion) });
+        result.get();
     }
 
 private:
-    /// @brief 请求独占路径和文档，不引用可变应用配置。
+    /// @brief 单条配置文档或队列屏障。
     struct Request {
-        /// @brief 使用原生路径编码，支持 Windows Unicode 目录。
-        std::filesystem::path m_path;
-        /// @brief 完整冻结文档，后台只序列化此对象。
+        /// @brief 原生目标路径；空 optional 仅用于 flush。
+        std::optional<std::filesystem::path> m_path;
+        /// @brief 由文件线程独占的冻结文档。
         nlohmann::json m_json;
-        /// @brief 单调序号，旧请求不得覆盖新请求。
-        std::uint64_t m_generation;
+        /// @brief 同步请求拥有完成信号，调用方只保留配对的 future。
+        std::optional<std::promise<bool>> m_completion;
     };
-    /// @brief 标记已消费的序号，成功与失败都必须唤醒收尾等待者。
-    /// @param generation 本轮已写入或被更新请求取代的序号。
-    /// @note 完成序号只向前推进，被跳过旧请求不能倒退已完成状态。
-    void complete(std::uint64_t generation)
+
+    /// @brief 在最近的同步边界之后合并目标一致的后台请求。
+    /// @param request 新请求持有文档，以及调用方尚在等待的完成信号。
+    /// @details 插入位置始终在队尾，多个路径的请求可以交错提交。
+    /// 跳过已经开始的写出；异步调用不会等待同步请求的 I/O。
+    void submit(Request request)
     {
+        std::list<Request> retired;
         {
             std::lock_guard lock(m_mutex);
-            m_completed = std::max(m_completed, generation);
+            if ( request.m_path ) {
+                // 只有队尾这段后台请求允许被覆盖，不能跳过已排队的同步等待者。
+                auto previous =
+                    std::find_if(m_pending.rbegin(),
+                                 m_pending.rend(),
+                                 [&](const Request& pending) {
+                                     return pending.m_completion ||
+                                            pending.m_path == request.m_path;
+                                 });
+                if ( previous != m_pending.rend() && !previous->m_completion )
+                    retired.splice(
+                        retired.end(), m_pending, std::prev(previous.base()));
+            }
+            m_pending.push_back(std::move(request));
         }
-        m_done.notify_all();
+        // 被替代的 JSON 在锁外销毁，界面排队时无需等待释放整份配置。
+        m_ready.notify_one();
     }
-    /// @brief 无请求时睡眠等待通知，有请求立即开始写入，不设延时窗口。
-    /// @warning 文件线程可阻塞；它不持有会话、渲染或配置状态锁。
-    /// @details 队列锁只保护领取和版本检查，写盘期间始终释放。
-    /// 磁盘锁保证同步保存与后台请求不会同时修改同一个临时文件。
-    /// 退出通知不清空队列，最后的用户状态仍按正常写入流程提交。
-    /// 旧请求被丢弃也通知完成，收尾等待不依赖它是否实际写盘。
+
+    /// @brief 按提交顺序处理同步保存、后台快照与 flush 屏障。
+    /// @warning 仅此线程写盘，执行写入时不占用队列锁。
     void run()
     {
         for ( ;; ) {
-            std::optional<Request> request;
+            Request request{};
             {
                 std::unique_lock lock(m_mutex);
-                m_ready.wait(
-                    lock, [&] { return m_stopping || m_pending.has_value(); });
-                if ( !m_pending ) return;
-                request = std::move(m_pending);
-                m_pending.reset();
+                m_ready.wait(lock,
+                             [&] { return m_stopping || !m_pending.empty(); });
+                if ( m_pending.empty() ) return;
+                request = std::move(m_pending.front());
+                m_pending.pop_front();
             }
-            // 磁盘锁不参与 enqueue，因此慢磁盘不会阻塞拖动反馈。
-            std::lock_guard diskLock(m_diskMutex);
-            bool            current;
-            {
-                std::lock_guard lock(m_mutex);
-                current = request->m_generation == m_generation;
-            }
-            // 更新的请求已入队或同步写入时，丢弃这个过时请求。
-            if ( current ) writeSnapshot(request->m_path, request->m_json);
-            complete(request->m_generation);
+            // 缺省路径表示屏障，前面的文件操作此时都已返回。
+            const bool result = !request.m_path ||
+                                writeSnapshot(*request.m_path, request.m_json);
+            // 文件线程持有 promise，唤醒等待者后仍由本线程销毁请求。
+            // 异步失败只写日志，同步请求把同一写入结果交回调用方。
+            if ( request.m_completion ) request.m_completion->set_value(result);
         }
     }
-    /// @brief 队列与序号锁，发布路径只进行常量级所有权移动。
+
+    /// @brief 保护待处理列表及退出标志。
     std::mutex m_mutex;
-    /// @brief 独立磁盘锁，串行化同目录临时文件的创建和替换。
-    std::mutex m_diskMutex;
-    /// @brief 请求或退出通知，不以固定时间轮询。
+    /// @brief 新请求或退出通知，后台无工作时休眠。
     std::condition_variable m_ready;
-    /// @brief 测试和收尾同步通知，与实时 UI 无关。
-    std::condition_variable m_done;
-    /// @brief 最新待处理请求，覆盖中间状态但不丢最终状态。
-    std::optional<Request> m_pending;
-    /// @brief 仅由队列锁保护的单调请求序号。
-    std::uint64_t m_generation{ 0 };
-    /// @brief 已处理的最高请求序号，包括被新快照取代的请求。
-    std::uint64_t m_completed{ 0 };
-    /// @brief 析构设置后先处理最终请求，再退出线程。
+    /// @brief 保留每个路径的最新后台请求及同步边界。
+    std::list<Request> m_pending;
+    /// @brief 析构设置后继续处理队列，到空再退出。
     bool m_stopping{ false };
-    /// @brief 最后构造成员，确保线程启动时所有同步状态已经可用。
+    /// @brief 最后构造，确保线程看到有效队列和同步对象。
     std::thread m_worker;
 };
 /// @brief 整个客户端共用单个写入队列，避免同路径保存相互竞争。
@@ -243,7 +237,7 @@ bool saveConfigSnapshot(const std::filesystem::path& path,
 {
     return writer().save(path, std::move(snapshot));
 }
-/// @brief 将布局编辑快照发布到单槽文件队列。
+/// @brief 将布局编辑快照发布到按路径合并的文件队列。
 /// @param path 后台写入使用的稳定原生路径。
 /// @param snapshot 调用者冻结的完整文档，不借用 UI 状态。
 /// @warning 本函数只排队，不在 UI 线程执行文件系统操作。
@@ -253,7 +247,7 @@ void queueConfigSnapshot(const std::filesystem::path& path,
     writer().enqueue(path, std::move(snapshot));
 }
 /// @brief 在测试或退出阶段等待当前队列完成。
-/// @note 同步条件由真实完成序号决定，不使用固定 sleep。
+/// @note 同步条件由队列中的屏障决定，不使用固定 sleep。
 /// @warning 此阻塞接口不能从实时 UI 或逻辑循环调用。
 void flushConfigSnapshots()
 {

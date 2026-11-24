@@ -447,6 +447,45 @@ bool realtimeSaving(const std::filesystem::path& root)
     return app.load(file) && app.getLayoutPresets().m_selected == "默认" &&
            sameLayout(app.getVisualConfig(), VisualConfig{});
 }
+/// @brief 在交错的后台和同步提交中验收两个独立目标。
+/// @param root CTest 分配的输出目录。
+/// @return 两条路径各自保存最新状态，且 flush 返回时均已完成。
+/// @details 每个路径用不同数值域，避免写错文件还能通过同值断言。
+/// 同步保存只覆盖指定输出；另一文件无后续提交可以替它补写。
+/// 请求间没有 sleep，也不要求某一线程先拿到锁。
+/// 先检查纯后台屏障，再单独验证同步保存所建立的顺序边界。
+/// 文件由测试运行生成，测试重复执行依旧从明确的版本开始。
+bool multipleConfigTargets(const std::filesystem::path& root)
+{
+    const auto a = root / "pending-a.json";
+    const auto b = root / "pending-b.json";
+    // 每次运行先写不同于期望值的基线，旧测试文件不能掩盖这次丢写。
+    if ( !saveConfigSnapshot(a, { { "revision", 0 } }) ||
+         !saveConfigSnapshot(b, { { "revision", 0 } }) )
+        return false;
+    const auto revision = [](const auto& path) {
+        std::ifstream input(path);
+        return nlohmann::json::parse(input, nullptr, false);
+    };
+    // 第一阶段只测试后台合并，flush 必须等待两个路径各自的最终写入。
+    for ( int version = 1; version <= 20; ++version ) {
+        queueConfigSnapshot(a, { { "revision", version } });
+        queueConfigSnapshot(b, { { "revision", -version } });
+    }
+    flushConfigSnapshots();
+    if ( revision(a) != nlohmann::json{ { "revision", 20 } } ||
+         revision(b) != nlohmann::json{ { "revision", -20 } } )
+        return false;
+    // 同步写 B 只替代 B 的待写值；A 无后续提交能补救被错误清空的请求。
+    queueConfigSnapshot(a, { { "revision", 21 } });
+    queueConfigSnapshot(b, { { "revision", -21 } });
+    if ( !saveConfigSnapshot(b, { { "revision", 22 } }) ) return false;
+    // 再走一次屏障，排除 B 的同步写结束后还被旧异步请求覆盖。
+    flushConfigSnapshots();
+    return revision(a) == nlohmann::json{ { "revision", 21 } } &&
+           revision(b) == nlohmann::json{ { "revision", 22 } };
+}
+
 }  // namespace
 /// @brief 在专用输出目录执行方案隔离和文件持久化回归。
 /// @note 测试使用值比较与真实文件，不依赖图形上下文或用户配置。
@@ -490,6 +529,10 @@ int main(int argc, char** argv)
     // 后台保存测试最后运行，避免其单例状态影响之前的迁移用例。
     if ( !realtimeSaving(root) ) {
         XERROR("Realtime layout saving failed");
+        return 1;
+    }
+    if ( !multipleConfigTargets(root) ) {
+        XERROR("Independent config snapshots were not preserved");
         return 1;
     }
     return 0;

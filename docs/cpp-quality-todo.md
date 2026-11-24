@@ -517,7 +517,9 @@
 
 ### P2 · R05 · 独立配置文件的保存请求互相覆盖
 
-- [ ] 所有目标共用一个待写槽和全局代次；后排的 B 可以使尚未落盘的 A 失效，flush 仍结束。按目标路径合并，交错两路径的异步和同步保存并核对两个文件。
+- [x] 所有目标共用一个待写槽和全局代次；后排的 B 可以使尚未落盘的 A 失效，flush 仍结束。按目标路径合并，交错两路径的异步和同步保存并核对两个文件。
+
+  已验证。Linux Clang 22 RelWithDebInfo 全量构建和 3 项回归通过。验证两个目标的异步交错、同步覆盖及 flush 顺序。
 
 [Modules/Config/src/ConfigSnapshotWriter.cpp:116](../Modules/Config/src/ConfigSnapshotWriter.cpp#L116) [Modules/Config/src/ConfigSnapshotWriter.cpp:134](../Modules/Config/src/ConfigSnapshotWriter.cpp#L134) [Modules/Config/src/ConfigSnapshotWriter.cpp:202](../Modules/Config/src/ConfigSnapshotWriter.cpp#L202) [Modules/Config/src/AppConfig.cpp:339](../Modules/Config/src/AppConfig.cpp#L339)
 
