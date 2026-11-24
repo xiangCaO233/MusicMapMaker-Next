@@ -285,7 +285,7 @@ private:
 /// @param path 按项目音频接口约定传递的 UTF-8 路径。
 /// @param format 引擎内部声道布局与采样率。
 /// @return 空片段表示资源打不开、输出格式异常或写入失败。
-/// @note 后端零帧结束正常读取，与 ICE 旧缓存一样无法从零帧单独判断解码错误。
+/// @note 后端报告错误时丢弃本资源的全部暂存数据；无错零帧才结束读取。
 PcmRegion decodeToStore(ExportPcmStore& store, std::string_view path,
                         const ice::AudioDataFormat& format)
 {
@@ -304,12 +304,15 @@ PcmRegion decodeToStore(ExportPcmStore& store, std::string_view path,
     ice::AudioBuffer buffer(decodedFormat, PCM_IO_FRAMES);
     if ( buffer.num_frames() != PCM_IO_FRAMES || !buffer.raw_ptrs() ) return {};
     auto region = store.startRegion();
-    // 短块也可能是有效数据；只有解码器返回零才终止这条流。
-    while ( const auto frames =
-                decoder->read(buffer.raw_ptrs(), PCM_IO_FRAMES) ) {
-        // FFmpeg 的时长只用于估计，末尾长度由实际解码帧决定。
-        if ( frames > PCM_IO_FRAMES ||
-             !store.append(
+    for ( ;; ) {
+        const auto frames = decoder->read(buffer.raw_ptrs(), PCM_IO_FRAMES);
+        // 读取有时会返回有效前缀并同时报告错误，不能把前缀发布成完整资源。
+        // 即使返回零也先检查状态，只有无错空读才是正常曲尾。
+        // 导出和流式播放共用已配套的引擎读取诊断，无需用估算时长推断损坏。
+        if ( frames > PCM_IO_FRAMES || decoder->last_read_error() != 0 )
+            return {};
+        if ( frames == 0U ) break;
+        if ( !store.append(
                  region, buffer.raw_ptrs(), decodedFormat.channels, frames) )
             return {};
     }

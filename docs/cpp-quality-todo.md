@@ -170,23 +170,31 @@
 
   已验证。文件池基于不可变工程快照和所选格式扫描候选，UI 可在扫描中取消，并在同路径重开后拒绝旧结果。回归覆盖占满文件池时仍可绘制和关闭模态、再次扫描后正常显示候选以及格式筛选。
 
-- [ ] **R52 · P2 · 离线时间线导出可将损坏音频的有效前缀当成整曲**
+- [x] **R52 · P2 · 离线时间线导出可将损坏音频的有效前缀当成整曲**
 
   直接使用解码实例，只看返回帧数；先返回有效帧再发生错误时，非空片段可通过后续检查并被混音发布。R41 修改的是流式播放。 每次读取检查后端状态，失败撤销该次导出；先使默认构建获得匹配的 ICE 头与库。正常短尾成功，报告错误的非空前缀不能替换上一次输出。
 
   [AudioTimelineExportService.cpp L308](../Modules/Audio/src/AudioTimelineExportService.cpp#L308)、[IDecoderInstance.hpp L48](../3rdpty/sources/IonCachyEngine/include/ice/manage/dec/IDecoderInstance.hpp#L48)
 
-- [ ] **R53 · P2 · ICE 将单次无错误短读提前确认为 EOF**
+  已验证。默认预编译构建使用配套的 ICE 公共头和库，每次读先检查错误再接收样本。Linux、Windows 产物由 debsrv 固定构建镜像生成，macOS 产物由原生 AppleClang 生成，均保留 Debug 和 RelWithDebInfo。默认 Linux 构建的故障探针验证正常 529 帧短尾可导出，在九个有效包后注入读错误仍完整保留原目标字节。
+
+- [x] **R53 · P2 · ICE 将单次无错误短读提前确认为 EOF**
 
   临时探针链接当前 ICE 本地归档：后端共 1,000 帧，每次最多返回 17 帧，首读后 num_frames 与 end_frame 均为 17。全量解码路径对同类返回会继续读取。 在后台与首页分配的页内累计非零短读，每次检查错误；零帧且无错确认 EOF。验证首页、预读、跳页、末块及带错误的有效前缀；音频回调保持零分配。
 
   [StreamingDecoder.cpp L217](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp#L217)、[CachyDecoder.cpp L100](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/CachyDecoder.cpp#L100)
 
-- [ ] **R54 · P2 · ICE 回跳定位与复位同时失败时持续静音并重复请求**
+  已验证。首块及后台预读在预分配的页内连续填充，无错零帧才确认曲尾，错误仍独立报告。回归覆盖首页、顺序预读、跨页、精确跳页和有效错误前缀；Linux、原生 macOS 和原生 Win10 解码测试通过。
+
+- [x] **R54 · P2 · ICE 回跳定位与复位同时失败时持续静音并重复请求**
 
   seek_exact 失败后 seek(0) 也失败时直接 continue，无终止码也无进度，音源可随下个块继续请求。与 R41 的读错误分支独立。 将不可恢复复位失败发布为定位错误；如后端确有可重试错误，将其显式分类并限制次数。首页成功、页淘汰后回跳失败时结束重试，输出错误且不发送正常播放完成。
 
   [StreamingDecoder.cpp L185](../3rdpty/sources/IonCachyEngine/src/ice/manage/dec/StreamingDecoder.cpp#L185)、[SourceNode.cpp L205](../3rdpty/sources/IonCachyEngine/src/ice/core/SourceNode.cpp#L205)
+
+  已验证。精确定位和复位均失败时发布定位错误，保留已缓存页并拒绝反复定位。淘汰首页后回跳的回归确认音源停止、没有正常完成事件；原生 Win10 及 Linux、macOS 验收通过。
+
+  ICE 源码通过 [IonCachyEngine #19](https://github.com/xiangCaO233/IonCachyEngine/pull/19) 合入。
 
 - [ ] **R55 · P2 · 资产下载临时名由并行调用和多个进程共用**
 
