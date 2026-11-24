@@ -474,9 +474,12 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
             note_paras.emplace_back(token);
         }
 
-        // osu!mania 类型值 128 表示 Hold，其余当前统一按普通 Note 导入。
-        if ( static_cast<int32_t>(MMM::Internal::safeStod(
-                 MMM::Internal::safeAt(note_paras, 3))) == 128 ) {
+        // osu!mania 用第 7 位标记长条，其他位可以同时携带组合标志。
+        constexpr int HOLD_TYPE_BIT = 1 << 7;
+        const auto    type =
+            MMM::Internal::safeStoi(MMM::Internal::safeAt(note_paras, 3));
+        // 负数不是合法的标志集合，避免符号扩展把坏数据误认成长条。
+        if ( type >= 0 && (type & HOLD_TYPE_BIT) != 0 ) {
             Hold hold;
             hold.from_osu_description(note_paras, basemeta.track_count);
             // Hold 内容末尾由起点加持续时间决定。
