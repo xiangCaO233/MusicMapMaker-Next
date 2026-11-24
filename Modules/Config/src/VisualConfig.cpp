@@ -1,4 +1,5 @@
 #include "config/VisualConfig.h"
+#include "ConfigJsonValue.h"
 #include "config/visual/InteractionHitboxConfig.h"
 
 #include <algorithm>
@@ -198,29 +199,34 @@ void from_json(const nlohmann::json& j, BackgroundSpectrumConfig& config)
     // 单一默认快照避免字段默认值在此实现中重复硬编码。
     const BackgroundSpectrumConfig defaults;
     // 频段数量受分析器支持范围限制，防止异常配置放大计算量。
-    config.enabled   = j.value("enabled", defaults.enabled);
-    config.bandCount = std::clamp(j.value("bandCount", defaults.bandCount),
-                                  BACKGROUND_SPECTRUM_MIN_BANDS,
-                                  BACKGROUND_SPECTRUM_MAX_BANDS);
+    config.enabled = readConfigValue(j, "enabled", defaults.enabled);
+    // 类型和可表示范围由读取助手验证，频段数随后限制到界面支持的档位。
+    config.bandCount =
+        std::clamp(readConfigValue(j, "bandCount", defaults.bandCount),
+                   BACKGROUND_SPECTRUM_MIN_BANDS,
+                   BACKGROUND_SPECTRUM_MAX_BANDS);
     // 宽高和基线比例限制在画布归一化空间的有效区间。
-    config.widthRatio =
-        std::clamp(j.value("widthRatio", defaults.widthRatio), 0.10f, 1.0f);
-    config.heightRatio =
-        std::clamp(j.value("heightRatio", defaults.heightRatio), 0.05f, 1.0f);
-    config.baselineRatio = std::clamp(
-        j.value("baselineRatio", defaults.baselineRatio), 0.05f, 1.0f);
+    config.widthRatio = std::clamp(
+        readConfigValue(j, "widthRatio", defaults.widthRatio), 0.10f, 1.0f);
+    config.heightRatio = std::clamp(
+        readConfigValue(j, "heightRatio", defaults.heightRatio), 0.05f, 1.0f);
+    config.baselineRatio =
+        std::clamp(readConfigValue(j, "baselineRatio", defaults.baselineRatio),
+                   0.05f,
+                   1.0f);
     // 透明度允许完全隐藏，但不能超过标准混合范围。
     config.opacity =
-        std::clamp(j.value("opacity", defaults.opacity), 0.0f, 1.0f);
+        std::clamp(readConfigValue(j, "opacity", defaults.opacity), 0.0f, 1.0f);
     // 左右声道颜色逐分量净化，损坏一侧不会影响另一侧配置。
     config.leftBarColor = sanitizeBackgroundLevelColor(
-        j.value("leftBarColor", defaults.leftBarColor), defaults.leftBarColor);
+        readConfigValue(j, "leftBarColor", defaults.leftBarColor),
+        defaults.leftBarColor);
     config.rightBarColor = sanitizeBackgroundLevelColor(
-        j.value("rightBarColor", defaults.rightBarColor),
+        readConfigValue(j, "rightBarColor", defaults.rightBarColor),
         defaults.rightBarColor);
     // 打击特效输入开关缺失时沿用默认频谱仅分析背景音乐的策略。
     config.includeHitEffects =
-        j.value("includeHitEffects", defaults.includeHitEffects);
+        readConfigValue(j, "includeHitEffects", defaults.includeHitEffects);
 }
 
 /// @brief 序列化背景图布局、暗化、透明度和频谱子配置。
@@ -243,10 +249,12 @@ void to_json(nlohmann::json& j, const BackgroundConfig& config)
 void from_json(const nlohmann::json& j, BackgroundConfig& config)
 {
     // 比例字段沿用历史键名，避免读取时丢失既有用户偏好。
-    config.fillMode     = j.value("fillMode", BackgroundFillMode::AspectFill);
-    config.darken_ratio = j.value("darken_ratio", 0.7f);
-    config.opaque_ratio = j.value("opaque_ratio", 1.0f);
-    config.spectrum     = j.value("spectrum", BackgroundSpectrumConfig());
+    config.fillMode =
+        readConfigValue(j, "fillMode", BackgroundFillMode::AspectFill);
+    config.darken_ratio = readConfigValue(j, "darken_ratio", 0.7f);
+    config.opaque_ratio = readConfigValue(j, "opaque_ratio", 1.0f);
+    config.spectrum =
+        readConfigValue(j, "spectrum", BackgroundSpectrumConfig());
 }
 
 /// @brief 序列化单个画布信息组件的位置和外观。
@@ -270,12 +278,12 @@ void to_json(nlohmann::json& j, const CanvasComponentPlacement& placement)
 void from_json(const nlohmann::json& j, CanvasComponentPlacement& placement)
 {
     // 通用回退适合未知组件，已知组件会由外层 json.value 提供专用默认。
-    placement.visible       = j.value("visible", false);
-    placement.anchorX       = j.value("anchorX", 0.5f);
-    placement.anchorY       = j.value("anchorY", 0.12f);
-    placement.fontSizeRatio = j.value("fontSizeRatio", 0.035f);
-    placement.color =
-        j.value("color", std::array<float, 4>{ 1.0f, 1.0f, 1.0f, 1.0f });
+    placement.visible       = readConfigValue(j, "visible", false);
+    placement.anchorX       = readConfigValue(j, "anchorX", 0.5f);
+    placement.anchorY       = readConfigValue(j, "anchorY", 0.12f);
+    placement.fontSizeRatio = readConfigValue(j, "fontSizeRatio", 0.035f);
+    placement.color         = readConfigValue(
+        j, "color", std::array<float, 4>{ 1.0f, 1.0f, 1.0f, 1.0f });
 }
 
 namespace
@@ -530,8 +538,9 @@ void to_json(nlohmann::json& j, const CanvasKpsTrackPlacement& placement)
 void from_json(const nlohmann::json& j, CanvasKpsTrackPlacement& placement)
 {
     // 此层保持值解析简单，集合不变量由拥有容器集中维护。
-    placement.trackIndex = j.value("trackIndex", 0);
-    placement.placement  = j.value("placement", CanvasComponentPlacement{});
+    placement.trackIndex = readConfigValue(j, "trackIndex", 0);
+    placement.placement =
+        readConfigValue(j, "placement", CanvasComponentPlacement{});
 }
 
 /// @brief 序列化画布信息组件的全局及逐轨布局。
@@ -567,13 +576,14 @@ void from_json(const nlohmann::json& j, CanvasComponentLayoutConfig& config)
 {
     // 每个已知组件使用自身默认布局，避免通用 placement 默认覆盖产品位置。
     config.judgmentLineTime =
-        j.value("judgmentLineTime", CanvasComponentPlacement());
-    config.beatNumber = j.value("beatNumber", DEFAULT_BEAT_NUMBER_PLACEMENT);
+        readConfigValue(j, "judgmentLineTime", CanvasComponentPlacement());
+    config.beatNumber =
+        readConfigValue(j, "beatNumber", DEFAULT_BEAT_NUMBER_PLACEMENT);
     config.beatLineTime =
-        j.value("beatLineTime", DEFAULT_BEAT_LINE_TIME_PLACEMENT);
+        readConfigValue(j, "beatLineTime", DEFAULT_BEAT_LINE_TIME_PLACEMENT);
     // 旧格式没有标志，其重复文字字号相对局部区间而非整个画布。
     const bool fontSizeUsesCanvasHeight =
-        j.value("fontSizeUsesCanvasHeight", false);
+        readConfigValue(j, "fontSizeUsesCanvasHeight", false);
     // 仅迁移配置中真实存在的旧字段，缺失项已经使用新默认值。
     if ( !fontSizeUsesCanvasHeight && j.contains("beatNumber") ) {
         config.beatNumber.fontSizeRatio =
@@ -593,19 +603,21 @@ void from_json(const nlohmann::json& j, CanvasComponentLayoutConfig& config)
                        0.25f);
     }
     // KPS 总计、背景频谱和逐轨覆写在字号迁移后独立恢复。
-    config.kps = j.value("kps", DEFAULT_KPS_TOTAL_PLACEMENT);
-    config.backgroundSpectrum =
-        j.value("backgroundSpectrum", DEFAULT_BACKGROUND_SPECTRUM_PLACEMENT);
+    config.kps = readConfigValue(j, "kps", DEFAULT_KPS_TOTAL_PLACEMENT);
+    config.backgroundSpectrum = readConfigValue(
+        j, "backgroundSpectrum", DEFAULT_BACKGROUND_SPECTRUM_PLACEMENT);
+    // 轨道列表是单个配置字段，错误的元素形状不会影响其他画布组件。
     config.kpsTracks =
-        j.value("kpsTracks", std::vector<CanvasKpsTrackPlacement>{});
-    config.syncKpsTrackSizes = j.value("syncKpsTrackSizes", false);
+        readConfigValue(j, "kpsTracks", std::vector<CanvasKpsTrackPlacement>{});
+    config.syncKpsTrackSizes = readConfigValue(j, "syncKpsTrackSizes", false);
     // 字号同步与位置同步互不排斥，分别恢复其持久化开关。
     config.syncKpsTrackRelativePositions =
-        j.value("syncKpsTrackRelativePositions", false);
+        readConfigValue(j, "syncKpsTrackRelativePositions", false);
     // 通过 setter 恢复绝对同步以维护两个位置同步模式互斥。
     config.setSyncAllKpsComponentPositions(
-        j.value("syncAllKpsComponentPositions", false));
-    config.kpsTrackFontSizeRatio = j.value("kpsTrackFontSizeRatio", 0.0f);
+        readConfigValue(j, "syncAllKpsComponentPositions", false));
+    config.kpsTrackFontSizeRatio =
+        readConfigValue(j, "kpsTrackFontSizeRatio", 0.0f);
     // 非有限或非正共享字号表示未建立同步基准，统一归零。
     if ( !std::isfinite(config.kpsTrackFontSizeRatio) ||
          config.kpsTrackFontSizeRatio <= 0.0f ) {
@@ -654,10 +666,10 @@ void to_json(nlohmann::json& j, const PreviewAreaConfig::AreaMargin& margin)
 void from_json(const nlohmann::json& j, PreviewAreaConfig::AreaMargin& margin)
 {
     // 各边独立读取，部分配置不会重置其他边的默认值。
-    margin.left   = j.value("left", 4.0f);
-    margin.top    = j.value("top", 4.0f);
-    margin.right  = j.value("right", 4.0f);
-    margin.bottom = j.value("bottom", 4.0f);
+    margin.left   = readConfigValue(j, "left", 4.0f);
+    margin.top    = readConfigValue(j, "top", 4.0f);
+    margin.right  = readConfigValue(j, "right", 4.0f);
+    margin.bottom = readConfigValue(j, "bottom", 4.0f);
 }
 
 /// @brief 序列化预览区比例、边缘滚动和辅助线设置。
@@ -682,12 +694,14 @@ void to_json(nlohmann::json& j, const PreviewAreaConfig& config)
 void from_json(const nlohmann::json& j, PreviewAreaConfig& config)
 {
     // 默认值与 PreviewAreaConfig 构造语义保持一致。
-    config.areaRatio             = j.value("areaRatio", 5.0f);
-    config.edgeScrollSensitivity = j.value("edgeScrollSensitivity", 1.0f);
-    config.margin = j.value("margin", PreviewAreaConfig::AreaMargin());
+    config.areaRatio = readConfigValue(j, "areaRatio", 5.0f);
+    config.edgeScrollSensitivity =
+        readConfigValue(j, "edgeScrollSensitivity", 1.0f);
+    config.margin =
+        readConfigValue(j, "margin", PreviewAreaConfig::AreaMargin());
     // 两类辅助线缺失时采用当前预览区的低干扰显示组合。
-    config.drawBeatLines   = j.value("drawBeatLines", false);
-    config.drawTimingLines = j.value("drawTimingLines", true);
+    config.drawBeatLines   = readConfigValue(j, "drawBeatLines", false);
+    config.drawTimingLines = readConfigValue(j, "drawTimingLines", true);
 }
 
 /// @brief 将频谱细节等级写为稳定英文标识。
@@ -800,13 +814,15 @@ void to_json(nlohmann::json& j, const TrackLayout& layout)
 void from_json(const nlohmann::json& j, TrackLayout& layout)
 {
     // 主轨道默认占画布中间六成宽度和九成高度。
-    layout.left       = j.value("left", 0.2f);
-    layout.top        = j.value("top", 0.05f);
-    layout.right      = j.value("right", 0.8f);
-    layout.bottom     = j.value("bottom", 0.95f);
-    layout.draftLanes = j.value("draftLanes", HorizontalRegionLayout{});
-    layout.annotation = j.value("annotation", HorizontalRegionLayout{});
-    layout.bgmLanes   = j.value("bgmLanes", HorizontalRegionLayout{});
+    layout.left   = readConfigValue(j, "left", 0.2f);
+    layout.top    = readConfigValue(j, "top", 0.05f);
+    layout.right  = readConfigValue(j, "right", 0.8f);
+    layout.bottom = readConfigValue(j, "bottom", 0.95f);
+    layout.draftLanes =
+        readConfigValue(j, "draftLanes", HorizontalRegionLayout{});
+    layout.annotation =
+        readConfigValue(j, "annotation", HorizontalRegionLayout{});
+    layout.bgmLanes = readConfigValue(j, "bgmLanes", HorizontalRegionLayout{});
     // 空辅助覆盖由画布根据主轨道和项目内容在运行期解析。
 }
 
@@ -832,11 +848,11 @@ void to_json(nlohmann::json& j, const KeyCountLayoutConfig& config)
 void from_json(const nlohmann::json& j, KeyCountLayoutConfig& config)
 {
     // 此层只解析单项，保持集合验证集中在拥有者中。
-    config.keyCount             = j.value("keyCount", 0);
-    config.trackLayout          = j.value("trackLayout", TrackLayout());
-    config.judgmentLinePosition = j.value("judgeline_pos", 0.85f);
+    config.keyCount    = readConfigValue(j, "keyCount", 0);
+    config.trackLayout = readConfigValue(j, "trackLayout", TrackLayout());
+    config.judgmentLinePosition = readConfigValue(j, "judgeline_pos", 0.85f);
     config.canvasComponents =
-        j.value("canvasComponents", CanvasComponentLayoutConfig());
+        readConfigValue(j, "canvasComponents", CanvasComponentLayoutConfig());
     // 单项读取不主动应用布局，调用方按当前 Key 数选择何时生效。
 }
 
@@ -1109,12 +1125,17 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
         j.at("canvasComponents").is_object() &&
         j.at("canvasComponents").contains("backgroundSpectrum");
     // 根级布局仍是旧配置及未定制键数的兼容模板。
-    config.trackLayout = j.value("trackLayout", TrackLayout());
+    // 新旧布局的选择取决于实际键数配置，不依赖数值类型的隐式转换。
+    // 用户提供的合法键数覆盖不要求文件中同时存在根级轨道边界。
+    config.trackLayout = readConfigValue(j, "trackLayout", TrackLayout());
     config.canvasComponents =
-        j.value("canvasComponents", CanvasComponentLayoutConfig());
+        readConfigValue(j, "canvasComponents", CanvasComponentLayoutConfig());
     // Key 数集合读取后先移除无效键，再建立升序唯一不变量。
-    config.keyCountLayouts =
-        j.value("keyCountLayouts", std::vector<KeyCountLayoutConfig>{});
+    // 无法表示的键数采用默认零，随同其他无效键一起清除，避免错误索引。
+    // 对象形状有效时，各合法布局仍可独立保留。
+    // 先保证元素均可作为布局对象读取，坏字段再由单个布局的默认值处理。
+    config.keyCountLayouts = readConfigValue(
+        j, "keyCountLayouts", std::vector<KeyCountLayoutConfig>{});
     std::erase_if(config.keyCountLayouts,
                   [](const auto& layout) { return layout.keyCount <= 0; });
     // 稳定排序让重复键数按文件中首次出现的配置获胜。
@@ -1132,7 +1153,7 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
                     }),
         config.keyCountLayouts.end());
     // 背景先恢复旧频谱字段，再按新组件存在性决定迁移方向。
-    config.background = j.value("background", BackgroundConfig());
+    config.background = readConfigValue(j, "background", BackgroundConfig());
     if ( !hasBackgroundSpectrumComponent ) {
         // 旧 enabled 迁移为组件显隐，旧基线和高度推导组件中心锚点。
         config.canvasComponents.backgroundSpectrum.visible =
@@ -1147,12 +1168,16 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
     config.background.spectrum.enabled =
         config.canvasComponents.backgroundSpectrum.visible;
     // 预览、轨道线和判定线采用当前构造默认，保持空配置可用。
-    config.previewConfig     = j.value("previewConfig", PreviewAreaConfig());
-    config.trackBoxLineWidth = j.value("trackBoxLineWidth", 1.5f);
-    config.judgeline_pos     = j.value("judgeline_pos", 0.85f);
+    // 轨道线宽和判定线位置是独立字段，预览对象损坏时仍保留合法值。
+    config.previewConfig =
+        readConfigValue(j, "previewConfig", PreviewAreaConfig());
+    config.trackBoxLineWidth = readConfigValue(j, "trackBoxLineWidth", 1.5f);
+    config.judgeline_pos     = readConfigValue(j, "judgeline_pos", 0.85f);
     // 音符缩放和标签默认从类型实例读取，避免复制头文件默认常量。
-    config.noteScaleX = j.value("noteScaleX", VisualConfig{}.noteScaleX);
-    config.noteScaleY = j.value("noteScaleY", VisualConfig{}.noteScaleY);
+    config.noteScaleX =
+        readConfigValue(j, "noteScaleX", VisualConfig{}.noteScaleX);
+    config.noteScaleY =
+        readConfigValue(j, "noteScaleY", VisualConfig{}.noteScaleY);
     // 老配置只在读取时复制旧头部尺寸，迁移后各部件不再动态继承。
     // 只有读取边界负责兼容，日常编辑与渲染不得重新执行继承。
     // 即便某部件尚未调整，也必须保存它迁移后的确定尺寸。
@@ -1175,9 +1200,10 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
             scale.y     = readObservationValue(*item, "y", scale.y, .5F, 3.F);
         }
     }
-    config.showBoundSampleLabels =
-        j.value("showBoundSampleLabels", VisualConfig{}.showBoundSampleLabels);
-    config.noteFillMode = j.value("noteFillMode", BackgroundFillMode::Stretch);
+    config.showBoundSampleLabels = readConfigValue(
+        j, "showBoundSampleLabels", VisualConfig{}.showBoundSampleLabels);
+    config.noteFillMode =
+        readConfigValue(j, "noteFillMode", BackgroundFillMode::Stretch);
     // 只接受两个公开布局值；缺失、非法类型和未知文本均保持旧中心位置。
     // 不把枚举序号作为协议，未来增加选项时仍能安全识别已有文件。
     // 手工配置可能携带数字或布尔值，必须先检查类型再读取字符串。
@@ -1189,57 +1215,66 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
             ? NoteTexturePosition::Bottom
             : NoteTexturePosition::Center;
     // 三类时间偏移独立恢复，缺失值均表示无校准偏移。
-    config.visualOffset            = j.value("visualOffset", 0.0f);
-    config.waveformVisualOffset    = j.value("waveformVisualOffset", 0.0f);
-    config.spectrumVisualOffset    = j.value("spectrumVisualOffset", 0.0f);
-    config.timelineZoom            = j.value("timelineZoom", 1.0f);
-    config.scrollAnimationDuration = j.value("scrollAnimationDuration", 0.12f);
+    // 布尔或字符串偏移采用与缺失相同的处理，避免视图在启动时失去同步。
+    // 不尝试从本地化字符串解析数值，保存格式始终使用 JSON 数字。
+    config.visualOffset = readConfigValue(j, "visualOffset", 0.0f);
+    config.waveformVisualOffset =
+        readConfigValue(j, "waveformVisualOffset", 0.0f);
+    config.spectrumVisualOffset =
+        readConfigValue(j, "spectrumVisualOffset", 0.0f);
+    // 旧配置可用整数表示倍率，与浮点表示走同一有限数值检查。
+    config.timelineZoom = readConfigValue(j, "timelineZoom", 1.0f);
+    config.scrollAnimationDuration =
+        readConfigValue(j, "scrollAnimationDuration", 0.12f);
     // 旧配置同样默认启用模拟，显式关闭的选择在往返时保留。
-    config.simulateAutoplay = j.value("simulateAutoplay", true);
+    config.simulateAutoplay = readConfigValue(j, "simulateAutoplay", true);
     // 子选项独立持久化；关闭总开关不清空单点显示偏好。
-    config.hideJudgedNotes = j.value("hideJudgedNotes", true);
+    config.hideJudgedNotes = readConfigValue(j, "hideJudgedNotes", true);
     // 滑键单独保存，旧配置与新建配置均默认消隐。
-    config.hideJudgedFlicks = j.value("hideJudgedFlicks", true);
+    config.hideJudgedFlicks = readConfigValue(j, "hideJudgedFlicks", true);
     config.enableLinearScrollMapping =
-        j.value("enableLinearScrollMapping", false);
+        readConfigValue(j, "enableLinearScrollMapping", false);
     // 悬浮分拍线延伸比例直接限制到归一化零至一范围。
-    config.snapThreshold                      = j.value("snapThreshold", 16.0f);
-    config.beatLineAlpha                      = j.value("beatLineAlpha", 0.75f);
+    config.snapThreshold = readConfigValue(j, "snapThreshold", 16.0f);
+    config.beatLineAlpha = readConfigValue(j, "beatLineAlpha", 0.75f);
     config.hoverSubdivisionLineExtensionRatio = std::clamp(
-        j.value("hoverSubdivisionLineExtensionRatio", 0.5f), 0.0f, 1.0f);
+        readConfigValue(j, "hoverSubdivisionLineExtensionRatio", 0.5f),
+        0.0f,
+        1.0f);
     // 新三态字段优先；仅在缺失时把旧 drawBeatLines 布尔迁移为两端状态。
     if ( j.contains("beatLineDisplayMode") ) {
-        config.beatLineDisplayMode =
-            j.value("beatLineDisplayMode", BeatLineDisplayMode::Always);
+        config.beatLineDisplayMode = readConfigValue(
+            j, "beatLineDisplayMode", BeatLineDisplayMode::Always);
     } else {
-        config.beatLineDisplayMode = j.value("drawBeatLines", true)
+        config.beatLineDisplayMode = readConfigValue(j, "drawBeatLines", true)
                                          ? BeatLineDisplayMode::Always
                                          : BeatLineDisplayMode::Hidden;
     }
     // 可见核心和淡出区分别限制到设置界面支持范围。
-    config.beatLineCursorVisibleRatio =
-        std::clamp(j.value("beatLineCursorVisibleRatio", 0.16f), 0.05f, 0.50f);
-    config.beatLineCursorFadeRatio =
-        std::clamp(j.value("beatLineCursorFadeRatio", 0.20f), 0.02f, 0.40f);
+    config.beatLineCursorVisibleRatio = std::clamp(
+        readConfigValue(j, "beatLineCursorVisibleRatio", 0.16f), 0.05f, 0.50f);
+    config.beatLineCursorFadeRatio = std::clamp(
+        readConfigValue(j, "beatLineCursorFadeRatio", 0.20f), 0.02f, 0.40f);
     // 调色板覆盖属于运行期组合结果，不从视觉配置文件恢复。
     config.overrideBeatLineColors = false;
     config.beatLineColors         = {};
     config.overrideNoteColors     = false;
     config.noteColors             = {};
     config.drawBeatLinesBeforeFirstTiming =
-        j.value("drawBeatLinesBeforeFirstTiming", true);
+        readConfigValue(j, "drawBeatLinesBeforeFirstTiming", true);
     // 频谱细节缺失时选择质量与负载折中的 Balanced。
-    config.spectrumDetailLevel =
-        j.value("spectrumDetailLevel", SpectrumDetailLevel::Balanced);
-    config.enableHitEffects = j.value("enableHitEffects", true);
+    config.spectrumDetailLevel = readConfigValue(
+        j, "spectrumDetailLevel", SpectrumDetailLevel::Balanced);
+    config.enableHitEffects = readConfigValue(j, "enableHitEffects", true);
     // 新开关默认开启，仅范围模式延续旧版尾部定位。
     config.flickHitEffectMode =
-        j.value("flickHitEffectMode", FlickHitEffectMode::TailOnly);
+        readConfigValue(j, "flickHitEffectMode", FlickHitEffectMode::TailOnly);
     config.enablePolylineInternalFlickEffects =
-        j.value("enablePolylineInternalFlickEffects", true);
+        readConfigValue(j, "enablePolylineInternalFlickEffects", true);
     config.nonHoldHitEffectDuration =
-        j.value("nonHoldHitEffectDuration",
-                VisualConfig::DEFAULT_NON_HOLD_HIT_EFFECT_DURATION);
+        readConfigValue(j,
+                        "nonHoldHitEffectDuration",
+                        VisualConfig::DEFAULT_NON_HOLD_HIT_EFFECT_DURATION);
     // 非 Hold 特效时长先处理非有限值，再执行产品范围夹取。
     if ( !std::isfinite(config.nonHoldHitEffectDuration) ) {
         config.nonHoldHitEffectDuration =
@@ -1250,7 +1285,7 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
                    VisualConfig::MIN_NON_HOLD_HIT_EFFECT_DURATION,
                    VisualConfig::MAX_NON_HOLD_HIT_EFFECT_DURATION);
     // 调试绘制默认关闭，观察角和横纵拾取缩放可独立校准。
-    config.debugDrawHitboxes = j.value("debugDrawHitboxes", false);
+    config.debugDrawHitboxes = readConfigValue(j, "debugDrawHitboxes", false);
     // 三项观察参数分别读取，旧配置缺失的新键不影响原有俯仰角。
     // 同一安全入口保证文件导入与设置页允许的范围一致。
     // 这些字段只属于视觉配置，既不改变轨道布局，也不作为谱面内容同步。
@@ -1316,11 +1351,13 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
     config.canvasCameraRotation =
         readPose("canvasCameraRotation", { 0, 0, 0 }, 180.0F);
     config.interactionHitboxScaleX =
-        j.value("interactionHitboxScaleX",
-                VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE);
+        readConfigValue(j,
+                        "interactionHitboxScaleX",
+                        VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE);
     config.interactionHitboxScaleY =
-        j.value("interactionHitboxScaleY",
-                VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE);
+        readConfigValue(j,
+                        "interactionHitboxScaleY",
+                        VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE);
     // 非有限缩放回退标准值，避免比较和几何计算传播 NaN。
     if ( !std::isfinite(config.interactionHitboxScaleX) ) {
         config.interactionHitboxScaleX =

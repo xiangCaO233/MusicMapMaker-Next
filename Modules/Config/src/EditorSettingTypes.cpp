@@ -1,4 +1,5 @@
 /// @file EditorSettingTypes.cpp
+#include "ConfigJsonValue.h"
 /// @brief 编辑器配置值及独立偏好类型的 JSON 转换实现。
 /// @details 同步参数的 ADL 声明由轻量 SyncConfig.h 与类型一同提供。
 /// 完整 JSON 操作仍留在此实现，移动类型不改变字段名和旧值回退规则。
@@ -89,10 +90,10 @@ void to_json(nlohmann::json& json, const SyncConfig& config)
 void from_json(const nlohmann::json& json, SyncConfig& config)
 {
     // mode 的默认值沿用旧配置启用的积分同步，而非枚举自身 None。
-    config.mode            = json.value("mode", SyncMode::Integral);
-    config.integralFactor  = json.value("integralFactor", 0.1f);
-    config.waterTankBuffer = json.value("waterTankBuffer", 0.05f);
-    config.syncInterval    = json.value("syncInterval", 10.0);
+    config.mode            = readConfigValue(json, "mode", SyncMode::Integral);
+    config.integralFactor  = readConfigValue(json, "integralFactor", 0.1f);
+    config.waterTankBuffer = readConfigValue(json, "waterTankBuffer", 0.05f);
+    config.syncInterval    = readConfigValue(json, "syncInterval", 10.0);
 }
 
 /// @brief 写出折线键音策略，不依赖枚举数值与声明顺序。
@@ -152,37 +153,42 @@ void from_json(const nlohmann::json& json, SfxConfig& config)
 {
     // 新策略独立于已废弃的 polylineStrategy；升级仍保持严格逻辑。
     config.polylineSfxMode =
-        json.value("polylineSfxMode", PolylineSfxMode::Strict);
+        readConfigValue(json, "polylineSfxMode", PolylineSfxMode::Strict);
     // 忽略旧 polylineStrategy；各物件使用自身音效，内部滑键由独立开关控制。
     // 旧配置缺少开关时仍播放内部滑键，不能把普通键音策略误迁移为静音。
     config.enablePolylineInternalFlickSfx =
-        json.value("enablePolylineInternalFlickSfx", true);
+        readConfigValue(json, "enablePolylineInternalFlickSfx", true);
     config.enableFlickWidthVolumeScaling =
-        json.value("enableFlickWidthVolumeScaling", false);
+        readConfigValue(json, "enableFlickWidthVolumeScaling", false);
     config.flickWidthVolumeMultiplier =
-        json.value("flickWidthVolumeMultiplier", 0.1f);
+        readConfigValue(json, "flickWidthVolumeMultiplier", 0.1f);
     // 新字段优先；缺失时读取旧 enableDirectionalFlickChannels 完成迁移。
-    config.enableStereoHitEffects =
-        json.value("enableStereoHitEffects",
-                   json.value("enableDirectionalFlickChannels", true));
+    config.enableStereoHitEffects = readConfigValue(
+        json,
+        "enableStereoHitEffects",
+        readConfigValue(json, "enableDirectionalFlickChannels", true));
     // 按值恢复用户对各资源设置的永久混音状态。
-    config.permanentSfxVolumes =
-        json.value("permanentSfxVolumes", std::map<std::string, float>());
-    config.permanentSfxMutes =
-        json.value("permanentSfxMutes", std::map<std::string, bool>());
-    config.hitSfxSyncSpeed     = json.value("hitSfxSyncSpeed", true);
-    config.enableHitSfx        = json.value("enableHitSfx", true);
-    config.enableUnboundHitSfx = json.value("enableUnboundHitSfx", true);
+    // 两张映射独立恢复。如果某张表内有错误类型，只放弃该表，
+    // 仍保留另一张表以及同一混音配置的全局增益、开关和节拍器参数。
+    config.permanentSfxVolumes = readConfigValue(
+        json, "permanentSfxVolumes", std::map<std::string, float>());
+    config.permanentSfxMutes = readConfigValue(
+        json, "permanentSfxMutes", std::map<std::string, bool>());
+    config.hitSfxSyncSpeed = readConfigValue(json, "hitSfxSyncSpeed", true);
+    config.enableHitSfx    = readConfigValue(json, "enableHitSfx", true);
+    config.enableUnboundHitSfx =
+        readConfigValue(json, "enableUnboundHitSfx", true);
     // 从不受信任 JSON 读取的浮点增益必须同时处理越界与 NaN。
     config.unboundHitSfxGain =
-        sanitizeHitSfxGain(json.value("unboundHitSfxGain", 1.0F));
-    config.enableBoundHitSfx = json.value("enableBoundHitSfx", true);
+        sanitizeHitSfxGain(readConfigValue(json, "unboundHitSfxGain", 1.0F));
+    config.enableBoundHitSfx = readConfigValue(json, "enableBoundHitSfx", true);
     config.boundHitSfxGain =
-        sanitizeHitSfxGain(json.value("boundHitSfxGain", 1.0F));
+        sanitizeHitSfxGain(readConfigValue(json, "boundHitSfxGain", 1.0F));
     // 旧配置没有节拍器字段时不新增声音；增益沿用音效组安全范围。
-    config.enableEditorMetronome = json.value("enableEditorMetronome", false);
+    config.enableEditorMetronome =
+        readConfigValue(json, "enableEditorMetronome", false);
     config.editorMetronomeGain =
-        sanitizeHitSfxGain(json.value("editorMetronomeGain", 1.0F));
+        sanitizeHitSfxGain(readConfigValue(json, "editorMetronomeGain", 1.0F));
 }
 
 /// @brief 序列化文件选择器实现偏好。
@@ -254,12 +260,13 @@ void to_json(nlohmann::json& json, const SoftwareCursorConfig& config)
 void from_json(const nlohmann::json& json, SoftwareCursorConfig& config)
 {
     // 默认尺寸与寿命和首次启动配置保持一致。
-    config.cursorSize             = json.value("cursorSize", 64.0f);
-    config.trailSize              = json.value("trailSize", 48.0f);
-    config.trailLifeTime          = json.value("trailLifeTime", 0.4f);
-    config.smokeSize              = json.value("smokeSize", 32.0f);
-    config.smokeLifeTime          = json.value("smokeLifeTime", 0.8f);
-    config.enableBpmSyncSmokeLife = json.value("enableBpmSyncSmokeLife", false);
+    config.cursorSize    = readConfigValue(json, "cursorSize", 64.0f);
+    config.trailSize     = readConfigValue(json, "trailSize", 48.0f);
+    config.trailLifeTime = readConfigValue(json, "trailLifeTime", 0.4f);
+    config.smokeSize     = readConfigValue(json, "smokeSize", 32.0f);
+    config.smokeLifeTime = readConfigValue(json, "smokeLifeTime", 0.8f);
+    config.enableBpmSyncSmokeLife =
+        readConfigValue(json, "enableBpmSyncSmokeLife", false);
 }
 
 /// @brief 序列化窗口圆角、间距和动画时长等 UI 外观参数。
@@ -285,15 +292,15 @@ void to_json(nlohmann::json& json, const UIAestheticsConfig& config)
 void from_json(const nlohmann::json& json, UIAestheticsConfig& config)
 {
     // 圆角、间距和内边距缺失时使用当前视觉基线。
-    config.windowRounding = json.value("windowRounding", 8.0f);
-    config.frameRounding  = json.value("frameRounding", 6.0f);
-    config.windowGap      = json.value("windowGap", 8.0f);
-    config.itemSpacing    = json.value("itemSpacing", 8.0f);
-    config.windowPadding  = json.value("windowPadding", 8.0f);
+    config.windowRounding = readConfigValue(json, "windowRounding", 8.0f);
+    config.frameRounding  = readConfigValue(json, "frameRounding", 6.0f);
+    config.windowGap      = readConfigValue(json, "windowGap", 8.0f);
+    config.itemSpacing    = readConfigValue(json, "itemSpacing", 8.0f);
+    config.windowPadding  = readConfigValue(json, "windowPadding", 8.0f);
     // 最小值约束同时覆盖旧文件中的零值和负值。
     config.animationTransitionDuration =
         std::max(UIAestheticsConfig::MIN_ANIMATION_TRANSITION_DURATION,
-                 json.value("animationTransitionDuration", 0.12f));
+                 readConfigValue(json, "animationTransitionDuration", 0.12f));
 }
 
 /// @brief 序列化一个具名音符与分拍线调色方案。
@@ -315,10 +322,11 @@ void to_json(nlohmann::json& json, const ColorPaletteScheme& scheme)
 void from_json(const nlohmann::json& json, ColorPaletteScheme& scheme)
 {
     // noteColors 缺失时构造其实际容器类型，避免硬编码实现类型。
-    scheme.name       = json.value("name", std::string("Palette"));
-    scheme.noteColors = json.value("noteColors", decltype(scheme.noteColors){});
+    scheme.name = readConfigValue(json, "name", std::string("Palette"));
+    scheme.noteColors =
+        readConfigValue(json, "noteColors", decltype(scheme.noteColors){});
     scheme.beatLineColors =
-        json.value("beatLineColors", BeatLineColorPalette{});
+        readConfigValue(json, "beatLineColors", BeatLineColorPalette{});
 }
 
 /// @brief 序列化调色方案列表及当前选择索引。
@@ -339,9 +347,11 @@ void to_json(nlohmann::json& json, const ColorPaletteConfig& config)
 void from_json(const nlohmann::json& json, ColorPaletteConfig& config)
 {
     // 先读取集合再判断索引范围，避免对旧集合大小作假设。
+    // 调色方案数组完成元素校验后才转换，索引始终针对最终保留的方案。
     config.activeSchemeIndex =
-        json.value("activeSchemeIndex", std::size_t{ 0 });
-    config.schemes = json.value("schemes", std::vector<ColorPaletteScheme>());
+        readConfigValue(json, "activeSchemeIndex", std::size_t{ 0 });
+    config.schemes =
+        readConfigValue(json, "schemes", std::vector<ColorPaletteScheme>());
     if ( config.schemes.empty() ||
          config.activeSchemeIndex >= config.schemes.size() ) {
         config.activeSchemeIndex = 0;
@@ -369,12 +379,13 @@ void to_json(nlohmann::json& json, const ShortcutBinding& binding)
 void from_json(const nlohmann::json& json, ShortcutBinding& binding)
 {
     // 修饰键逐项默认关闭，旧配置不会凭空获得额外组合条件。
-    binding.enabled = json.value("enabled", true);
-    binding.key     = json.value("key", std::string());
-    binding.ctrl    = json.value("ctrl", false);
-    binding.shift   = json.value("shift", false);
-    binding.alt     = json.value("alt", false);
-    binding.super   = json.value("super", false);
+    // 不把数字键值强制转成文本。空键路径会关闭该条绑定，其他动作照常恢复。
+    binding.enabled = readConfigValue(json, "enabled", true);
+    binding.key     = readConfigValue(json, "key", std::string());
+    binding.ctrl    = readConfigValue(json, "ctrl", false);
+    binding.shift   = readConfigValue(json, "shift", false);
+    binding.alt     = readConfigValue(json, "alt", false);
+    binding.super   = readConfigValue(json, "super", false);
     // enabled=true 不能覆盖空键的不完整配置。
     if ( binding.key.empty() ) binding.enabled = false;
 }
@@ -400,8 +411,8 @@ void from_json(const nlohmann::json& json, ShortcutConfig& config)
     // 所有缺失字段从同一个默认快照恢复，用户已有绑定不因新增动作丢失。
     const ShortcutConfig defaults;
     for ( const auto& entry : editorShortcutActions() )
-        config.*(entry.m_binding) =
-            json.value(std::string(entry.m_id), defaults.*(entry.m_binding));
+        config.*(entry.m_binding) = readConfigValue(
+            json, std::string(entry.m_id), defaults.*(entry.m_binding));
     // 选择和绘制同时保持旧默认 2／3 时，视为未重绑定并整体迁移到 1／2。
     // 成对匹配全部修饰键和启用状态，避免只改一个键而覆盖用户自定义组合。
     const ShortcutBinding legacySelection{
@@ -476,14 +487,14 @@ void to_json(nlohmann::json& json, const OpenALSpatialConfig& config)
 void from_json(const nlohmann::json& json, OpenALSpatialConfig& config)
 {
     // 旧配置缺少 enabled 时保持关闭，不意外改变音频输出。
-    config.enabled           = json.value("enabled", false);
-    config.directionX        = json.value("directionX", 0.0f);
-    config.directionY        = json.value("directionY", 0.0f);
-    config.directionZ        = json.value("directionZ", -1.0f);
-    config.distance          = json.value("distance", 1.0f);
-    config.referenceDistance = json.value("referenceDistance", 1.0f);
-    config.maxDistance       = json.value("maxDistance", 100.0f);
-    config.rolloffFactor     = json.value("rolloffFactor", 1.0f);
+    config.enabled           = readConfigValue(json, "enabled", false);
+    config.directionX        = readConfigValue(json, "directionX", 0.0f);
+    config.directionY        = readConfigValue(json, "directionY", 0.0f);
+    config.directionZ        = readConfigValue(json, "directionZ", -1.0f);
+    config.distance          = readConfigValue(json, "distance", 1.0f);
+    config.referenceDistance = readConfigValue(json, "referenceDistance", 1.0f);
+    config.maxDistance       = readConfigValue(json, "maxDistance", 100.0f);
+    config.rolloffFactor     = readConfigValue(json, "rolloffFactor", 1.0f);
 }
 
 /// @brief 将帧率限制偏好写为刷新率倍数标识。
@@ -654,16 +665,18 @@ void to_json(nlohmann::json& json, const AutoSaveConfig& config)
 void from_json(const nlohmann::json& json, AutoSaveConfig& config)
 {
     // 自动保存默认关闭，但保留可立即启用的 30 秒参数。
-    config.mode = json.value("mode", AutoSaveMode::Disabled);
+    config.mode = readConfigValue(json, "mode", AutoSaveMode::Disabled);
     config.intervalUnit =
-        json.value("intervalUnit", AutoSaveIntervalUnit::Seconds);
-    config.intervalValue = std::clamp(json.value("intervalValue", 30), 5, 60);
+        readConfigValue(json, "intervalUnit", AutoSaveIntervalUnit::Seconds);
+    config.intervalValue =
+        std::clamp(readConfigValue(json, "intervalValue", 30), 5, 60);
     // 各事件开关独立读取，部分配置不会覆盖其他默认触发点。
-    config.onObjectModified       = json.value("onObjectModified", true);
-    config.onBeatmapSwitch        = json.value("onBeatmapSwitch", true);
-    config.onImGuiWindowFocusLost = json.value("onImGuiWindowFocusLost", true);
+    config.onObjectModified = readConfigValue(json, "onObjectModified", true);
+    config.onBeatmapSwitch  = readConfigValue(json, "onBeatmapSwitch", true);
+    config.onImGuiWindowFocusLost =
+        readConfigValue(json, "onImGuiWindowFocusLost", true);
     config.onNativeWindowFocusLost =
-        json.value("onNativeWindowFocusLost", true);
+        readConfigValue(json, "onNativeWindowFocusLost", true);
 }
 
 /// @brief 序列化自动备份触发策略和保留数量。
@@ -696,19 +709,22 @@ void to_json(nlohmann::json& json, const AutoBackupConfig& config)
 void from_json(const nlohmann::json& json, AutoBackupConfig& config)
 {
     // 自动备份默认关闭，预设五分钟便于用户启用后直接使用。
-    config.mode = json.value("mode", AutoSaveMode::Disabled);
+    config.mode = readConfigValue(json, "mode", AutoSaveMode::Disabled);
     config.intervalUnit =
-        json.value("intervalUnit", AutoSaveIntervalUnit::Minutes);
-    config.intervalValue    = std::clamp(json.value("intervalValue", 5), 5, 60);
-    config.onObjectModified = json.value("onObjectModified", true);
-    config.onBeatmapSwitch  = json.value("onBeatmapSwitch", true);
-    config.onImGuiWindowFocusLost = json.value("onImGuiWindowFocusLost", true);
+        readConfigValue(json, "intervalUnit", AutoSaveIntervalUnit::Minutes);
+    config.intervalValue =
+        std::clamp(readConfigValue(json, "intervalValue", 5), 5, 60);
+    config.onObjectModified = readConfigValue(json, "onObjectModified", true);
+    config.onBeatmapSwitch  = readConfigValue(json, "onBeatmapSwitch", true);
+    config.onImGuiWindowFocusLost =
+        readConfigValue(json, "onImGuiWindowFocusLost", true);
     config.onNativeWindowFocusLost =
-        json.value("onNativeWindowFocusLost", true);
+        readConfigValue(json, "onNativeWindowFocusLost", true);
     // 轮转数量同时设置最小值，避免启用备份却不能保留任何版本。
-    config.maxBackupCount = std::clamp(json.value("maxBackupCount", 10),
-                                       AUTO_BACKUP_COUNT_MIN,
-                                       AUTO_BACKUP_COUNT_MAX);
+    config.maxBackupCount =
+        std::clamp(readConfigValue(json, "maxBackupCount", 10),
+                   AUTO_BACKUP_COUNT_MIN,
+                   AUTO_BACKUP_COUNT_MAX);
 }
 
 /// @brief 将时间显示偏好写为稳定英文标识。
@@ -835,16 +851,19 @@ void from_json(const nlohmann::json&          json,
                BpmMeasurementToolPreferences& preferences)
 {
     // 视野默认覆盖中心前后八秒，便于首次打开时观察多个拍点。
-    preferences.markerWidthMs    = json.value("markerWidthMs", 80.0);
-    preferences.wheelSnapEnabled = json.value("wheelSnapEnabled", false);
+    preferences.markerWidthMs = readConfigValue(json, "markerWidthMs", 80.0);
+    preferences.wheelSnapEnabled =
+        readConfigValue(json, "wheelSnapEnabled", false);
     // 新增编辑偏好不改变旧用户的段落时间行为。
     const auto follow = json.find("followSubsequentSegments");
     // 手工配置填错类型时沿用关闭默认，不隐式转换文本或触发 JSON 类型错误。
     preferences.followSubsequentSegments =
         follow != json.end() && follow->is_boolean() && follow->get<bool>();
-    preferences.beatDivisor          = json.value("beatDivisor", 4);
-    preferences.viewCenterSeconds    = json.value("viewCenterSeconds", 0.0);
-    preferences.viewHalfWidthSeconds = json.value("viewHalfWidthSeconds", 8.0);
+    preferences.beatDivisor = readConfigValue(json, "beatDivisor", 4);
+    preferences.viewCenterSeconds =
+        readConfigValue(json, "viewCenterSeconds", 0.0);
+    preferences.viewHalfWidthSeconds =
+        readConfigValue(json, "viewHalfWidthSeconds", 8.0);
 }
 
 /// @brief 序列化协作成员视野的渲染方式。
@@ -905,12 +924,14 @@ void from_json(const nlohmann::json&       json,
 {
     // defaults 避免在每个字段处重复硬编码产品默认值。
     const ToolbarStateToolVisibility defaults;
-    visibility.move        = json.value("move", defaults.move);
-    visibility.marquee     = json.value("marquee", defaults.marquee);
-    visibility.draw        = json.value("draw", defaults.draw);
-    visibility.colorBrush  = json.value("colorBrush", defaults.colorBrush);
-    visibility.colorEraser = json.value("colorEraser", defaults.colorEraser);
-    visibility.layout      = json.value("layout", defaults.layout);
+    visibility.move    = readConfigValue(json, "move", defaults.move);
+    visibility.marquee = readConfigValue(json, "marquee", defaults.marquee);
+    visibility.draw    = readConfigValue(json, "draw", defaults.draw);
+    visibility.colorBrush =
+        readConfigValue(json, "colorBrush", defaults.colorBrush);
+    visibility.colorEraser =
+        readConfigValue(json, "colorEraser", defaults.colorEraser);
+    visibility.layout = readConfigValue(json, "layout", defaults.layout);
 }
 
 /// @brief 序列化非互斥工具栏按钮的可见性。
@@ -943,21 +964,25 @@ void from_json(const nlohmann::json&               json,
 {
     // 每个按钮独立读取，手工编辑的部分对象不会重置其他按钮。
     const ToolbarIndependentButtonVisibility defaults;
-    visibility.notePalette = json.value("notePalette", defaults.notePalette);
-    visibility.magnet      = json.value("magnet", defaults.magnet);
-    visibility.scrollTimingMapping =
-        json.value("scrollTimingMapping", defaults.scrollTimingMapping);
+    visibility.notePalette =
+        readConfigValue(json, "notePalette", defaults.notePalette);
+    visibility.magnet = readConfigValue(json, "magnet", defaults.magnet);
+    visibility.scrollTimingMapping = readConfigValue(
+        json, "scrollTimingMapping", defaults.scrollTimingMapping);
     visibility.beatLineDisplay =
-        json.value("beatLineDisplay", defaults.beatLineDisplay);
+        readConfigValue(json, "beatLineDisplay", defaults.beatLineDisplay);
     visibility.soundEffectTool =
-        json.value("soundEffectTool", defaults.soundEffectTool);
-    visibility.playback = json.value("playback", defaults.playback);
+        readConfigValue(json, "soundEffectTool", defaults.soundEffectTool);
+    visibility.playback = readConfigValue(json, "playback", defaults.playback);
     visibility.playbackSpeed =
-        json.value("playbackSpeed", defaults.playbackSpeed);
-    visibility.trackCount  = json.value("trackCount", defaults.trackCount);
-    visibility.beatDivisor = json.value("beatDivisor", defaults.beatDivisor);
+        readConfigValue(json, "playbackSpeed", defaults.playbackSpeed);
+    visibility.trackCount =
+        readConfigValue(json, "trackCount", defaults.trackCount);
+    visibility.beatDivisor =
+        readConfigValue(json, "beatDivisor", defaults.beatDivisor);
     // 旧配置自动补充无修饰键缩放入口，显式隐藏则继续保留。
-    visibility.timelineZoom = json.value("timelineZoom", defaults.timelineZoom);
+    visibility.timelineZoom =
+        readConfigValue(json, "timelineZoom", defaults.timelineZoom);
 }
 
 /// @brief 序列化工具栏可见性的两个职责分组。
@@ -980,9 +1005,9 @@ void from_json(const nlohmann::json& json, ToolbarVisibilityConfig& visibility)
 {
     // 子结构的 from_json 继续负责字段级兼容和默认值。
     visibility.stateTools =
-        json.value("stateTools", ToolbarStateToolVisibility{});
-    visibility.independentButtons =
-        json.value("independentButtons", ToolbarIndependentButtonVisibility{});
+        readConfigValue(json, "stateTools", ToolbarStateToolVisibility{});
+    visibility.independentButtons = readConfigValue(
+        json, "independentButtons", ToolbarIndependentButtonVisibility{});
 }
 
 /// @brief 序列化协作信令服务器端点设置。
@@ -1182,15 +1207,22 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
 /// @brief 读取全局编辑设置，并兼容旧版时间线专业模式字段。
 /// @param json 用户配置中的 settings 对象。
 /// @param settings 接收所有已知字段及逐项默认值。
+/// @details 按字段恢复，单个配置项的错误不能阻断其他设置的加载。
+/// 数值、字符串和数组采用各自的读取约束。例如最近工程路径一律按文本保存，
+/// 不会把错误写入的数字解释为路径。子配置中的旧键仍按原优先顺序读取。
 /// @note 迁移只发生在读取路径，后续保存会统一写出当前字段名。
 void from_json(const nlohmann::json& json, EditorSettings& settings)
 {
     // 基础子配置先通过各自 ADL 入口恢复，保持类型职责独立。
-    settings.syncConfig = json.value("syncConfig", SyncConfig());
-    settings.sfxConfig  = json.value("sfxConfig", SfxConfig());
+    // 子对象类型错误时恢复整块默认，对象中的字段错误则只恢复相关字段。
+    // 这样旧文件依然可以部分定义同步、混音和后端偏好。
+    // 返回值不要求调用方区分兼容缺省和无效配置值。
+    settings.syncConfig = readConfigValue(json, "syncConfig", SyncConfig());
+    settings.sfxConfig  = readConfigValue(json, "sfxConfig", SfxConfig());
     settings.filePickerStyle =
-        json.value("filePickerStyle", FilePickerStyle::Native);
-    settings.cursorStyle = json.value("cursorStyle", CursorStyle::Software);
+        readConfigValue(json, "filePickerStyle", FilePickerStyle::Native);
+    settings.cursorStyle =
+        readConfigValue(json, "cursorStyle", CursorStyle::Software);
     // 主题需要区分缺失、空字符串和旧内置名称，不能用单次 value 处理。
     if ( auto themeIterator = json.find("theme");
          themeIterator != json.end() && themeIterator->is_string() ) {
@@ -1205,28 +1237,36 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
         settings.theme = UI_THEME_AUTO_ID;
     }
     // 插件与皮肤选择缺失时恢复空禁用列表和内置默认皮肤。
+    // 禁用列表以完整字符串数组为单位恢复，禁止产生真假开关组成的伪 ID。
     settings.disabledPluginIds =
-        json.value("disabledPluginIds", std::vector<std::string>());
-    settings.selectedSkinDirectory =
-        json.value("selectedSkinDirectory", std::string("mmm-default"));
+        readConfigValue(json, "disabledPluginIds", std::vector<std::string>());
+    settings.selectedSkinDirectory = readConfigValue(
+        json, "selectedSkinDirectory", std::string("mmm-default"));
     // 编辑交互字段保留历史默认值，避免升级后基础吸附行为突变。
-    settings.beatDivisor = json.value("beatDivisor", 4);
+    // 拒绝浮点、字符串或布尔分拍值，避免编辑器以截断或隐式转换后的值启动。
+    settings.beatDivisor = readConfigValue(json, "beatDivisor", 4);
     settings.enableToolbarValueWheelAdjustment =
-        json.value("enableToolbarValueWheelAdjustment", false);
-    settings.overlapTimeWindowMs = json.value("overlapTimeWindowMs", 5.0f);
-    settings.reverseScroll       = json.value("reverseScroll", false);
+        readConfigValue(json, "enableToolbarValueWheelAdjustment", false);
+    settings.overlapTimeWindowMs =
+        readConfigValue(json, "overlapTimeWindowMs", 5.0f);
+    settings.reverseScroll = readConfigValue(json, "reverseScroll", false);
     // 只有缺失字段采用平台默认；明确关闭必须保留，不能在每次启动强制开启。
-    settings.scrollSnap = json.value("scrollSnap", defaultMagnetEnabled());
+    settings.scrollSnap =
+        readConfigValue(json, "scrollSnap", defaultMagnetEnabled());
     // 新放置吸附开关缺失时继承旧 scrollSnap，完成行为迁移。
     settings.objectPlacementSnap =
-        json.value("objectPlacementSnap", settings.scrollSnap);
-    settings.objectPlacementSnapMode = json.value(
-        "objectPlacementSnapMode", ObjectPlacementSnapMode::CurrentBeatDivisor);
+        readConfigValue(json, "objectPlacementSnap", settings.scrollSnap);
+    settings.objectPlacementSnapMode =
+        readConfigValue(json,
+                        "objectPlacementSnapMode",
+                        ObjectPlacementSnapMode::CurrentBeatDivisor);
     // 位掩码只保留当前支持位，忽略未来或损坏配置中的高位。
     settings.commonBeatDivisorMask =
-        json.value("commonBeatDivisorMask", COMMON_BEAT_DIVISOR_MASK_DEFAULT) &
+        readConfigValue(
+            json, "commonBeatDivisorMask", COMMON_BEAT_DIVISOR_MASK_DEFAULT) &
         COMMON_BEAT_DIVISOR_MASK_ALL;
-    settings.recentProjectsLimit = json.value("recentProjectsLimit", 10);
+    settings.recentProjectsLimit =
+        readConfigValue(json, "recentProjectsLimit", 10);
     // 旧配置缺失或类型错误时继续显示欢迎页，避免无项目空白启动。
     const auto welcome = json.find("showWelcomeOnStartup");
     settings.m_showWelcomeOnStartup =
@@ -1240,75 +1280,89 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
         skippedVersion != json.end() && skippedVersion->is_string()
             ? skippedVersion->get<std::string>()
             : std::string{};
-    settings.language = json.value("language", std::string("zh_cn"));
+    settings.language = readConfigValue(json, "language", std::string("zh_cn"));
     // 创作者字符串在进入内存前统一规范化，持久化两端语义对称。
-    settings.defaultCreator =
-        normalizeCreatorIdentity(json.value("defaultCreator", std::string()));
+    settings.defaultCreator = normalizeCreatorIdentity(
+        readConfigValue(json, "defaultCreator", std::string()));
     // 新 frameLimit 缺失时迁移旧 vsync 布尔，再回退到刷新率二倍。
-    settings.frameLimit = json.value(
+    settings.frameLimit = readConfigValue(
+        json,
         "frameLimit",
-        json.contains("vsync")
-            ? (json.value("vsync", false) ? FrameLimitPreference::VSync
-                                          : FrameLimitPreference::Unlimited)
-            : FrameLimitPreference::Refresh2x);
+        json.contains("vsync") ? (readConfigValue(json, "vsync", false)
+                                      ? FrameLimitPreference::VSync
+                                      : FrameLimitPreference::Unlimited)
+                               : FrameLimitPreference::Refresh2x);
     // 未知值沿用完整缓存，确保旧配置及未来扩展都不会意外启用流式。
     settings.audioDecodingMode =
-        json.value("audioDecodingMode", std::string("cached")) == "streaming"
+        readConfigValue(json, "audioDecodingMode", std::string("cached")) ==
+                "streaming"
             ? AudioDecodingMode::Streaming
             : AudioDecodingMode::Cached;
     // 解码模式解析后恢复设备后端和各后端独立的设备名称。
-    settings.audioPlaybackBackend =
-        json.value("audioPlaybackBackend", AudioPlaybackBackend::SDL);
+    settings.audioPlaybackBackend = readConfigValue(
+        json, "audioPlaybackBackend", AudioPlaybackBackend::SDL);
     settings.sdlAudioOutputDeviceName =
-        json.value("sdlAudioOutputDeviceName", std::string());
+        readConfigValue(json, "sdlAudioOutputDeviceName", std::string());
     settings.openALAudioOutputDeviceName =
-        json.value("openALAudioOutputDeviceName", std::string());
+        readConfigValue(json, "openALAudioOutputDeviceName", std::string());
     settings.openALSpatialConfig =
-        json.value("openALSpatialConfig", OpenALSpatialConfig());
+        readConfigValue(json, "openALSpatialConfig", OpenALSpatialConfig());
     // 诊断日志默认关闭，必须由用户显式开启。
-    settings.renderProfileLogging = json.value("renderProfileLogging", false);
-    settings.rtcDiagnosticLogging = json.value("rtcDiagnosticLogging", false);
+    settings.renderProfileLogging =
+        readConfigValue(json, "renderProfileLogging", false);
+    settings.rtcDiagnosticLogging =
+        readConfigValue(json, "rtcDiagnosticLogging", false);
     settings.collaborationViewportRenderMode =
-        json.value("collaborationViewportRenderMode",
-                   CollaborationViewportRenderMode::Filled);
+        readConfigValue(json,
+                        "collaborationViewportRenderMode",
+                        CollaborationViewportRenderMode::Filled);
     // 旧配置未存聊天时间偏好时默认显示更直观的北京时间。
     settings.collaborationChatBeijingTime =
-        json.value("collaborationChatBeijingTime", true);
+        readConfigValue(json, "collaborationChatBeijingTime", true);
     // 协作端点由子结构校验，视野模式仅控制本地渲染。
-    settings.collaborationServer =
-        json.value("collaborationServer", CollaborationServerSettings{});
-    settings.autoUploadPgoProfiles = json.value("autoUploadPgoProfiles", false);
+    settings.collaborationServer = readConfigValue(
+        json, "collaborationServer", CollaborationServerSettings{});
+    settings.autoUploadPgoProfiles =
+        readConfigValue(json, "autoUploadPgoProfiles", false);
     // 旧版已存在上传开关即视为询问过授权，避免升级后重复弹窗。
-    settings.pgoProfileUploadConsentAsked = json.value(
-        "pgoProfileUploadConsentAsked", json.contains("autoUploadPgoProfiles"));
+    settings.pgoProfileUploadConsentAsked =
+        readConfigValue(json,
+                        "pgoProfileUploadConsentAsked",
+                        json.contains("autoUploadPgoProfiles"));
     // 尺度和滚动倍率使用产品基线回退，运行层再应用设备相关换算。
-    settings.fontSizeMultiplier    = json.value("fontSizeMultiplier", 1.15f);
-    settings.uiScaleMultiplier     = json.value("uiScaleMultiplier", 1.0f);
-    settings.scrollSpeedMultiplier = json.value("scrollSpeedMultiplier", 4.0f);
+    settings.fontSizeMultiplier =
+        readConfigValue(json, "fontSizeMultiplier", 1.15f);
+    settings.uiScaleMultiplier =
+        readConfigValue(json, "uiScaleMultiplier", 1.0f);
+    settings.scrollSpeedMultiplier =
+        readConfigValue(json, "scrollSpeedMultiplier", 4.0f);
     // 总线音量和静音状态分开恢复，静音不会丢失用户设置的增益。
-    settings.globalVolume = json.value("globalVolume", 0.25f);
-    settings.globalMuted  = json.value("globalMuted", false);
-    settings.bgmGain      = json.value("bgmGain", 1.0f);
-    settings.bgmGainMuted = json.value("bgmGainMuted", false);
-    settings.sfxGain      = json.value("sfxGain", 1.0f);
-    settings.sfxGainMuted = json.value("sfxGainMuted", false);
+    // 全局与各音源音量分别恢复，局部坏值不能改变其他总线的静音意图。
+    settings.globalVolume = readConfigValue(json, "globalVolume", 0.25f);
+    settings.globalMuted  = readConfigValue(json, "globalMuted", false);
+    settings.bgmGain      = readConfigValue(json, "bgmGain", 1.0f);
+    settings.bgmGainMuted = readConfigValue(json, "bgmGainMuted", false);
+    settings.sfxGain      = readConfigValue(json, "sfxGain", 1.0f);
+    settings.sfxGainMuted = readConfigValue(json, "sfxGainMuted", false);
     // 交互音效拥有独立增益和静音开关，不继承打击音效总线状态。
-    settings.interactionSfxGain = json.value("interactionSfxGain", 1.0f);
+    settings.interactionSfxGain =
+        readConfigValue(json, "interactionSfxGain", 1.0f);
     settings.interactionSfxGainMuted =
-        json.value("interactionSfxGainMuted", false);
+        readConfigValue(json, "interactionSfxGainMuted", false);
     // 选择框外观与包含模式共同恢复，缺失时采用当前 UI 默认。
     settings.selectionMode =
-        json.value("selectionMode", SelectionMode::Intersection);
-    settings.marqueeThickness = json.value("marqueeThickness", 2.0f);
-    settings.marqueeRounding  = json.value("marqueeRounding", 0.0f);
-    settings.saveFormatPreference =
-        json.value("saveFormatPreference", SaveFormatPreference::ForceMMM);
+        readConfigValue(json, "selectionMode", SelectionMode::Intersection);
+    settings.marqueeThickness = readConfigValue(json, "marqueeThickness", 2.0f);
+    settings.marqueeRounding  = readConfigValue(json, "marqueeRounding", 0.0f);
+    settings.saveFormatPreference = readConfigValue(
+        json, "saveFormatPreference", SaveFormatPreference::ForceMMM);
     // 自动保存与自动备份分开读取，任何一侧缺失都不会影响另一侧。
-    settings.autoSave = json.value("autoSave", AutoSaveConfig{});
+    settings.autoSave = readConfigValue(json, "autoSave", AutoSaveConfig{});
     // 旧配置缺少此字段时保留线性与 16 Hz；嵌套字段由专用读取器检查类型。
-    settings.m_interpolationPreferences =
-        json.value("timingInterpolation", TimingInterpolationPreferences{});
-    settings.autoBackup = json.value("autoBackup", AutoBackupConfig{});
+    settings.m_interpolationPreferences = readConfigValue(
+        json, "timingInterpolation", TimingInterpolationPreferences{});
+    settings.autoBackup =
+        readConfigValue(json, "autoBackup", AutoBackupConfig{});
     // 只有缺少新标记的旧配置需要迁移；已有标记时保留保存的策略。
     // 精确比较全部字段，曾配置事件、间隔或保留数量的用户不会被覆盖。
     if ( !json.contains("autoBackupUserConfigured") ) {
@@ -1322,72 +1376,81 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     } else {
         // 未操作也会保存 false；标记存在本身说明已经完成默认策略迁移。
         settings.m_autoBackupUserConfigured =
-            json.value("autoBackupUserConfigured", false);
+            readConfigValue(json, "autoBackupUserConfigured", false);
     }
     settings.autoAddStoreModeExtForMalodyExport =
-        json.value("autoAddStoreModeExtForMalodyExport", false);
-    settings.timeFormatPreference =
-        json.value("timeFormatPreference", TimeFormatPreference::Seconds);
+        readConfigValue(json, "autoAddStoreModeExtForMalodyExport", false);
+    settings.timeFormatPreference = readConfigValue(
+        json, "timeFormatPreference", TimeFormatPreference::Seconds);
     // 文件选择历史缺失时使用当前目录，但不在反序列化阶段访问文件系统。
     settings.lastFilePickerPath =
-        json.value("lastFilePickerPath", std::string("."));
+        readConfigValue(json, "lastFilePickerPath", std::string("."));
     // 绘制和拖拽限制逐项读取，部分旧配置可以安全获得新字段默认值。
     settings.disableScrollAccelerationWhileDrawing =
-        json.value("disableScrollAccelerationWhileDrawing", true);
+        readConfigValue(json, "disableScrollAccelerationWhileDrawing", true);
     settings.disableVerticalObjectDrag =
-        json.value("disableVerticalObjectDrag", false);
+        readConfigValue(json, "disableVerticalObjectDrag", false);
     settings.removeObjectsOnPolylinePath =
-        json.value("removeObjectsOnPolylinePath", false);
+        readConfigValue(json, "removeObjectsOnPolylinePath", false);
     // 编辑能力开关只恢复偏好，不在配置层判断谱面格式是否支持。
-    settings.enablePolylineEditing = json.value("enablePolylineEditing", true);
-    settings.enableBmsEditing      = json.value("enableBmsEditing", true);
-    settings.selectPastedObjects   = json.value("selectPastedObjects", false);
+    settings.enablePolylineEditing =
+        readConfigValue(json, "enablePolylineEditing", true);
+    settings.enableBmsEditing = readConfigValue(json, "enableBmsEditing", true);
+    settings.selectPastedObjects =
+        readConfigValue(json, "selectPastedObjects", false);
     // 粘贴时间基准与时间线 BPM 选择范围分别控制两种编辑语义。
-    settings.copyPasteTimeBasis =
-        json.value("copyPasteTimeBasis", CopyPasteTimeBasis::Timestamp);
+    settings.copyPasteTimeBasis = readConfigValue(
+        json, "copyPasteTimeBasis", CopyPasteTimeBasis::Timestamp);
     settings.pastePosition =
-        json.value("pastePosition", PastePosition::JudgmentLine);
+        readConfigValue(json, "pastePosition", PastePosition::JudgmentLine);
     settings.timelineSelectionIncludesBpm =
-        json.value("timelineSelectionIncludesBpm", false);
+        readConfigValue(json, "timelineSelectionIncludesBpm", false);
     // 旧配置没有测量工具分拍值时继承根级 beatDivisor 保持操作习惯。
     BpmMeasurementToolPreferences bpmMeasurementToolPreferencesFallback;
     bpmMeasurementToolPreferencesFallback.beatDivisor = settings.beatDivisor;
-    settings.bpmMeasurementToolPreferences            = json.value(
-        "bpmMeasurementToolPreferences", bpmMeasurementToolPreferencesFallback);
+    settings.bpmMeasurementToolPreferences =
+        readConfigValue(json,
+                        "bpmMeasurementToolPreferences",
+                        bpmMeasurementToolPreferencesFallback);
     // 光标和字体配置保持纯值读取，字体文件可用性由验证器另行检查。
     settings.softwareCursorConfig =
-        json.value("softwareCursorConfig", SoftwareCursorConfig());
+        readConfigValue(json, "softwareCursorConfig", SoftwareCursorConfig());
     settings.preferredAsciiFont =
-        json.value("preferredAsciiFont", std::string("Default"));
+        readConfigValue(json, "preferredAsciiFont", std::string("Default"));
     settings.preferredCjkFont =
-        json.value("preferredCjkFont", std::string("Default"));
+        readConfigValue(json, "preferredCjkFont", std::string("Default"));
     // 播放交互与窗口开关采用当前功能默认，不依赖窗口实际存在状态。
-    settings.stopPlaybackOnScroll = json.value("stopPlaybackOnScroll", false);
-    settings.snapFloor            = json.value("snapFloor", false);
-    settings.showTimelineWindow   = json.value("showTimelineWindow", true);
+    settings.stopPlaybackOnScroll =
+        readConfigValue(json, "stopPlaybackOnScroll", false);
+    settings.snapFloor = readConfigValue(json, "snapFloor", false);
+    settings.showTimelineWindow =
+        readConfigValue(json, "showTimelineWindow", true);
     // 老配置没有格式警告偏好时默认启用，避免静默丢失用户的新修改。
     settings.hideTimelineFormatWarning =
-        json.value("hideTimelineFormatWarning", false);
+        readConfigValue(json, "hideTimelineFormatWarning", false);
     // 当前 professionalMode 优先，缺失时读取旧 timelineProfessionalMode。
     settings.professionalMode =
         json.contains("professionalMode")
-            ? json.value("professionalMode", false)
-            : json.value("timelineProfessionalMode", false);
-    settings.showPreviewWindow     = json.value("showPreviewWindow", true);
-    settings.showAnnotationDetails = json.value("showAnnotationDetails", false);
+            ? readConfigValue(json, "professionalMode", false)
+            : readConfigValue(json, "timelineProfessionalMode", false);
+    settings.showPreviewWindow =
+        readConfigValue(json, "showPreviewWindow", true);
+    settings.showAnnotationDetails =
+        readConfigValue(json, "showAnnotationDetails", false);
     // 旧配置缺少偏好时直接采用 Enter 提交，不沿用原先只能点击按钮的行为。
     settings.annotationSubmitWithShiftEnter =
-        json.value("annotationSubmitWithShiftEnter", false);
+        readConfigValue(json, "annotationSubmitWithShiftEnter", false);
     // 工具栏显示字段属于全局设置，但仍在统一对象中完成持久化。
-    settings.showToolLabels = json.value("showToolLabels", false);
+    settings.showToolLabels = readConfigValue(json, "showToolLabels", false);
     settings.toolbarVisibility =
-        json.value("toolbarVisibility", ToolbarVisibilityConfig{});
-    settings.fixedToolWindow = json.value("fixedToolWindow", true);
+        readConfigValue(json, "toolbarVisibility", ToolbarVisibilityConfig{});
+    settings.fixedToolWindow = readConfigValue(json, "fixedToolWindow", true);
     // 历史配置没有工具栏方向和边缘时，继续采用右侧竖排的默认布局。
     // 使用稳定英文枚举值存储边缘，界面翻译变化不能改变停靠语义。
-    settings.toolbarHorizontal = json.value("toolbarHorizontal", false);
+    settings.toolbarHorizontal =
+        readConfigValue(json, "toolbarHorizontal", false);
     settings.toolbarDockEdge =
-        json.value("toolbarDockEdge", std::string("right"));
+        readConfigValue(json, "toolbarDockEdge", std::string("right"));
     // 手工输入的未知边缘不得传入拆分 API；回退仍保持有空间的边缘布局。
     if ( settings.toolbarDockEdge != "top" &&
          settings.toolbarDockEdge != "bottom" &&
@@ -1395,17 +1458,22 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
          settings.toolbarDockEdge != "right" ) {
         settings.toolbarDockEdge = "right";
     }
-    settings.showManagerLabels = json.value("showManagerLabels", true);
+    settings.showManagerLabels =
+        readConfigValue(json, "showManagerLabels", true);
     // 外观、调色板和快捷键子结构各自负责内部字段兼容。
-    settings.aesthetics    = json.value("aesthetics", UIAestheticsConfig());
-    settings.colorPalettes = json.value("colorPalettes", ColorPaletteConfig());
+    settings.aesthetics =
+        readConfigValue(json, "aesthetics", UIAestheticsConfig());
+    settings.colorPalettes =
+        readConfigValue(json, "colorPalettes", ColorPaletteConfig());
     settings.defaultColorPaletteSchemeName =
-        json.value("defaultColorPaletteSchemeName",
-                   std::string(COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID));
-    settings.shortcutConfig = json.value("shortcutConfig", ShortcutConfig());
+        readConfigValue(json,
+                        "defaultColorPaletteSchemeName",
+                        std::string(COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID));
+    settings.shortcutConfig =
+        readConfigValue(json, "shortcutConfig", ShortcutConfig());
     // 旧配置没有操作方案字段时继续使用经典桌面，不重置用户快捷键。
-    settings.m_interactionProfileId =
-        json.value("interactionProfileId", std::string("classic-desktop"));
+    settings.m_interactionProfileId = readConfigValue(
+        json, "interactionProfileId", std::string("classic-desktop"));
 }
 
 /// @brief 借用完整配置，读取者必须在所有者销毁前结束访问。
@@ -1463,10 +1531,12 @@ void to_json(nlohmann::json& json, const EditorConfig& config)
 void from_json(const nlohmann::json& json, EditorConfig& config)
 {
     // 子对象通过各自 from_json 处理版本兼容，根层仅提供缺失默认值。
-    config.visual   = json.value("visual", VisualConfig());
-    config.settings = json.value("settings", EditorSettings());
+    // 视觉与编辑配置各自恢复。一块的错误类型不会妨碍另一块的有效设置。
+    config.visual   = readConfigValue(json, "visual", VisualConfig());
+    config.settings = readConfigValue(json, "settings", EditorSettings());
+    // 最近项目列表的转换以整份字段为单位，避免坏元素混入路径操作。
     config.recentProjects =
-        json.value("recentProjects", std::vector<std::string>());
+        readConfigValue(json, "recentProjects", std::vector<std::string>());
 }
 
 }  // namespace MMM::Config
