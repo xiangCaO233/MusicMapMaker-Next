@@ -1,4 +1,5 @@
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
+#include "BpmMeasurementToolView_Domains.h"
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"
 #include "common/render/RenderSnapshot.h"
@@ -108,13 +109,13 @@
 /// - m_pendingSpectrumChunks 保存尚未上传的 CPU RGBA 数据；
 /// - m_spectrumTextures 保存可被 ImGui 绘制命令引用的 GPU 纹理；
 /// - AnalysisResult 在线程局部构造，发布后由 UI 线程整体移动；
-/// - m_pendingResultMutex 只保护单个结果槽，不包围解码和 FFT；
+/// - m_job->m_pendingResultMutex 只保护单个结果槽，不包围解码和 FFT；
 /// - AudioTrack 通过 shared_ptr 跨越任务生命周期，UI 不逐帧复制其所有权。
 ///
 /// 分析状态约定：
-/// - m_analysisRunning 表示后台任务仍可能访问本对象；
-/// - m_analysisFinished 表示结果槽已经完成发布，可被 UI 消费；
-/// - m_analysisProgress 只是近似显示值，不承担内存同步；
+/// - m_job->m_analysisRunning 表示后台任务仍可能访问本对象；
+/// - m_job->m_analysisFinished 表示结果槽已经完成发布，可被 UI 消费；
+/// - m_job->m_analysisProgress 只是近似显示值，不承担内存同步；
 /// - release 写入 finished 与 acquire 读取构成结果发布顺序；
 /// - 协作取消不生成失败结果，以免覆盖紧随其后的新任务状态；
 /// - 真正失败生成带 failed 标志的完整结果，让 UI 统一显示消息；
@@ -268,10 +269,10 @@
 /// - 每帧调度更新本身不进行文件加载。
 ///
 /// 线程同步约定：
-/// - m_analysisProgress 使用 relaxed，因为它不保护其他状态；
-/// - m_analysisRunning 使用 relaxed，只表达用户界面的运行提示；
-/// - m_analysisFinished 的 release/acquire 保护结果发布顺序；
-/// - m_pendingResult 的读取和写入都持有同一互斥锁；
+/// - m_job->m_analysisProgress 使用 relaxed，因为它不保护其他状态；
+/// - m_job->m_analysisRunning 使用 relaxed，只表达用户界面的运行提示；
+/// - m_job->m_analysisFinished 的 release/acquire 保护结果发布顺序；
+/// - m_job->m_pendingResult 的读取和写入都持有同一互斥锁；
 /// - FFTW plan 的创建和销毁持有进程级 planner 互斥锁；
 /// - fftw_execute 使用任务独占 plan 和缓冲，不持有 planner 锁；
 /// - 停止令牌在主要长循环的有界间隔内检查；
@@ -854,7 +855,11 @@ PlaybackTimelineState readPlaybackTimelineState(BpmPlaybackRoute route)
 /// @details 构造函数不解析项目资源、不加载音频、不创建 GPU 纹理，
 /// 因而可在 UI 注册阶段安全调用；首次打开时再完成具体资源初始化。
 BpmMeasurementToolView::BpmMeasurementToolView(const std::string& name)
-    : IUIView(name), ITextureLoader(name)
+    : IUIView(name)
+    , ITextureLoader(name)
+    , m_history(std::make_unique<MeasurementHistory>())
+    , m_markers(std::make_unique<MarkerFileOperations>())
+    , m_job(std::make_unique<AnalysisJob>())
 {
     // 恢复倍速、视图范围和节拍器等全局用户偏好。
     restoreUserPreferences();
@@ -871,7 +876,9 @@ BpmMeasurementToolView::~BpmMeasurementToolView()
     // 析构时绕过消抖，尽力持久化最后偏好状态。
     flushUserPreferences(true);
     // 后台任务可能访问成员分析缓存，销毁前必须 join。
-    stopAnalysisWorker();
+    // 分析作业拥有 future，但任务仍读取视图和音轨数据。
+    // 因此在视图和纹理仍完整存活时停止任务，不能依赖成员的默认析构次序。
+    m_job->stopAndWait();
     // 独立试听轨不应在窗口对象销毁后继续占用音频图。
     Audio::AudioManager::instance().unloadAuditionTrack();
 
@@ -969,7 +976,7 @@ void BpmMeasurementToolView::openWithAudioTrack(const std::string& audioTrackId)
     const bool needsAnalysis =
         selectionChanged ||
         (m_waveTimes.empty() &&
-         !m_analysisRunning.load(std::memory_order_relaxed));
+         !m_job->m_analysisRunning.load(std::memory_order_relaxed));
     if ( selectionChanged ) {
         setSelectedAudioTrackId(targetAudioTrackId);
         if ( auto resource = selectedAudioResource() ) {
@@ -1073,9 +1080,10 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
         if ( m_backgroundAutomaticMeasurement ) {
             // acquire 与发布结果的 release 配对，确保结果可见后再判断结束。
             const bool analysisPending =
-                m_analysisRequest.has_value() || m_analysisFuture.valid() ||
-                m_analysisRunning.load(std::memory_order_relaxed) ||
-                m_analysisFinished.load(std::memory_order_acquire);
+                m_job->m_analysisRequest.has_value() ||
+                m_job->m_analysisFuture.valid() ||
+                m_job->m_analysisRunning.load(std::memory_order_relaxed) ||
+                m_job->m_analysisFinished.load(std::memory_order_acquire);
             if ( !analysisPending ) {
                 // 后台模式完成后自动关闭，不让隐藏工具继续参与播放更新。
                 m_backgroundAutomaticMeasurement = false;
@@ -1311,6 +1319,39 @@ void BpmMeasurementToolView::reloadTextures(vk::PhysicalDevice& physicalDevice,
     }
 }
 
+/// @brief 读取后台发布的显示进度。
+/// @warning 每帧使用 relaxed 读取一个显示值，与结果槽同步无关。
+float BpmMeasurementToolView::getAutomaticMeasurementProgress() const
+{
+    return m_job->m_analysisProgress.load(std::memory_order_relaxed);
+}
+
+/// @brief 回收单独的后台任务，复用结果槽前先核对任务身份。
+/// @warning UI 每帧调用。只轮询已存在的 future，任务返回后才可能清理结果。
+bool BpmMeasurementToolView::AnalysisJob::reclaimCompleted(
+    const std::string& selection)
+{
+    if ( m_analysisFuture.valid() ) {
+        // 结果槽在工作者完全返回之前不可重用。普通 UI 帧只做零超时轮询。
+        if ( m_analysisFuture.wait_for(std::chrono::seconds::zero()) !=
+             std::future_status::ready )
+            return false;
+        // 就绪表示后台已退出，即使它提前写过 running=false，也不能更早重用。
+        m_analysisFuture = {};
+        // stop 也覆盖同一音轨的显式重载，比较身份只能识别跨音轨的切换。
+        if ( m_analysisStopSource.stop_requested() ||
+             m_activeAnalysisKey != selection ) {
+            // 取消可能发生在旧任务发布前一刻，因此必须等返回后再丢弃它的结果。
+            std::lock_guard lock(m_pendingResultMutex);
+            m_pendingResult.reset();
+            // 旧工作者已返回，无须 release 再向其发布状态，下一任务由 UI 提交。
+            m_analysisFinished.store(false, std::memory_order_relaxed);
+            m_analysisRunning.store(false, std::memory_order_relaxed);
+        }
+    }
+    return true;
+}
+
 /// @brief 尝试消费后台分析结果，并把完整快照转移到 UI 状态。
 /// @warning UI 热路径：每帧轮询一个原子标志；仅在任务完成时短暂加锁并迁移容器。
 /// @details 活动请求独占结果槽。切换音轨只保存最新请求和停止旧任务，
@@ -1320,51 +1361,38 @@ void BpmMeasurementToolView::reloadTextures(vk::PhysicalDevice& physicalDevice,
 /// Timing 段、移动视图中心、重置节拍器，并按调用环境选择直接导出或确认弹窗。
 void BpmMeasurementToolView::consumePendingAnalysis()
 {
-    if ( m_analysisFuture.valid() ) {
-        // 结果槽在工作者完全返回之前不可重用。普通 UI 帧只做零超时轮询。
-        if ( m_analysisFuture.wait_for(std::chrono::seconds::zero()) !=
-             std::future_status::ready )
-            return;
-        // 就绪表示后台已退出，即使它提前写过 running=false，也不能更早重用。
-        m_analysisFuture = {};
-        // stop 也覆盖同一音轨的显式重载，比较身份只能识别跨音轨的切换。
-        if ( m_analysisStopSource.stop_requested() ||
-             m_activeAnalysisKey != m_selectedAudioSyncKey ) {
-            // 取消可能发生在旧任务发布前一刻，因此必须等返回后再丢弃它的结果。
-            std::lock_guard lock(m_pendingResultMutex);
-            m_pendingResult.reset();
-            // 旧工作者已返回，无须 release 再向其发布状态，下一任务由 UI 提交。
-            m_analysisFinished.store(false, std::memory_order_relaxed);
-            m_analysisRunning.store(false, std::memory_order_relaxed);
-        }
-    }
-    if ( m_analysisRequest ) {
+    // 先回收工作者，旧请求的结果即使已经发布也可能因音轨切换而失效。
+    // 尚未归还结果槽时，界面保留原有绘制流程，下帧继续轮询。
+    // 结果槽归还以后才派发队首，避免两个工作者交错写入同一批 UI 数据。
+    // 撤销资格按令牌和身份同时判断，同音轨主动重算也会丢弃旧批次。
+    if ( !m_job->reclaimCompleted(m_selectedAudioSyncKey) ) return;
+    if ( m_job->m_analysisRequest ) {
         // 最新请求拥有唯一交付槽，选中资源已经消失时直接丢弃排队请求。
-        if ( m_analysisRequest->key == m_selectedAudioSyncKey )
+        if ( m_job->m_analysisRequest->key == m_selectedAudioSyncKey )
             startPendingAnalysis();
         else
-            m_analysisRequest.reset();
+            m_job->m_analysisRequest.reset();
         return;
     }
 
     // acquire 确保能观察到后台线程在发布标志前完成的结果写入。
-    if ( !m_analysisFinished.load(std::memory_order_acquire) ) {
+    if ( !m_job->m_analysisFinished.load(std::memory_order_acquire) ) {
         return;
     }
 
     std::optional<AnalysisResult> result;
     {
         // 锁只保护待交付槽位，昂贵的数据处理不在临界区执行。
-        std::lock_guard<std::mutex> lock(m_pendingResultMutex);
-        if ( m_pendingResult ) {
-            result = std::move(m_pendingResult);
-            m_pendingResult.reset();
+        std::lock_guard<std::mutex> lock(m_job->m_pendingResultMutex);
+        if ( m_job->m_pendingResult ) {
+            result = std::move(m_job->m_pendingResult);
+            m_job->m_pendingResult.reset();
         }
     }
 
     if ( !result ) {
         // 防御性处理空发布，复位标志以免每帧重复进入消费路径。
-        m_analysisFinished.store(false, std::memory_order_release);
+        m_job->m_analysisFinished.store(false, std::memory_order_release);
         return;
     }
 
@@ -1393,7 +1421,7 @@ void BpmMeasurementToolView::consumePendingAnalysis()
                            ? TR("ui.tools.bpm_measure.auto_failed").data()
                            : TR("ui.tools.bpm_measure.load_failed").data();
         // 失败结果已经消费，保留错误文本供自动与手动入口共用。
-        m_analysisFinished.store(false, std::memory_order_release);
+        m_job->m_analysisFinished.store(false, std::memory_order_release);
         return;
     }
 
@@ -1407,7 +1435,8 @@ void BpmMeasurementToolView::consumePendingAnalysis()
                    std::max(0.0, duration));
     // 只有接受结果后才记录已尝试导入，取消后重载同一首歌仍有机会恢复标记。
     // 无内嵌标记也是一次完成的读取。只要返回了读取结果，就无需重复打开原文件。
-    if ( result->markers ) m_markerImportKey = m_activeAnalysisKey;
+    if ( result->markers )
+        m_markers->m_markerImportKey = m_job->m_activeAnalysisKey;
 
     // 嵌入的精确 BPM 优先于自动猜测，章节独立恢复。
     // 已保存的首拍和多段 BPM 比自动估算更精确，优先采用。
@@ -1460,7 +1489,7 @@ void BpmMeasurementToolView::consumePendingAnalysis()
         // 普通分析只准备可视化数据，不覆盖用户已有的手工 Timing。
         m_statusText = TR("ui.tools.bpm_measure.ready").data();
     }
-    m_analysisFinished.store(false, std::memory_order_release);
+    m_job->m_analysisFinished.store(false, std::memory_order_release);
 }
 
 /// @brief 确保至少存在一个 BPM 段落，并同步旧单段字段。
@@ -2007,10 +2036,10 @@ void BpmMeasurementToolView::renderControlPanel(UIManager* sourceManager)
 
     ImGui::Spacing();
     ImGui::SeparatorText(TR("ui.tools.bpm_measure.status").data());
-    if ( m_analysisRunning.load(std::memory_order_relaxed) ) {
+    if ( m_job->m_analysisRunning.load(std::memory_order_relaxed) ) {
         // 进度只用于提示，无需与结果发布建立跨线程顺序关系。
         const float progress =
-            m_analysisProgress.load(std::memory_order_relaxed);
+            m_job->m_analysisProgress.load(std::memory_order_relaxed);
         ImGui::ProgressBar(progress, ImVec2(-1.0f, 0.0f));
         ImGui::Text("%s %.0f%%",
                     TR("ui.tools.bpm_measure.analyzing").data(),
@@ -2055,8 +2084,9 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel(UIManager* sourceManager)
 
     // 关联谱面只在明确请求时读取，普通帧不为显示按钮扫描项目或等待会话锁。
     // 分析完成前禁止导入，避免稍后交付的自动测量或音频标记覆盖导入结果。
-    ImGui::BeginDisabled(m_selectedAudioTrackId.empty() ||
-                         m_analysisRunning.load(std::memory_order_relaxed));
+    ImGui::BeginDisabled(
+        m_selectedAudioTrackId.empty() ||
+        m_job->m_analysisRunning.load(std::memory_order_relaxed));
     if ( FeedbackButton(TR("ui.tools.bpm_measure.import_beatmap").data(),
                         ImVec2(-1.0f, 0.0f)) )
         requestOpenImportTimingPopup();
@@ -2232,8 +2262,8 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel(UIManager* sourceManager)
     const bool readyForNewWizard =
         !m_selectedAudioTrackId.empty() && !m_waveTimes.empty() &&
         !m_selectedAudioIdentityNeedsAnalysis &&
-        !m_analysisRunning.load(std::memory_order_relaxed) &&
-        !m_analysisFinished.load(std::memory_order_acquire);
+        !m_job->m_analysisRunning.load(std::memory_order_relaxed) &&
+        !m_job->m_analysisFinished.load(std::memory_order_acquire);
     ImGui::BeginDisabled(!m_measurementExportCallback && !readyForNewWizard);
     if ( ::MMM::UI::FeedbackButton(
              TR("ui.tools.bpm_measure.export_to_wizard").data(),
@@ -5305,10 +5335,10 @@ void BpmMeasurementToolView::setPlaybackState(bool shouldPlay)
                                0.0,
                                std::max(0.0, playbackCanvasDuration()));
         // 播放按钮的内部对齐不属于用户调整播放位置，暂时屏蔽历史标记。
-        const bool restoring          = m_restoringMeasurementHistory;
-        m_restoringMeasurementHistory = true;
+        const bool restoring = m_history->m_restoringMeasurementHistory;
+        m_history->m_restoringMeasurementHistory = true;
         seekPlaybackToCanvasTime(canvasTime);
-        m_restoringMeasurementHistory = restoring;
+        m_history->m_restoringMeasurementHistory = restoring;
         audio.playAudition();
     } else {
         // pause 保留当前位置，便于再次播放继续。
@@ -5323,8 +5353,9 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
 {
     m_selectedAudioIdentityNeedsAnalysis = false;
     // 旧任务仍可安全收尾。UI 不等待退出，只在下次消费时清理旧结果。
-    if ( m_analysisFuture.valid() ) m_analysisStopSource.request_stop();
-    m_analysisRequest.reset();
+    if ( m_job->m_analysisFuture.valid() )
+        m_job->m_analysisStopSource.request_stop();
+    m_job->m_analysisRequest.reset();
     clearAnalysisData();
     // 等待 PCM 期间时长暂不可用。后续同一批结果会同时交付长度、波形和频谱。
     m_duration = 0.0;
@@ -5341,15 +5372,16 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
                        ? TR("ui.tools.bpm_measure.auto_analyzing").data()
                        : TR("ui.tools.bpm_measure.analyzing").data();
     // 保存选择时的路径和配置，后台文件打开不需要借用项目或音频管理器。
-    m_analysisRequest = AnalysisRequest{ std::move(*path),
-                                         m_selectedAudioSyncKey,
-                                         Config::spectrumDetailProfile(
-                                             Config::AppConfig::instance()
-                                                 .getVisualConfig()
-                                                 .spectrumDetailLevel),
-                                         autoMeasure };
+    m_job->m_analysisRequest = AnalysisJob::AnalysisRequest{
+        std::move(*path),
+        m_selectedAudioSyncKey,
+        Config::spectrumDetailProfile(Config::AppConfig::instance()
+                                          .getVisualConfig()
+                                          .spectrumDetailLevel),
+        autoMeasure
+    };
     // 已有工作者时把派发推迟到消费阶段，任意数量的切歌只保留最后一次请求。
-    if ( !m_analysisFuture.valid() ) startPendingAnalysis();
+    if ( !m_job->m_analysisFuture.valid() ) startPendingAnalysis();
 }
 
 /// @brief 将最近请求交给文件池，完整解码在另一线程池执行。
@@ -5360,14 +5392,14 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
 /// 同时避开全局 AudioManager 先于视图关闭导致的缓存生命周期倒置。
 void BpmMeasurementToolView::startPendingAnalysis()
 {
-    auto request = std::move(*m_analysisRequest);
-    m_analysisRequest.reset();
+    auto request = std::move(*m_job->m_analysisRequest);
+    m_job->m_analysisRequest.reset();
     auto& workers = Runtime::AppThreadPool::instance();
     // 应用初始化同时建立两个池，关闭阶段的空指针只能产生失败反馈。
     auto* filePool   = workers.getFileThreadPool();
     auto* decodePool = workers.get();
     if ( !filePool || !decodePool ) {
-        m_analysisRunning.store(false, std::memory_order_relaxed);
+        m_job->m_analysisRunning.store(false, std::memory_order_relaxed);
         m_statusText = TR("ui.tools.bpm_measure.load_failed").data();
         XERROR("AppThreadPool is not initialized before BPM analysis.");
         return;
@@ -5376,20 +5408,20 @@ void BpmMeasurementToolView::startPendingAnalysis()
     // 同一来源的常规重算不能覆盖用户已手工修改的节拍标记。
     // 只用 UI 已验收的标记身份决定本次任务是否读取内嵌数据。
     // 选择可能在工作者排队期间切换。捕获布尔值后，工作者无需读取 UI 身份。
-    const bool importMarkers = m_markerImportKey != request.key;
-    m_activeAnalysisKey      = request.key;
-    m_analysisProgress.store(0.0f, std::memory_order_relaxed);
-    m_analysisFinished.store(false, std::memory_order_relaxed);
-    m_analysisRunning.store(true, std::memory_order_relaxed);
+    const bool importMarkers   = m_markers->m_markerImportKey != request.key;
+    m_job->m_activeAnalysisKey = request.key;
+    m_job->m_analysisProgress.store(0.0f, std::memory_order_relaxed);
+    m_job->m_analysisFinished.store(false, std::memory_order_relaxed);
+    m_job->m_analysisRunning.store(true, std::memory_order_relaxed);
     // 每个任务拥有独立停止状态，旧请求取消不会泄漏到下一个工作者。
     // 恢复独立的停止状态，不能把上一条请求的取消传播给新音轨。
-    m_analysisStopSource = {};
-    m_analysisFuture =
+    m_job->m_analysisStopSource = {};
+    m_job->m_analysisFuture =
         filePool->enqueue([this,
                            request = std::move(request),
                            importMarkers,
                            decodePool,
-                           stop = m_analysisStopSource.get_token()]() {
+                           stop = m_job->m_analysisStopSource.get_token()]() {
             // 在队列等待时被替换的任务直接退出，避免探测已无关的文件。
             if ( stop.stop_requested() ) return;
             std::error_code error;
@@ -5434,13 +5466,13 @@ void BpmMeasurementToolView::publishAnalysisFailure(bool autoMeasure,
 
     {
         // 单槽覆盖是安全的，因为请求入口保证上一任务已经退出。
-        std::lock_guard<std::mutex> lock(m_pendingResultMutex);
-        m_pendingResult = std::move(result);
+        std::lock_guard<std::mutex> lock(m_job->m_pendingResultMutex);
+        m_job->m_pendingResult = std::move(result);
     }
     // 先结束进度与运行状态，最后发布 finished 作为同步点。
-    m_analysisProgress.store(1.0f, std::memory_order_relaxed);
-    m_analysisRunning.store(false, std::memory_order_relaxed);
-    m_analysisFinished.store(true, std::memory_order_release);
+    m_job->m_analysisProgress.store(1.0f, std::memory_order_relaxed);
+    m_job->m_analysisRunning.store(false, std::memory_order_relaxed);
+    m_job->m_analysisFinished.store(true, std::memory_order_release);
 }
 
 /// @brief 请求自动测量当前选择的音频轨道。
@@ -5510,7 +5542,7 @@ std::string BpmMeasurementToolView::defaultAudioTrackId() const
 /// @details 待发请求没有工作者，可在析构入口直接丢弃。
 /// 停止令牌由波形、频谱和完整单声道读取循环定期检查；wait 保证
 /// future 任务不再访问成员后才允许清理缓存或析构本对象。
-void BpmMeasurementToolView::stopAnalysisWorker()
+void BpmMeasurementToolView::AnalysisJob::stopAndWait()
 {
     // 析构不再派发排队的请求，只等待仍可能访问成员的工作者退出。
     m_analysisRequest.reset();
@@ -5551,8 +5583,8 @@ void BpmMeasurementToolView::clearAnalysisData()
     m_spectrumSegmentCount = 0;
     m_spectrumBinCount     = 0;
     // 原子状态复位后 UI 显示等待新任务的普通状态。
-    m_analysisProgress = 0.0f;
-    m_analysisFinished = false;
+    m_job->m_analysisProgress = 0.0f;
+    m_job->m_analysisFinished = false;
 }
 
 /// @brief 后台分析线程执行体。
@@ -5612,7 +5644,8 @@ void BpmMeasurementToolView::analyzeTrack(
         void cancel()
         {
             active = false;
-            view.m_analysisRunning.store(false, std::memory_order_relaxed);
+            view.m_job->m_analysisRunning.store(false,
+                                                std::memory_order_relaxed);
         }
 
         /// @brief 兜底发布失败结果。
@@ -5667,11 +5700,12 @@ void BpmMeasurementToolView::analyzeTrack(
             return;
         }
         // relaxed 足够，因为 UI 不依赖进度同步其他数据。
-        m_analysisProgress.store(std::clamp(static_cast<float>(finishedWork) /
-                                                static_cast<float>(totalWork),
-                                            0.0f,
-                                            1.0f),
-                                 std::memory_order_relaxed);
+        m_job->m_analysisProgress.store(
+            std::clamp(static_cast<float>(finishedWork) /
+                           static_cast<float>(totalWork),
+                       0.0f,
+                       1.0f),
+            std::memory_order_relaxed);
     };
 
     // 复用一个解码缓冲，逐显示区间读取而不常驻完整 PCM。
@@ -5949,16 +5983,16 @@ void BpmMeasurementToolView::analyzeTrack(
     }
 
     // 所有 CPU 结果完整后先更新进度，再进入结果发布临界区。
-    m_analysisProgress.store(1.0f, std::memory_order_relaxed);
+    m_job->m_analysisProgress.store(1.0f, std::memory_order_relaxed);
     {
         // 待消费槽一次接收整批波形、频谱与自动测量结果。
-        std::lock_guard<std::mutex> lock(m_pendingResultMutex);
-        m_pendingResult = std::move(result);
+        std::lock_guard<std::mutex> lock(m_job->m_pendingResultMutex);
+        m_job->m_pendingResult = std::move(result);
     }
     // 槽位写入成功后解除失败守卫，最后用 release 发布完成标志。
     failureGuard.dismiss();
-    m_analysisRunning.store(false, std::memory_order_relaxed);
-    m_analysisFinished.store(true, std::memory_order_release);
+    m_job->m_analysisRunning.store(false, std::memory_order_relaxed);
+    m_job->m_analysisFinished.store(true, std::memory_order_release);
 }
 
 /// @brief 读取完整音轨并混合为单声道采样，供自动 BPM 检测使用。

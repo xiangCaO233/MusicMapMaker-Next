@@ -3,6 +3,7 @@
 /// @details 以真实项目资源提供持久音轨身份，导入、历史和文件处理使用生产实现。
 /// 关联谱面导入分别覆盖磁盘与活动会话；新建向导检查尚未提交的 BPM 草稿。
 /// 独立文件场景模拟投放事件，先验证窗口命中，再读回输出核对时域转换。
+#include "../src/ui/imgui/menu/actions/tools/BpmMeasurementToolView_Domains.h"
 #include "audio/AudioMarkerService.h"
 #include "common/AudioInfoUtils.h"
 #include "config/AppConfig.h"
@@ -177,8 +178,8 @@ struct BpmBeatmapImportTestAccess {
                 tool.m_selectedAudioTrackId = "song-b";
                 tool.m_selectedAudioSyncKey = "b";
                 tool.requestAnalyzeSelectedTrack();
-                return tool.m_analysisRequest &&
-                       tool.m_analysisRequest->key == "b" &&
+                return tool.m_job->m_analysisRequest &&
+                       tool.m_job->m_analysisRequest->key == "b" &&
                        tool.m_duration == 0.0 && tool.m_waveTimes.empty();
             });
             // 即使回归为同步等待，也释放门闩再取任务结果，避免失败后无法退出。
@@ -201,7 +202,7 @@ struct BpmBeatmapImportTestAccess {
                 // 身份验证 B 的结果沿正常路径提交，而不是测试直接设置时长。
                 passed = std::abs(tool.m_duration - 0.2) < 0.005 &&
                          !tool.m_waveTimes.empty() &&
-                         tool.m_activeAnalysisKey == "b";
+                         tool.m_job->m_activeAnalysisKey == "b";
             }
             // 先销毁观察端并回收任务，再关闭其借用的解码线程池。
         }
@@ -372,9 +373,9 @@ struct BpmBeatmapImportTestAccess {
             manager.registerView("BpmMeasurementTool", std::move(view));
             // 章节用于验证 BPM 单独导入不会清除原有音频元数据。
             // 初始 BPM 在文件中不存在，便于验证失败、等待与撤销分支。
-            tool.m_selectedAudioTrackId = "song-a";
-            tool.m_timingSegments       = { { 0, 99 } };
-            tool.m_audioChapters        = { { .25, "chapter" } };
+            tool.m_selectedAudioTrackId     = "song-a";
+            tool.m_timingSegments           = { { 0, 99 } };
+            tool.m_markers->m_audioChapters = { { .25, "chapter" } };
             tool.syncPrimaryTimingFieldsFromSegments();
             // 大写后缀和高精度负首拍一并经过真实读取入口。
             // 不用文件名暗示导入目标，目标由当前所选音轨决定。
@@ -407,26 +408,27 @@ struct BpmBeatmapImportTestAccess {
             Event::EventBus::instance().publish(drop);
             router.update(true, &manager);
             // 命中失败时不会创建任务，尚未发生任何文件读取或段落替换。
-            check(!tool.m_bpmFileImport.valid(),
+            check(!tool.m_markers->m_bpmFileImport.valid(),
                   "drop outside tool ignored",
                   passed);
             drop.pos = { 210, 240 };
             Event::EventBus::instance().publish(drop);
             router.update(true, &manager);
             // 生产入口接收大写后缀后必定有等待交付的结果，命中本身不改段落。
-            check(tool.m_bpmFileImport.valid(),
+            check(tool.m_markers->m_bpmFileImport.valid(),
                   "drop on waveform opens .mmmt",
                   passed);
-            if ( tool.m_bpmFileImport.valid() ) {
+            if ( tool.m_markers->m_bpmFileImport.valid() ) {
                 // 测试等待文件线程完成；生产入口仍使用零超时轮询。
-                tool.m_bpmFileImport.wait();
+                tool.m_markers->m_bpmFileImport.wait();
                 const auto offset = tool.waveformCanvasOffset();
                 // 先留一个尚未提交的音频分析，确保导入会等嵌入标记之后应用。
                 tool.m_selectedAudioIdentityNeedsAnalysis = true;
                 tool.consumeBpmSegmentFileOperations(true);
-                check(tool.m_bpmFileImport.valid() && tool.m_bpm == 99,
-                      "import waits for audio analysis without changing timing",
-                      passed);
+                check(
+                    tool.m_markers->m_bpmFileImport.valid() && tool.m_bpm == 99,
+                    "import waits for audio analysis without changing timing",
+                    passed);
                 tool.m_selectedAudioIdentityNeedsAnalysis = false;
                 // 明确结束分析后消费已读文件，测试不用等待固定时长猜测顺序。
                 // 核对首段时间和 BPM，保证两种数据一起按新的起点恢复。
@@ -435,7 +437,7 @@ struct BpmBeatmapImportTestAccess {
                           tool.m_bpm == 130.23456 &&
                           std::abs(tool.m_firstBeatTime - offset + .123456789) <
                               1e-12 &&
-                          tool.m_audioChapters.size() == 1,
+                          tool.m_markers->m_audioChapters.size() == 1,
                       "file drop restores precise BPM and retains chapters",
                       passed);
                 // 验证导出的是音频时间，而非画布经偏移后的绝对位置。
@@ -445,12 +447,14 @@ struct BpmBeatmapImportTestAccess {
                 // 文件只需经过服务读回即可测试数值，平台选择器不参与时域转换。
                 const auto output = root / "exported.mmmt";
                 tool.exportBpmSegmentFile(output);
-                check(tool.m_bpmFileExport.valid(), "queue BPM export", passed);
-                if ( tool.m_bpmFileExport.valid() ) {
+                check(tool.m_markers->m_bpmFileExport.valid(),
+                      "queue BPM export",
+                      passed);
+                if ( tool.m_markers->m_bpmFileExport.valid() ) {
                     // 等生产写任务、而非测试用文件对象，计算最终可读结果。
                     // consume 与实际窗口共用，完成后的 future
                     // 槽应允许下一次导出。
-                    tool.m_bpmFileExport.wait();
+                    tool.m_markers->m_bpmFileExport.wait();
                     tool.consumeBpmSegmentFileOperations(true);
                     // 服务读回验证文件可再次拖入，避免只检查任务返回或文件存在。
                     const auto exported =
@@ -473,16 +477,17 @@ struct BpmBeatmapImportTestAccess {
                 // 再次读取同一文件，并在结果交付前改变当前音轨身份。
                 // 选择切换会刷新实际路径；交付方只应读到新的缓存身份。
                 tool.importBpmSegmentFile(path);
-                check(tool.m_bpmFileImport.valid(),
+                check(tool.m_markers->m_bpmFileImport.valid(),
                       "submit second file import",
                       passed);
-                if ( tool.m_bpmFileImport.valid() ) {
-                    tool.m_bpmFileImport.wait();
+                if ( tool.m_markers->m_bpmFileImport.valid() ) {
+                    tool.m_markers->m_bpmFileImport.wait();
                     // 同项目存在两条合法主音轨，不用清空选择来模拟切换。
                     tool.m_selectedAudioTrackId = "song-b";
                     tool.refreshSelectedAudioIdentity();
                     tool.consumeBpmSegmentFileOperations(true);
-                    check(!tool.m_bpmFileImport.valid() && tool.m_bpm == 99,
+                    check(!tool.m_markers->m_bpmFileImport.valid() &&
+                              tool.m_bpm == 99,
                           "switching audio discards pending file import",
                           passed);
                 }
@@ -660,12 +665,14 @@ struct BpmBeatmapImportTestAccess {
         checkWizard(tool, passed);
         // 无红线来源在失败前不能清空数据或写入空撤销记录。
         tool.m_importSelectedIndex = 1;
-        const auto historySize     = tool.m_measurementUndoHistory.size();
-        check(!tool.importSelectedBeatmapTimings() &&
-                  tool.m_timingSegments.size() == 3 &&
-                  tool.m_measurementUndoHistory.size() == historySize,
-              "empty source is atomic",
-              passed);
+        const auto historySize =
+            tool.m_history->m_measurementUndoHistory.size();
+        check(
+            !tool.importSelectedBeatmapTimings() &&
+                tool.m_timingSegments.size() == 3 &&
+                tool.m_history->m_measurementUndoHistory.size() == historySize,
+            "empty source is atomic",
+            passed);
         tool.m_importSelectedIndex = 0;
         // 上面的直接确认用于精确定位业务断言，这里额外走实际可见按钮。
         // 弹窗测试自行重置工具数据，不依赖前一次失败刚好留下的状态。
@@ -707,13 +714,14 @@ struct BpmBeatmapImportTestAccess {
                   passed);
             // 同一红线改成曲线后不能悄悄导入起点或部分成功。
             // 已有列表与撤销栈同时不变，才能证明失败保持原子性。
-            const auto count  = tool.m_measurementUndoHistory.size();
+            const auto count  = tool.m_history->m_measurementUndoHistory.size();
             t.m_interpolation = TimingInterpolation{};
-            check(!tool.importSelectedBeatmapTimings() &&
-                      tool.m_measurementUndoHistory.size() == count &&
-                      tool.m_timingSegments[1].bpm == 201.125,
-                  "BPM curve rejects without flattening",
-                  passed);
+            check(
+                !tool.importSelectedBeatmapTimings() &&
+                    tool.m_history->m_measurementUndoHistory.size() == count &&
+                    tool.m_timingSegments[1].bpm == 201.125,
+                "BPM curve rejects without flattening",
+                passed);
             // 恢复离散红线后只改变歌曲绑定，磁盘仍保存原歌曲提示。
             // 如果错误回退磁盘会重新匹配 song-a，此断言专门排除这种行为。
             t.m_interpolation.reset();
@@ -748,31 +756,35 @@ struct BpmBeatmapImportTestAccess {
               "removed entry rejected",
               passed);
         project->m_beatmaps.insert(project->m_beatmaps.begin(), removed);
-        const auto count = tool.m_measurementUndoHistory.size();
+        // 对同一条真实导入路径逐一施加工作者、交付槽和 UI 待消费状态。
+        // 三次拒绝均以原撤销栈长度为基线，不能给撤销菜单留下空操作。
+        // 前面的弹窗仍持有同一选择，这里只改变分析作业的活跃状态。
+        // 完成各阶段后立即复位对应状态，避免前一个条件遮蔽后一个条件。
+        const auto count = tool.m_history->m_measurementUndoHistory.size();
         // 模拟正在分析、结果刚写入槽但尚未发布、完成但尚未消费三个阶段。
         // 这些状态都可能在下一帧恢复嵌入标记，不能让它们覆盖新导入。
-        tool.m_analysisRunning.store(true, std::memory_order_relaxed);
+        tool.m_job->m_analysisRunning.store(true, std::memory_order_relaxed);
         check(!tool.importSelectedBeatmapTimings(),
               "running analysis rejected",
               passed);
-        tool.m_analysisRunning.store(false, std::memory_order_relaxed);
+        tool.m_job->m_analysisRunning.store(false, std::memory_order_relaxed);
         // 结果槽状态有意独立于完成标志，模拟生产者尚未发布完成的边界。
         // 测试没有工作线程，直接写槽不会形成跨线程竞争。
         // 在友元作用域显式构造再移入结果槽，兼容旧 Clang 的嵌套类型构造检查。
         // 仍放入真实待交付结果，不能以完成标志代替这一交付边界测试。
-        tool.m_pendingResult = BpmMeasurementToolView::AnalysisResult{};
+        tool.m_job->m_pendingResult = BpmMeasurementToolView::AnalysisResult{};
         check(!tool.importSelectedBeatmapTimings(),
               "queued result rejected",
               passed);
-        tool.m_pendingResult.reset();
+        tool.m_job->m_pendingResult.reset();
         // 完成位仍为真时，UI 消费流程还没结束，也应保留原工具列表。
         // 最后清掉所有模拟状态，不能让工具析构误判仍有工作待交付。
-        tool.m_analysisFinished.store(true, std::memory_order_release);
+        tool.m_job->m_analysisFinished.store(true, std::memory_order_release);
         check(!tool.importSelectedBeatmapTimings(),
               "unconsumed analysis rejected",
               passed);
-        tool.m_analysisFinished.store(false, std::memory_order_release);
-        check(tool.m_measurementUndoHistory.size() == count,
+        tool.m_job->m_analysisFinished.store(false, std::memory_order_release);
+        check(tool.m_history->m_measurementUndoHistory.size() == count,
               "failed confirmations preserve history",
               passed);
 

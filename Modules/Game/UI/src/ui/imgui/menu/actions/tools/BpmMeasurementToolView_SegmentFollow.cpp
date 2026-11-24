@@ -1,3 +1,4 @@
+#include "BpmMeasurementToolView_Domains.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 
 #include "mmm/timing/BpmNormalization.h"
@@ -45,8 +46,9 @@ bool BpmMeasurementToolView::applyTimingSegmentEdit(std::size_t index,
     beginMeasurementHistoryGesture();
     // 音轨切换与导入已有独立清理边界，快照不会从另一首音频沿用。
     // 借用仅持续到本次同步调用返回，不持有外部对象或可变 ECS 引用。
-    const auto& original = m_measurementGestureBefore->timingSegments;
-    const auto  reject   = [&]() {
+    const auto& original =
+        m_history->m_measurementGestureBefore->timingSegments;
+    const auto reject = [&]() {
         m_followEditRejected = true;
         return false;
     };
