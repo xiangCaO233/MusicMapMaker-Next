@@ -8,6 +8,7 @@
 #    include <GLFW/glfw3.h>
 #    define GLFW_EXPOSE_NATIVE_WIN32
 #    include <GLFW/glfw3native.h>
+#    include <algorithm>
 #    include <array>
 #    include <commctrl.h>  // For DefSubclassProc
 #    include <dwmapi.h>
@@ -21,6 +22,14 @@
 #    include <system_error>
 #    include <type_traits>
 #    include <windowsx.h>
+
+// 部分旧 SDK 尚未提供 Windows 11 的圆角枚举，保留既有的 DWM 属性号。
+#    ifndef DWMWA_WINDOW_CORNER_PREFERENCE
+#        define DWMWA_WINDOW_CORNER_PREFERENCE 33
+#    endif
+#    ifndef DWMWCP_ROUND
+#        define DWMWCP_ROUND 2
+#    endif
 
 namespace MMM::Graphic
 {
@@ -196,6 +205,76 @@ void setRestoreMaximizedProperty(HWND hWnd, bool value)
         // RemovePropW 同时清除跨消息保存的恢复意图。
         RemovePropW(hWnd, RESTORE_MAXIMIZED_PROP);
     }
+}
+
+/// @brief 最小化 Win32 窗口，同时保留系统恢复目标。
+///
+/// 需要恢复最大化时通过 WINDOWPLACEMENT 同时设置 restore flag 和
+/// minimized
+/// showCmd；查询失败或普通窗口则清 flag 并使用 ShowWindow
+/// 最小化。
+///
+/// @param hwnd Win32 窗口句柄。
+/// @param restoreMaximized 下一次任务栏恢复时是否应最大化。
+void minimizeWin32Window(HWND hwnd, bool restoreMaximized)
+{
+    // 空句柄允许上层销毁路径安全调用。
+    if ( !hwnd ) {
+        return;
+    }
+
+    if ( restoreMaximized ) {
+        // 使用系统 placement
+        // 能让任务栏恢复沿用最大化目标，不只依赖应用回调补偿。
+        WINDOWPLACEMENT placement{};
+        placement.length = sizeof(WINDOWPLACEMENT);
+        if ( GetWindowPlacement(hwnd, &placement) ) {
+            // 保留其他 flags，并显式切换当前展示状态为最小化。
+            placement.flags |= RESTORE_TO_MAXIMIZED_FLAG;
+            placement.showCmd = SW_SHOWMINIMIZED;
+            SetWindowPlacement(hwnd, &placement);
+            return;
+        }
+    }
+
+    // 普通窗口必须移除历史 flag，否则系统可能错误最大化恢复。
+    clearRestoreToMaximizedFlag(hwnd);
+    ShowWindow(hwnd, SW_MINIMIZE);
+}
+
+/// @brief 恢复原生窗口并提升，子视口只调整 Z 序。
+/// @param hwnd 已可由当前进程操作的原生窗口。
+/// @param activate 主窗口要求前台焦点时为 true。
+/// @warning 激活边沿低频调用；可能同步触发 Win32 窗口消息。
+void raiseViewport(HWND hwnd, bool activate)
+{
+    if ( !hwnd ) return;
+    if ( IsIconic(hwnd) ) {
+        // SW_RESTORE 会激活窗口。工具视口必须从恢复操作开始就保持无激活，
+        // 只给后续 SetWindowPos 设置 SWP_NOACTIVATE 无法撤销已发生的焦点变化。
+        if ( !activate ) {
+            ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        } else {
+            // 主窗口保留最小化前的最大化意图，优先使用应用共享的窗口属性。
+            bool restoreMaximized =
+                GetPropW(hwnd, RESTORE_MAXIMIZED_PROP) != nullptr ||
+                IsZoomed(hwnd);
+            if ( !restoreMaximized ) {
+                WINDOWPLACEMENT placement{};
+                placement.length = sizeof(placement);
+                restoreMaximized =
+                    GetWindowPlacement(hwnd, &placement) &&
+                    (placementShowsMaximized(placement) ||
+                     (placement.flags & RESTORE_TO_MAXIMIZED_FLAG) != 0);
+            }
+            ShowWindow(hwnd, restoreMaximized ? SW_SHOWMAXIMIZED : SW_RESTORE);
+        }
+    }
+
+    // 工具窗口遵循 ImGui 的原尺寸和位置，只在主窗口请求时允许重新获取焦点。
+    UINT flags = SWP_NOMOVE | SWP_NOSIZE;
+    if ( !activate ) flags |= SWP_NOACTIVATE;
+    SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, flags);
 }
 
 /// @brief 无激活地最小化属于指定任务栏窗口组的独立平台窗口。
@@ -507,7 +586,7 @@ void Win32WindowAdapter::onUpdateDragArea(const Event::UpdateDragAreaEvent& e)
 ///
 /// @param hWnd 要检查的窗口。
 /// @return 当前状态或保存的展示命令表示最大化时返回 true。
-bool Win32WindowAdapter::windowPlacementWantsMaximized(HWND hWnd) const
+bool Win32WindowAdapter::windowPlacementWantsMaximized(HWND hWnd)
 {
     // 空句柄没有可恢复状态。
     if ( !hWnd ) {
@@ -522,6 +601,118 @@ bool Win32WindowAdapter::windowPlacementWantsMaximized(HWND hWnd) const
     }
 
     return IsZoomed(hWnd) != FALSE || placementShowsMaximized(placement);
+}
+
+/// @brief 结合 GLFW 窗口的缓存状态和原生布局，统一最小化恢复判定。
+bool Win32WindowAdapter::shouldPreserveMaximizedRestore(
+    GLFWwindow* window, bool lastRequestedMaximized,
+    bool cachedRestoreMaximized)
+{
+    const HWND hwnd = window ? glfwGetWin32Window(window) : nullptr;
+    // 原生句柄缺失时缓存无法代表当前窗口，交给上层按 GLFW 默认处理。
+    if ( !hwnd ) return false;
+    return cachedRestoreMaximized || lastRequestedMaximized ||
+           hasRestoreMaximizedProperty(hwnd) ||
+           windowPlacementWantsMaximized(hwnd);
+}
+
+/// @brief 更新 Win32 子类过程与 GLFW 状态共同读取的 HWND 属性。
+void Win32WindowAdapter::updateMaximizedRestoreIntent(GLFWwindow* window,
+                                                      bool        restore)
+{
+    if ( window )
+        setRestoreMaximizedProperty(glfwGetWin32Window(window), restore);
+}
+
+/// @brief 清除普通窗口下一次激活时的系统最大化提示。
+void Win32WindowAdapter::clearMaximizedRestoreFlag(GLFWwindow* window)
+{
+    if ( window ) clearRestoreToMaximizedFlag(glfwGetWin32Window(window));
+}
+
+/// @brief 在 Win32 上最小化窗口，并在最小化前持久化最大化还原意图。
+///
+/// 先解析 HWND；无法取得时仍回退 GLFW 标准最小化。有效 HWND
+/// 路径把综合判定写入
+/// 共享 property，再选择带或不带 restore flag 的 Win32
+/// 最小化。
+///
+/// @param window GLFW 窗口句柄。
+/// @param lastRequestedMaximized 最近一次请求的最大化状态。
+void Win32WindowAdapter::iconifyPreservingMaximizedState(
+    GLFWwindow* window, bool lastRequestedMaximized)
+{
+    // 事件可能在窗口关闭附近到达，空句柄直接返回。
+    if ( !window ) {
+        return;
+    }
+
+    HWND hwnd = glfwGetWin32Window(window);
+    if ( !hwnd ) {
+        // 原生映射失败时保留基本最小化能力，但无法保证 Windows 专属恢复语义。
+        glfwIconifyWindow(window);
+        return;
+    }
+
+    // 最小化前冻结本轮恢复意图，并同时提供给 adapter subclass。
+    const bool restoreMaximized =
+        shouldPreserveMaximizedRestore(window, lastRequestedMaximized, false);
+    setRestoreMaximizedProperty(hwnd, restoreMaximized);
+    minimizeWin32Window(hwnd, restoreMaximized);
+}
+
+/// @brief 以窗口坐标设置启动窗圆角，成功时系统接管 region 所有权。
+void Win32WindowAdapter::applyStartupFrameShape(GLFWwindow* window,
+                                                float       radius)
+{
+    HWND hwnd = glfwGetWin32Window(window);
+    RECT bounds{};
+    if ( !hwnd || !GetWindowRect(hwnd, &bounds) ) return;
+    const int width  = bounds.right - bounds.left;
+    const int height = bounds.bottom - bounds.top;
+    if ( width <= 0 || height <= 0 ) return;
+    const int diameter = static_cast<int>(std::min(
+        2 * radius + 0.5f, static_cast<float>(std::min(width, height))));
+    if ( diameter <= 0 ) return;
+    // 使用窗口坐标；成功后 region 归系统所有，失败才在此释放。
+    if ( HRGN region =
+             CreateRoundRectRgn(0, 0, width, height, diameter, diameter);
+         region && !SetWindowRgn(hwnd, region, TRUE) )
+        DeleteObject(region);
+}
+
+/// @brief 提升同一 ImGui 视口组，窗口最小化期间跳过整个组。
+void Win32WindowAdapter::raiseViewportGroup(
+    GLFWwindow* mainWindow, std::span<GLFWwindow* const> viewports)
+{
+    const HWND hwnd = mainWindow ? glfwGetWin32Window(mainWindow) : nullptr;
+    if ( !hwnd || IsIconic(hwnd) ) return;
+
+    // 主窗口先取得焦点；其余视口不触发前台焦点切换。
+    raiseViewport(hwnd, true);
+    for ( auto* viewport : viewports )
+        raiseViewport(glfwGetWin32Window(viewport), false);
+    // 原生恢复消息可能同步改变活动窗口，最后一次前台请求始终属于主窗口。
+    SetForegroundWindow(hwnd);
+}
+
+/// @brief 恢复视口的任务栏组、DWM 阴影及圆角。
+void Win32WindowAdapter::refreshNativeViewportDecoration(GLFWwindow* viewport,
+                                                         GLFWwindow* mainWindow)
+{
+    const HWND hwnd = viewport ? glfwGetWin32Window(viewport) : nullptr;
+    if ( !hwnd ) return;
+    associateTaskbarGroupWindow(
+        hwnd, mainWindow ? glfwGetWin32Window(mainWindow) : nullptr);
+
+    // 一像素客户区延伸由原生合成器形成投影，旧系统会忽略不支持的圆角属性。
+    const MARGINS shadowMargin{ 1, 1, 1, 1 };
+    DwmExtendFrameIntoClientArea(hwnd, &shadowMargin);
+    const DWORD cornerPreference = DWMWCP_ROUND;
+    DwmSetWindowAttribute(hwnd,
+                          DWMWA_WINDOW_CORNER_PREFERENCE,
+                          &cornerPreference,
+                          sizeof(cornerPreference));
 }
 
 /// @brief 在主窗口进入最小化前保存是否应恢复到最大化。
@@ -545,7 +736,7 @@ void Win32WindowAdapter::rememberRestoreStateBeforeMinimize(HWND hWnd)
 /// @brief 查询 HWND 上是否仍存在最大化恢复标记。
 /// @param hWnd 待检查窗口。
 /// @return 句柄有效且属性存在时返回 true。
-bool Win32WindowAdapter::hasRestoreMaximizedProperty(HWND hWnd) const
+bool Win32WindowAdapter::hasRestoreMaximizedProperty(HWND hWnd)
 {
     return hWnd && GetPropW(hWnd, RESTORE_MAXIMIZED_PROP) != nullptr;
 }

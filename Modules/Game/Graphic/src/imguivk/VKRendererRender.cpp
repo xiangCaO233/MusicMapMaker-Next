@@ -1,9 +1,3 @@
-#ifdef _WIN32
-#    ifndef NOMINMAX
-#        define NOMINMAX
-#    endif
-#endif
-
 #include "config/AppConfig.h"
 #include "config/EditorConfig.h"
 #include "config/EditorSettings.h"
@@ -30,20 +24,7 @@
 #include <cstdint>
 #include <ice/thread/ThreadPool.hpp>
 #include <latch>
-
-#ifdef _WIN32
-#    include "graphic/glfw/window/adapters/Win32WindowAdapter.h"
-#    define GLFW_EXPOSE_NATIVE_WIN32
-#    include <GLFW/glfw3native.h>
-#    include <dwmapi.h>
-
-#    ifndef DWMWA_WINDOW_CORNER_PREFERENCE
-#        define DWMWA_WINDOW_CORNER_PREFERENCE 33
-#    endif
-#    ifndef DWMWCP_ROUND
-#        define DWMWCP_ROUND 2
-#    endif
-#endif
+#include <vector>
 
 namespace MMM::Graphic
 {
@@ -523,147 +504,6 @@ bool consumeMainWindowActivation(GLFWwindow* window)
     return activated;
 }
 
-#    ifdef _WIN32
-/// @brief HWND 属性名，与 Win32WindowAdapter 协同保留最小化前最大化状态。
-constexpr const wchar_t* RESTORE_MAXIMIZED_PROP =
-    L"MMMRestoreMaximizedAfterMinimize";
-
-/// @brief 判断 Win32 窗口最小化前是否处于最大化状态。
-///
-/// 自定义窗框适配器用窗口属性保存自己的恢复意图；若属性不存在，再检查系统当前
-/// zoom 状态和 WINDOWPLACEMENT 标志，覆盖任务栏及系统菜单触发的最小化路径。
-///
-/// @param hwnd Win32 窗口句柄。
-/// @return 任务栏恢复时应恢复到最大化状态则返回 true。
-/// @warning 低频平台查询：只在主窗口被任务栏/系统激活时调用。
-bool shouldRestoreWin32WindowToMaximized(HWND hwnd)
-{
-    if ( !hwnd ) {
-        return false;
-    }
-
-    // 适配器属性优先，因为最小化后 IsZoomed 可能不再反映最小化前状态。
-    if ( GetPropW(hwnd, RESTORE_MAXIMIZED_PROP) != nullptr ) {
-        return true;
-    }
-
-    if ( IsZoomed(hwnd) ) {
-        return true;
-    }
-
-    // WPF_RESTORETOMAXIMIZED 在部分 SDK 路径中没有便捷枚举，保留规范位值查询。
-    constexpr UINT  restoreToMaximizedFlag = 0x0002;
-    WINDOWPLACEMENT placement{};
-    placement.length = sizeof(WINDOWPLACEMENT);
-    if ( !GetWindowPlacement(hwnd, &placement) ) {
-        return false;
-    }
-    return placement.showCmd == SW_SHOWMAXIMIZED ||
-           (placement.flags & restoreToMaximizedFlag) != 0;
-}
-#    endif
-
-/// @brief 将 GLFW 窗口恢复并提升到当前窗口组顶层。
-///
-/// Windows 直接操作 HWND，区分恢复最大化与普通恢复，并允许只提升 Z 序而不抢
-/// 焦点；其他平台通过 GLFW 恢复和聚焦，没有无激活提窗的可移植接口。
-///
-/// @param window GLFW 窗口句柄。
-/// @param activate 是否请求系统前台焦点。
-/// @warning 低频平台操作：只在主窗口被任务栏/系统激活时调用。
-void raiseGlfwWindowToTop(GLFWwindow* window, bool activate)
-{
-    if ( !window ) {
-        return;
-    }
-
-#    ifdef _WIN32
-    // 平台句柄缺失时不能安全调用 User32；GLFW 窗口本身有效也不保证桥接成功。
-    HWND hwnd = glfwGetWin32Window(window);
-    if ( !hwnd ) {
-        return;
-    }
-
-    // 先恢复最小化窗口，再设置 Z 序；否则 SetWindowPos 不会使其重新可见。
-    if ( IsIconic(hwnd) ) {
-        const bool restoreMaximized = shouldRestoreWin32WindowToMaximized(hwnd);
-        ShowWindow(hwnd, restoreMaximized ? SW_SHOWMAXIMIZED : SW_RESTORE);
-    }
-#    else
-    if ( glfwGetWindowAttrib(window, GLFW_ICONIFIED) == GLFW_TRUE ) {
-        glfwRestoreWindow(window);
-    }
-
-#    endif
-
-#    ifdef _WIN32
-    // 提窗不应改变 ImGui 平台窗口已经计算好的位置和尺寸。
-    UINT flags = SWP_NOMOVE | SWP_NOSIZE;
-    if ( !activate ) {
-        flags |= SWP_NOACTIVATE;
-    }
-    SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, flags);
-    if ( activate ) {
-        SetForegroundWindow(hwnd);
-    }
-#    else
-    (void)activate;
-    glfwFocusWindow(window);
-#    endif
-}
-
-/// @brief 主窗口被系统激活时同步提升所有 ImGui 多视口窗口。
-///
-/// 多视口工具窗是独立原生窗口，主窗口从任务栏恢复时系统不一定同步提升它们。
-/// 本函数只在激活边沿遍历平台视口：Windows 先激活主窗，再无激活提升工具窗；
-/// 其他平台先聚焦工具窗，最后重新聚焦主窗，保证键盘焦点归属正确。
-///
-/// @param mainWindow GLFW 主窗口句柄。
-/// @warning 低频平台操作：只在主窗口焦点激活边沿触发，避免每帧提窗。
-void raiseImGuiViewportGroup(GLFWwindow* mainWindow)
-{
-    if ( !mainWindow ) {
-        return;
-    }
-
-#    ifdef _WIN32
-    // 主窗口仍最小化时不提升任何从属视口，避免工具窗单独出现在其他应用之上。
-    HWND mainHwnd = glfwGetWin32Window(mainWindow);
-    if ( !mainHwnd || IsIconic(mainHwnd) ) {
-        return;
-    }
-
-    // 在 Windows 下提窗顺序很关键：主窗口先拿回前台焦点，随后独立
-    // 独立 ImGui 视口只提升 Z 序而不抢焦点，避免浮动工具窗落在其他程序后面。
-    raiseGlfwWindowToTop(mainWindow, true);
-#    endif
-
-    // PlatformHandle 在 GLFW 后端中指向 GLFWwindow；空视口和主视口都跳过。
-    ImGuiPlatformIO& platformIo = ImGui::GetPlatformIO();
-    for ( int i = 0; i < platformIo.Viewports.Size; ++i ) {
-        ImGuiViewport* viewport = platformIo.Viewports[i];
-        if ( !viewport || !viewport->PlatformHandle ) {
-            continue;
-        }
-
-        GLFWwindow* viewportWindow =
-            static_cast<GLFWwindow*>(viewport->PlatformHandle);
-        if ( !viewportWindow || viewportWindow == mainWindow ) {
-            continue;
-        }
-
-#    ifdef _WIN32
-        raiseGlfwWindowToTop(viewportWindow, false);
-#    else
-        raiseGlfwWindowToTop(viewportWindow, true);
-#    endif
-    }
-
-#    ifndef _WIN32
-    // 非 Windows 分支逐个 focus 会改变键盘焦点，最后恢复到主编辑窗口。
-    raiseGlfwWindowToTop(mainWindow, true);
-#    endif
-}
 #endif
 }  // namespace
 
@@ -1151,41 +991,28 @@ void VKRenderer::render(NativeWindow&                window,
         // UpdatePlatformWindows
         // 先创建、移动或销毁原生视口，随后才能遍历有效句柄。
         ImGui::UpdatePlatformWindows();
+        const auto& viewports = ImGui::GetPlatformIO().Viewports;
         if ( mainWindowActivated ) {
-            raiseImGuiViewportGroup(mainWindowHandle);
+            // ImGui 后端只在更新完视口后提供有效的 PlatformHandle。
+            std::vector<GLFWwindow*> group;
+            group.reserve(static_cast<std::size_t>(viewports.Size));
+            for ( const auto* viewport : viewports ) {
+                if ( !viewport || !viewport->PlatformHandle ||
+                     viewport->PlatformHandle == mainWindowHandle )
+                    continue;
+                group.push_back(
+                    static_cast<GLFWwindow*>(viewport->PlatformHandle));
+            }
+            // 激活边沿才创建窗口列表，焦点和 Z 序操作由桌面后端执行。
+            window.raiseViewportGroup(group);
         }
-#    ifdef _WIN32
-        // ImGui 可能动态新建平台窗口，每帧对现存 HWND 幂等应用任务栏分组、DWM
-        // 阴影和圆角，保持浮动视口与主窗口一致。
-        ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
-        for ( int i = 0; i < platform_io.Viewports.Size; ++i ) {
-            ImGuiViewport* vp = platform_io.Viewports[i];
-            if ( vp->PlatformHandle ) {
-                // GLFW 后端把 PlatformHandle 暴露为 GLFWwindow，再桥接到原生
-                // HWND。
-                GLFWwindow* glfwWin =
-                    static_cast<GLFWwindow*>(vp->PlatformHandle);
-                HWND hwnd = glfwGetWin32Window(glfwWin);
-                if ( hwnd ) {
-                    // 关联主 HWND 使任务栏把浮动工具窗视为同一应用窗口组。
-                    HWND mainHwnd = glfwGetWin32Window(mainWindowHandle);
-                    Win32WindowAdapter::associateTaskbarGroupWindow(hwnd,
-                                                                    mainHwnd);
-                    // 一像素 client frame 让 DWM
-                    // 生成原生外阴影，不侵占可见内容。
-                    const MARGINS shadow_margin = { 1, 1, 1, 1 };
-                    DwmExtendFrameIntoClientArea(hwnd, &shadow_margin);
-
-                    // 显式请求系统圆角；旧系统会忽略未知属性而不改变渲染内容。
-                    DWORD cornerPreference = DWMWCP_ROUND;
-                    DwmSetWindowAttribute(hwnd,
-                                          DWMWA_WINDOW_CORNER_PREFERENCE,
-                                          &cornerPreference,
-                                          sizeof(cornerPreference));
-                }
+        if ( window.usesNativeViewportDecoration() ) {
+            for ( const auto* viewport : viewports ) {
+                if ( viewport && viewport->PlatformHandle )
+                    window.refreshNativeViewportDecoration(
+                        static_cast<GLFWwindow*>(viewport->PlatformHandle));
             }
         }
-#    endif
         // 由 ImGui GLFW/Vulkan 后端分别录制并呈现所有非主视口。
         ImGui::RenderPlatformWindowsDefault();
     }

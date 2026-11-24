@@ -268,228 +268,6 @@ void publishWindowMaximizedState(bool isMaximized)
         .isMaximized    = isMaximized });
 }
 
-#ifdef _WIN32
-/// @brief HWND 属性名，与 Win32WindowAdapter/renderer
-/// 协同保留最小化前最大化状态。
-constexpr const wchar_t* RESTORE_MAXIMIZED_PROP =
-    L"MMMRestoreMaximizedAfterMinimize";
-
-/// @brief 让最小化窗口在下一次激活时恢复为最大化的 Win32 WINDOWPLACEMENT 标志。
-constexpr UINT RESTORE_TO_MAXIMIZED_FLAG = 0x0002;
-
-/// @brief 判断 Win32 placement 是否直接表示当前窗口最大化。
-///
-/// showCmd 在最小化过渡期间仍可保留恢复目标，与 IsZoomed 的即时可见状态互补。
-///
-/// @param placement Win32 窗口布局信息。
-/// @return 当前 show command 是最大化时返回 true。
-bool win32PlacementShowsMaximized(const WINDOWPLACEMENT& placement)
-{
-    return placement.showCmd == SW_SHOWMAXIMIZED;
-}
-
-/// @brief 清除 Win32 最小化后恢复最大化的系统 hint。
-///
-/// 仅当 WINDOWPLACEMENT 查询成功且目标 flag 存在时回写，保留其他系统
-/// flags。
-/// 用于用户明确还原普通窗口后消除过期恢复意图。
-///
-/// @param hwnd Win32 窗口句柄。
-/// @warning 低频窗口状态路径：同步调用 Win32 placement API。
-void clearWin32RestoreToMaximizedFlag(HWND hwnd)
-{
-    // HWND 可能在关闭流程已失效，空值保持无操作。
-    if ( !hwnd ) {
-        return;
-    }
-
-    // Win32 要求 length 字段在 GetWindowPlacement 前初始化。
-    WINDOWPLACEMENT placement{};
-    placement.length = sizeof(WINDOWPLACEMENT);
-    if ( !GetWindowPlacement(hwnd, &placement) ||
-         (placement.flags & RESTORE_TO_MAXIMIZED_FLAG) == 0 ) {
-        return;
-    }
-
-    // 只清目标 bit，不能覆盖系统保存的其他 placement 信息。
-    placement.flags &= ~RESTORE_TO_MAXIMIZED_FLAG;
-    SetWindowPlacement(hwnd, &placement);
-}
-
-/// @brief 判断 Win32 窗口当前是否明确处于最大化状态。
-///
-/// 优先使用 IsZoomed；最小化或恢复过渡中再读取
-/// WINDOWPLACEMENT.showCmd，容忍消息
-/// 顺序暂时让即时状态与恢复目标不一致。
-///
-/// @param hwnd Win32 窗口句柄。
-/// @return 当前窗口为最大化时返回 true。
-bool win32PlacementWantsMaximized(HWND hwnd)
-{
-    // 无句柄时不能保留最大化意图。
-    if ( !hwnd ) {
-        return false;
-    }
-
-    // 常见已最大化路径无需读取完整 placement。
-    if ( IsZoomed(hwnd) ) {
-        return true;
-    }
-
-    // 即时状态未最大化时检查系统保存的展示命令。
-    WINDOWPLACEMENT placement{};
-    placement.length = sizeof(WINDOWPLACEMENT);
-    if ( !GetWindowPlacement(hwnd, &placement) ) {
-        return false;
-    }
-
-    return win32PlacementShowsMaximized(placement);
-}
-
-/// @brief 写入 Win32 最小化后恢复最大化的跨模块窗口属性。
-///
-/// NativeWindow 与 Win32WindowAdapter 通过同名 HWND property
-/// 共享恢复意图；属性
-/// 值只作存在性标志，不转移任何 HANDLE 所有权。
-///
-/// @param window GLFW 窗口句柄。
-/// @param restoreMaximized 任务栏恢复时是否应最大化。
-void setWin32RestoreMaximizedProperty(GLFWwindow* window, bool restoreMaximized)
-{
-    // GLFW 窗口或其原生映射不存在时无法持久化 property。
-    if ( !window ) {
-        return;
-    }
-
-    HWND hwnd = glfwGetWin32Window(window);
-    if ( !hwnd ) {
-        return;
-    }
-
-    if ( restoreMaximized ) {
-        // 常量句柄 1 表示 true，读取方只检查属性是否存在。
-        SetPropW(hwnd, RESTORE_MAXIMIZED_PROP, reinterpret_cast<HANDLE>(1));
-    } else {
-        RemovePropW(hwnd, RESTORE_MAXIMIZED_PROP);
-    }
-}
-
-/// @brief 判断 GLFW 窗口是否带有恢复最大化的 Win32 属性。
-///
-/// 属性跨越 NativeWindow 与 subclass 消息回调，补充普通 C++
-/// 成员在嵌套消息中的
-/// 可见状态。
-///
-/// @param window GLFW 窗口句柄。
-/// @return 存在恢复最大化属性时返回 true。
-bool hasWin32RestoreMaximizedProperty(GLFWwindow* window)
-{
-    // 空 GLFWwindow 不能解析 HWND。
-    if ( !window ) {
-        return false;
-    }
-
-    HWND hwnd = glfwGetWin32Window(window);
-    return hwnd && GetPropW(hwnd, RESTORE_MAXIMIZED_PROP) != nullptr;
-}
-
-/// @brief 判断 Win32 最小化/恢复流程是否应保留之前的最大化状态。
-///
-/// 同时合并缓存状态、应用最近请求、HWND property 和系统
-/// placement，任一来源表明
-/// 最大化都采用保守保留，避免任务栏/Alt+Tab
-/// 恢复为普通窗口。
-///
-/// @param window GLFW 窗口句柄。
-/// @param lastRequestedMaximized 应用最近一次请求的最大化状态。
-/// @param cachedRestoreMaximized 之前缓存的最小化恢复状态。
-/// @return 任务栏或 Alt+Tab 恢复时应回到最大化则返回 true。
-bool shouldPreserveWin32MaximizedRestore(GLFWwindow* window,
-                                         bool        lastRequestedMaximized,
-                                         bool        cachedRestoreMaximized)
-{
-    // 只有有效原生 HWND 才能可靠判断 Windows 恢复语义。
-    if ( !window ) {
-        return false;
-    }
-
-    HWND hwnd = glfwGetWin32Window(window);
-    if ( !hwnd ) {
-        return false;
-    }
-
-    // 四个来源取或以容忍 WM_SYSCOMMAND、WM_SIZE 和 GLFW callback 的顺序差异。
-    return cachedRestoreMaximized || lastRequestedMaximized ||
-           hasWin32RestoreMaximizedProperty(window) ||
-           win32PlacementWantsMaximized(hwnd);
-}
-
-/// @brief 最小化 Win32 窗口，同时保留系统恢复目标。
-///
-/// 需要恢复最大化时通过 WINDOWPLACEMENT 同时设置 restore flag 和
-/// minimized
-/// showCmd；查询失败或普通窗口则清 flag 并使用 ShowWindow
-/// 最小化。
-///
-/// @param hwnd Win32 窗口句柄。
-/// @param restoreMaximized 下一次任务栏恢复时是否应最大化。
-void minimizeWin32Window(HWND hwnd, bool restoreMaximized)
-{
-    // 空句柄允许上层销毁路径安全调用。
-    if ( !hwnd ) {
-        return;
-    }
-
-    if ( restoreMaximized ) {
-        // 使用系统 placement
-        // 能让任务栏恢复沿用最大化目标，不只依赖应用回调补偿。
-        WINDOWPLACEMENT placement{};
-        placement.length = sizeof(WINDOWPLACEMENT);
-        if ( GetWindowPlacement(hwnd, &placement) ) {
-            // 保留其他 flags，并显式切换当前展示状态为最小化。
-            placement.flags |= RESTORE_TO_MAXIMIZED_FLAG;
-            placement.showCmd = SW_SHOWMINIMIZED;
-            SetWindowPlacement(hwnd, &placement);
-            return;
-        }
-    }
-
-    // 普通窗口必须移除历史 flag，否则系统可能错误最大化恢复。
-    clearWin32RestoreToMaximizedFlag(hwnd);
-    ShowWindow(hwnd, SW_MINIMIZE);
-}
-
-/// @brief 在 Win32 上最小化窗口，并在最小化前持久化最大化还原意图。
-///
-/// 先解析 HWND；无法取得时仍回退 GLFW 标准最小化。有效 HWND
-/// 路径把综合判定写入
-/// 共享 property，再选择带或不带 restore flag 的 Win32
-/// 最小化。
-///
-/// @param window GLFW 窗口句柄。
-/// @param lastRequestedMaximized 最近一次请求的最大化状态。
-void iconifyWin32WindowPreservingMaximize(GLFWwindow* window,
-                                          bool        lastRequestedMaximized)
-{
-    // 事件可能在窗口关闭附近到达，空句柄直接返回。
-    if ( !window ) {
-        return;
-    }
-
-    HWND hwnd = glfwGetWin32Window(window);
-    if ( !hwnd ) {
-        // 原生映射失败时保留基本最小化能力，但无法保证 Windows 专属恢复语义。
-        glfwIconifyWindow(window);
-        return;
-    }
-
-    // 最小化前冻结本轮恢复意图，并同时提供给 adapter subclass。
-    const bool restoreMaximized = shouldPreserveWin32MaximizedRestore(
-        window, lastRequestedMaximized, false);
-    setWin32RestoreMaximizedProperty(window, restoreMaximized);
-    minimizeWin32Window(hwnd, restoreMaximized);
-}
-#endif
 }  // namespace
 
 /// @brief 创建无系统装饰 GLFW 窗口并安装 DPI、frame 与输入事件桥接。
@@ -774,14 +552,14 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle,
                     // 最大化确认后记录用户意图，并消费 Win32 最小化恢复 property。
                     app->m_lastRequestedMaximized = true;
 #    ifdef _WIN32
-                    setWin32RestoreMaximizedProperty(w, false);
+                    Win32WindowAdapter::updateMaximizedRestoreIntent(w, false);
 #    endif
                 } else {
 #    ifdef _WIN32
                     // Windows 从任务栏恢复时可能短暂报告 restored；综合属性决定是否
                     // 仍需把逻辑状态视为最大化。
                     const bool keepMaximizedRestore =
-                        shouldPreserveWin32MaximizedRestore(
+                        Win32WindowAdapter::shouldPreserveMaximizedRestore(
                             w, false, app->m_restoreMaximizedAfterIconify);
 #    else
                     // 非 Windows 原生还原没有额外恢复 property。
@@ -792,8 +570,8 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle,
                         app->m_lastRequestedMaximized = false;
                         app->rememberCurrentWindowPlacement();
 #    ifdef _WIN32
-                        setWin32RestoreMaximizedProperty(w, false);
-                        clearWin32RestoreToMaximizedFlag(glfwGetWin32Window(w));
+                        Win32WindowAdapter::updateMaximizedRestoreIntent(w, false);
+                        Win32WindowAdapter::clearMaximizedRestoreFlag(w);
 #    endif
                     } else {
                         // 保留最大化意图，后续 iconify/subclass 流程会重新应用状态。
@@ -923,16 +701,16 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle,
                     case Event::NativeEventType::GLFW_ICONFY_WINDOW: {
 #ifdef _WIN32
                         // Windows 额外保留任务栏恢复后的最大化意图。
-                        iconifyWin32WindowPreservingMaximize(
+                        Win32WindowAdapter::iconifyPreservingMaximizedState(
                             m_windowHandle, m_lastRequestedMaximized);
 #elif defined(__APPLE__)
-                // 优先使用 Cocoa miniaturize 维持无边框窗口平台行为。
-                if ( !miniaturizeMacOSWindow(m_windowHandle) ) {
-                    glfwIconifyWindow(m_windowHandle);
-                }
+                        // 优先使用 Cocoa miniaturize 维持无边框窗口平台行为。
+                        if ( !miniaturizeMacOSWindow(m_windowHandle) ) {
+                            glfwIconifyWindow(m_windowHandle);
+                        }
 #else
-        // X11/Wayland 走 GLFW 标准最小化请求。
-        glfwIconifyWindow(m_windowHandle);
+                    // X11/Wayland 走 GLFW 标准最小化请求。
+                    glfwIconifyWindow(m_windowHandle);
 #endif
                         XINFO("Window iconified.");
                         break;
@@ -1232,8 +1010,8 @@ void NativeWindow::applyWindowPlacement(int x, int y, int width, int height,
 #ifdef _WIN32
     if ( !maximized ) {
         m_restoreMaximizedAfterIconify = false;
-        setWin32RestoreMaximizedProperty(m_windowHandle, false);
-        clearWin32RestoreToMaximizedFlag(glfwGetWin32Window(m_windowHandle));
+        Win32WindowAdapter::updateMaximizedRestoreIntent(m_windowHandle, false);
+        Win32WindowAdapter::clearMaximizedRestoreFlag(m_windowHandle);
     }
 #endif
 
@@ -1292,7 +1070,7 @@ void NativeWindow::toggleMaximized()
         m_lastRequestedMaximized       = false;
         m_restoreMaximizedAfterIconify = false;
 #ifdef _WIN32
-        setWin32RestoreMaximizedProperty(m_windowHandle, false);
+        Win32WindowAdapter::updateMaximizedRestoreIntent(m_windowHandle, false);
 #endif
 #if defined(__APPLE__)
         // 模拟最大化没有可调用的 GLFW restore 状态，直接恢复缓存普通矩形。
@@ -1307,7 +1085,7 @@ void NativeWindow::toggleMaximized()
         glfwRestoreWindow(m_windowHandle);
 #endif
 #ifdef _WIN32
-        clearWin32RestoreToMaximizedFlag(glfwGetWin32Window(m_windowHandle));
+        Win32WindowAdapter::clearMaximizedRestoreFlag(m_windowHandle);
 #endif
         XINFO("Window restored.");
         // 状态切换后移除最大化专用圆角/阴影配置。
@@ -1443,8 +1221,8 @@ bool NativeWindow::restoreFrameForClientMove(double cursorX, double cursorY)
     m_restoreMaximizedAfterIconify = false;
     m_emulatedMaximized            = false;
 #ifdef _WIN32
-    setWin32RestoreMaximizedProperty(m_windowHandle, false);
-    clearWin32RestoreToMaximizedFlag(glfwGetWin32Window(m_windowHandle));
+    Win32WindowAdapter::updateMaximizedRestoreIntent(m_windowHandle, false);
+    Win32WindowAdapter::clearMaximizedRestoreFlag(m_windowHandle);
 #endif
 #if !defined(__APPLE__)
     // 原生平台先解除 GLFW maximized 属性，再写入明确普通 frame。
@@ -1704,24 +1482,52 @@ void NativeWindow::refreshWindowFrameShape()
                          (std::isfinite(scale) && scale > 0.0f ? scale : 1.0f);
 #endif
 #ifdef _WIN32
-    HWND hwnd = glfwGetWin32Window(m_windowHandle);
-    RECT bounds{};
-    if ( !hwnd || !GetWindowRect(hwnd, &bounds) ) return;
-    const int width  = bounds.right - bounds.left;
-    const int height = bounds.bottom - bounds.top;
-    if ( width <= 0 || height <= 0 ) return;
-    const int diameter = static_cast<int>(std::min(
-        2 * radius + 0.5f, static_cast<float>(std::min(width, height))));
-    if ( diameter <= 0 ) return;
-    // 使用窗口坐标；成功后 region 归系统所有，失败才在此释放。
-    if ( HRGN region =
-             CreateRoundRectRgn(0, 0, width, height, diameter, diameter);
-         region && !SetWindowRgn(hwnd, region, TRUE) )
-        DeleteObject(region);
+    Win32WindowAdapter::applyStartupFrameShape(m_windowHandle, radius);
 #elif defined(__APPLE__)
     MacOSWindowAdapter::applyFrameShape(m_windowHandle, radius, true);
 #elif defined(MMM_ENABLE_X11_FRAME_INTERACTION)
     X11WindowAdapter::applyFrameShape(m_windowHandle, radius);
+#endif
+}
+
+/// @brief 根据后端的焦点语义提升隶属于主窗口的所有视口。
+void NativeWindow::raiseViewportGroup(
+    std::span<GLFWwindow* const> viewports) const
+{
+    if ( !m_windowHandle ) return;
+#ifdef _WIN32
+    Win32WindowAdapter::raiseViewportGroup(m_windowHandle, viewports);
+#else
+    // GLFW 没有可移植的只提升 Z 序 API。按旧策略逐窗聚焦，最后归还主窗口焦点。
+    const auto restoreFocus = [](GLFWwindow* window) {
+        if ( glfwGetWindowAttrib(window, GLFW_ICONIFIED) == GLFW_TRUE )
+            glfwRestoreWindow(window);
+        glfwFocusWindow(window);
+    };
+    for ( auto* viewport : viewports ) restoreFocus(viewport);
+    restoreFocus(m_windowHandle);
+#endif
+}
+
+/// @brief 查询是否由本后端给多视口补充系统窗口外观。
+bool NativeWindow::usesNativeViewportDecoration() const noexcept
+{
+#ifdef _WIN32
+    return true;
+#else
+    return false;
+#endif
+}
+
+/// @brief 将视口与主窗口关系转交给负责原生外观的平台。
+void NativeWindow::refreshNativeViewportDecoration(GLFWwindow* viewport) const
+{
+#ifdef _WIN32
+    Win32WindowAdapter::refreshNativeViewportDecoration(viewport,
+                                                        m_windowHandle);
+#else
+    // 其它后端保留 GLFW 视口已设置的外观，不追加原生操作。
+    (void)viewport;
 #endif
 }
 
@@ -1776,15 +1582,16 @@ void NativeWindow::handleWindowIconify(int iconified)
         // 合并 GLFW 请求、adapter property 和系统 placement，抵抗 Win32
         // 消息顺序差异。
         m_restoreMaximizedAfterIconify =
-            shouldPreserveWin32MaximizedRestore(m_windowHandle,
-                                                m_lastRequestedMaximized,
-                                                m_restoreMaximizedAfterIconify);
+            Win32WindowAdapter::shouldPreserveMaximizedRestore(
+                m_windowHandle,
+                m_lastRequestedMaximized,
+                m_restoreMaximizedAfterIconify);
         // 在最小化期间继续把最近意图视为最大化，避免中间 restored callback
         // 清除。
         m_lastRequestedMaximized =
             m_lastRequestedMaximized || m_restoreMaximizedAfterIconify;
-        setWin32RestoreMaximizedProperty(m_windowHandle,
-                                         m_restoreMaximizedAfterIconify);
+        Win32WindowAdapter::updateMaximizedRestoreIntent(
+            m_windowHandle, m_restoreMaximizedAfterIconify);
 #else
         // 其他平台只需结合应用请求和当前统一最大化状态。
         m_restoreMaximizedAfterIconify =
@@ -1796,9 +1603,10 @@ void NativeWindow::handleWindowIconify(int iconified)
 #ifdef _WIN32
     // 恢复阶段再次读取 Win32 property/placement，捕获最小化期间产生的状态变化。
     m_restoreMaximizedAfterIconify =
-        shouldPreserveWin32MaximizedRestore(m_windowHandle,
-                                            m_lastRequestedMaximized,
-                                            m_restoreMaximizedAfterIconify);
+        Win32WindowAdapter::shouldPreserveMaximizedRestore(
+            m_windowHandle,
+            m_lastRequestedMaximized,
+            m_restoreMaximizedAfterIconify);
 #endif
     // 只有系统尚未自行恢复最大化时才主动补偿，避免重复 maximize。
     if ( m_restoreMaximizedAfterIconify && !isWindowMaximized() ) {

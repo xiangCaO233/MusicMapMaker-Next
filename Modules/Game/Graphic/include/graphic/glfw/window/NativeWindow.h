@@ -11,6 +11,7 @@
 #    include <chrono>
 #    include <cstdint>
 #    include <memory>
+#    include <span>
 
 namespace MMM::Graphic
 {
@@ -53,6 +54,19 @@ public:
     /// @brief 获取 GLFW 主窗口句柄。
     /// @return GLFW 窗口句柄；未创建时返回 nullptr。
     GLFWwindow* getWindowHandle() const;
+
+    /// @brief 按当前桌面后端策略恢复并提升主窗口与独立视口。
+    /// @param viewports 本次激活涉及的非主窗口，保持 ImGui 遍历顺序。
+    /// @warning 只在主窗口进入激活态时调用，可能同步进入窗口系统。
+    void raiseViewportGroup(std::span<GLFWwindow* const> viewports) const;
+
+    /// @brief 判断本桌面后端是否要更新独立视口的原生外观。
+    /// @warning 逐帧查询，只返回平台能力，不接触具体窗口。
+    [[nodiscard]] bool usesNativeViewportDecoration() const noexcept;
+
+    /// @brief 同步一个有效视口的原生外观与任务栏归属。
+    /// @warning 只由支持原生视口外观的平台调用；可能进入窗口系统。
+    void refreshNativeViewportDecoration(GLFWwindow* viewport) const;
 
     /// @brief 获取 framebuffer 尺寸，用于 swapchain 重建。
     /// @param width 输出 framebuffer 宽度。
