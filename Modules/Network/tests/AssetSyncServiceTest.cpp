@@ -561,8 +561,9 @@ int testZipCancellationInsideEntry()
         // 早期调用只检查意图，缺少可观测的暂存文件时仍应让解压继续。
         if ( ec ) return false;
         for ( const auto& entry : entries ) {
-            if ( !entry.path().filename().string().starts_with(
-                     ".mmm-zip-entry-") )
+            // 只比较文件名，使用与平台区域设置无关的 UTF-8 前缀。
+            if ( !MMM::Config::pathToUtf8(entry.path().filename())
+                      .starts_with(".mmm-zip-entry-") )
                 continue;
             // stream 尚未打开时文件可能不存在；在下一块之前再次检查。
             // 条目完全写完后观察到的尺寸不能证明中途曾响应取消。
