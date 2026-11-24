@@ -10,7 +10,7 @@ namespace MMM::Config
 /// @warning 低频阻塞接口，仅用于显式保存与手势结束，不在连续拖动中调用。
 bool saveConfigSnapshot(const std::filesystem::path& path,
                         nlohmann::json               snapshot);
-/// @brief 发布最新不可变快照并立即返回，覆盖未消费的旧请求。
+/// @brief 发布最新不可变快照并立即返回，覆盖同一路径未消费的旧请求。
 /// @warning 用户布局修改边沿调用；后台线程不访问任何实时配置字段。
 /// @note 程序退出时收尾最后请求，不使用固定延时等待或 UI 线程轮询。
 void queueConfigSnapshot(const std::filesystem::path& path,
