@@ -38,14 +38,17 @@ target_link_libraries(
 
 # 平台专属系统库保持 PRIVATE 行为；此处 PUBLIC 仅延续现有静态链接闭包需求。
 if(WIN32)
-  # 宽字符参数由 Shell32 解析。仅编译该平台的适配实现，通用启动流程不包含系统头。
-  target_sources(Game PRIVATE src/platform/StartupCommandLinePathWin32.cpp)
+  # 宽字符参数由 Shell32 解析。仅编译该平台的适配实现，通用启动流程不包含系统头。 Windows CRT 单独选择 UTF-8
+  # 字符代码页，避免把平台 locale 名称暴露给通用代码。
+  target_sources(Game PRIVATE src/platform/StartupCommandLinePathWin32.cpp
+                              src/platform/StartupLocaleWin32.cpp)
   target_link_libraries(Game PRIVATE shell32)
   # Windows 崩溃诊断路径使用 DbgHelp 符号解析 API。
   target_link_libraries(Game PUBLIC dbghelp)
 else()
-  # POSIX 参数已经使用原生字节，无需链接额外平台库。
-  target_sources(Game PRIVATE src/platform/StartupCommandLinePathPosix.cpp)
+  # POSIX 参数已经使用原生字节，无需链接额外平台库。 POSIX 按运行库可用数据选择字符 locale，路径仍使用原生字节。
+  target_sources(Game PRIVATE src/platform/StartupCommandLinePathPosix.cpp
+                              src/platform/StartupLocalePosix.cpp)
 endif()
 
 # 公开 include 根仅暴露 Game 门面与应用服务头。
