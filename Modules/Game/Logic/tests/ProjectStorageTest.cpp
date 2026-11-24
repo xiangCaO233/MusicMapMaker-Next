@@ -510,6 +510,73 @@ bool testOpenWithoutConfigurationInheritsPalette(
            check(closed.m_closed, "palette test project should close");
 }
 
+/// @brief 验证项目 UI 的不可变快照及基于工程代次的设置提交。
+/// @param root 独立测试目录；关闭后故意重新打开同一路径。
+/// @return 旧快照仍可读取，新工程拒绝陈旧的编辑且接受自己的字段变更。
+/// @details 依次模拟打开、渲染持有、关闭、同路径重开、旧页提交和新页提交。
+/// 旧项目与新项目共享磁盘根，因此即使用路径做写入防护也不能满足此回归。
+/// 新编辑从两个控件分别排队，最后检查合并结果同时包含两项覆盖。
+/// 保存才推进发布结果，未保存时生产线程不会把草稿的可变引用交给渲染。
+bool testProjectUiStateAfterReopen(const std::filesystem::path& root)
+{
+    // 与其他存储测试隔离，旧项目从默认的空调色覆盖开始。
+    std::error_code error;
+    std::filesystem::create_directories(root, error);
+    auto& controller = MMM::Logic::ProjectController::instance();
+    if ( error || !controller.openProject(root).m_opened ) return false;
+    // 持有关闭前的快照，模拟渲染已开始而逻辑线程正在释放项目的顺序。
+    const auto previous = controller.uiSnapshot();
+    // 旧对象释放后发布槽必须为空，读者持有的旧快照仍有效。
+    if ( !previous || !controller.closeProject().m_closed ||
+         controller.uiSnapshot() || !controller.openProject(root).m_opened )
+        return false;
+    // 新快照必须可独立读取，旧快照保留的根仍应匹配同一路径。
+    const auto current = controller.uiSnapshot();
+    // 复用同一个目录，确保测试不会仅靠根路径不同就通过。
+    bool ok =
+        check(current && previous->m_projectRoot == current->m_projectRoot &&
+                  previous->m_generation != current->m_generation,
+              "a new project instance must have a fresh generation");
+
+    // 过期请求故意在新工程建立后排入，验证拒绝发生在提交点而非关闭时碰巧清槽。
+    controller.queueUiSettingsEdit({
+        .m_generation             = previous->m_generation,
+        .m_colorPaletteSchemeName = "stale",
+    });
+    ok &= check(!controller.applyPendingUiSettingsEdit(),
+                "a queued edit from the closed project must be discarded");
+    if ( current ) {
+        // 两项独立设置先后队列，模拟逻辑循环尚未取走第一项时提交另一项。
+        controller.queueUiSettingsEdit({
+            .m_generation             = current->m_generation,
+            .m_colorPaletteSchemeName = "current",
+        });
+        // 明确选择与默认不同的数值，避免空操作也满足最终断言。
+        // 调色板请求没有备份字段，备份请求也不能清除排队的调色板字段。
+        MMM::Config::AutoBackupConfig backup;
+        backup.maxBackupCount = 42;
+        controller.queueUiSettingsEdit({
+            .m_generation         = current->m_generation,
+            .m_autoBackupOverride = std::optional{ backup },
+        });
+        // 控制器入口正常由逻辑线程调用。测试不启动并发线程，按既定顺序
+        // 分别调用应用和保存，使回归不依赖调度碰巧撞上工程切换。
+        ok &= check(
+            controller.applyPendingUiSettingsEdit() && controller.saveProject(),
+            "both current project fields should be committed");
+        // 最终设置需从保存后重新发布的快照读取；旧版本也继续保持原值。
+        const auto committed = controller.uiSnapshot();
+        ok &= check(
+            committed &&
+                committed->m_settings.m_colorPaletteSchemeName == "current" &&
+                committed->m_settings.m_autoBackupOverride == backup &&
+                previous->m_settings.m_colorPaletteSchemeName.empty(),
+            "published snapshots must be immutable across save and reopen");
+    }
+    // 关闭清理单例，避免后续测试沿用本场景的工程及已发布快照。
+    return controller.closeProject().m_closed && ok;
+}
+
 }  // namespace
 
 /// @brief 运行项目分片存储与旧格式迁移测试。
@@ -538,7 +605,9 @@ int main()
         testInternalDirectoryIsNotScanned(root) &&
         testLegacyFallbackAndRemoval(fallbackRoot) &&
         testOpenProjectPreservesDraftLaneGroups(openProjectRoot) &&
-        testOpenWithoutConfigurationInheritsPalette(root / "no_configuration");
+        testOpenWithoutConfigurationInheritsPalette(root /
+                                                    "no_configuration") &&
+        testProjectUiStateAfterReopen(root / "project_ui_state");
     std::filesystem::remove_all(root, filesystemError);
     // 清理只使用本次生成的具体路径，不根据项目资源字段扩展删除范围。
     // 只清理本次生成的根；测试成功与否由前面的业务断言决定。

@@ -4,11 +4,11 @@
 #include "config/skin/translation/Translation.h"
 #include "imgui.h"
 #include "imgui_internal.h"
-#include "logic/EditorEngine.h"
-#include "mmm/project/Project.h"
+#include "logic/ProjectController.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <utility>
 
 namespace MMM::UI
 {
@@ -16,8 +16,8 @@ namespace MMM::UI
 /// @brief 渲染项目设置页。
 ///
 /// 页面只在已有工程时展示，包含只读工程路径、项目级音符调色板和自动备份覆盖
-/// 三组信息。所有修改直接落到当前 Project 设置草稿，函数末尾统一同步备份配置
-/// 并保存工程，避免每个控件分别写盘。
+/// 三组信息。控件只修改本帧拥有的草稿，逻辑线程接到差量后复核工程代次，
+/// 然后合并设置并统一保存。
 ///
 /// 项目级调色板允许继承软件默认、显式使用皮肤默认或选择命名方案。自动备份
 /// 可以继承全局配置，也可以复制当前全局值作为项目覆盖起点。
@@ -27,10 +27,10 @@ namespace MMM::UI
 /// 的值必须在本帧渲染结束前有效，不能保存到页面生命周期之外。
 ///
 /// 修改状态遵循以下约定：
-/// - 控件只修改 Project 中已经加载的设置对象；
+/// - 控件只修改界面持有的草稿；
 /// - `changed` 汇总本帧是否需要保存；
 /// - 覆盖开关延迟到控件布局完成后再增删 optional；
-/// - 保存前把最终备份覆盖值同步给 EditorEngine；
+/// - 设置请求只携带有变动的字段，其他入口的编辑保持有效；
 /// - 只读路径和折叠状态不计入工程修改。
 ///
 /// 自动备份覆盖使用 optional 表达继承关系，而不是复制后持续同步。无值时运行时
@@ -47,9 +47,8 @@ namespace MMM::UI
 /// - 不验证备份文件内容，数量裁剪由备份服务处理；
 /// - 不把窗口折叠状态写入工程文件。
 ///
-/// `Project*` 是 EditorEngine 管理的非拥有观察指针。页面渲染期间不会切换工程，
-/// 因此登记到 Clay 的回调可以捕获该指针和设置引用；若未来允许回调跨帧执行，
-/// 必须改为稳定工程 ID 并在执行时重新查询对象。
+/// 回调借用的草稿和不可变快照由本帧持有，逻辑线程可同时释放原工程。
+/// 即便同目录重新打开，代次变化也会使旧设置提交失效。
 ///
 /// 翻译字符串通过 `TR_CACHE` 保持到本帧控件提交完成。项目路径则先转换成独立的
 /// UTF-8 字符串并按值捕获，避免文件系统 path 的平台编码泄漏到 ImGui。设置项
@@ -62,9 +61,8 @@ namespace MMM::UI
 /// 实际修改后触发，不得添加无条件文件访问。
 void SettingsView::drawProjectSettings()
 {
-    // Engine 提供当前 Project 观察指针，本函数不取得额外所有权。
-    auto& engine  = Logic::EditorEngine::instance();
-    auto* project = engine.getCurrentProject();
+    auto&      controller = Logic::ProjectController::instance();
+    const auto project    = controller.uiSnapshot();
 
     if ( !project ) {
         // 无工程时只显示明确提示，不构建指向空项目的 Clay Lambda。
@@ -76,6 +74,11 @@ void SettingsView::drawProjectSettings()
             dangerCol, "%s", TR("ui.settings.project.no_project").data());
         return;
     }
+
+    // 可编辑引用都指向本地副本，不会越过本次绘制。
+    // 另存转正前只展示已有覆盖配置；只读状态也会在逻辑端复核。
+    auto draft = project->m_settings;
+    ImGui::BeginDisabled(project->m_isTemporaryProject);
 
     // Clay 描述树每帧重建，SettingsView 按行和节索引复用布局对象。
     // clear() 只清空本帧的父子关系，行和 section 的存储由页面统一持有。
@@ -90,9 +93,8 @@ void SettingsView::drawProjectSettings()
     // 两者分离后，普通备份字段编辑不会重复创建覆盖配置。
     // 可选值存在即表示项目覆盖全局自动备份配置。
     // 此布尔快照同时驱动复选框；不能直接把 optional 地址交给 ImGui。
-    bool useProjectAutoBackupConfig =
-        project->m_settings.m_autoBackupOverride.has_value();
-    const float labelW = getCurrentTabLabelWidth(
+    bool useProjectAutoBackupConfig = draft.m_autoBackupOverride.has_value();
+    const float labelW              = getCurrentTabLabelWidth(
         Config::AppConfig::instance().getWindowContentScale());
     // 标签宽度由当前页内容和窗口缩放共同决定，所有设置行共享同一对齐基线。
 
@@ -278,9 +280,8 @@ void SettingsView::drawProjectSettings()
                 auto& paletteConfig = Config::AppConfig::instance()
                                           .getEditorSettings()
                                           .colorPalettes;
-                auto& projectScheme =
-                    project->m_settings.m_colorPaletteSchemeName;
-                // 引用直接指向工程设置，选择项生效后无需额外复制回 Project。
+                auto& projectScheme = draft.m_colorPaletteSchemeName;
+                // 选择项先写入界面草稿，布局结束后比较变化。
 
                 // 组合框预览只负责显示；持久化值始终保留在 projectScheme。
                 std::string previewName;
@@ -372,7 +373,7 @@ void SettingsView::drawProjectSettings()
                 }
             });
 
-        if ( !project->m_settings.m_autoBackupOverride ) {
+        if ( !draft.m_autoBackupOverride ) {
             // 继承状态展示说明文本，不复制全局具体模式到不可编辑控件。
             addSettingItem(
                 *sec,
@@ -391,7 +392,7 @@ void SettingsView::drawProjectSettings()
                 false);
         } else {
             // optional 存在时引用在本帧内稳定，后续控件直接编辑项目覆盖草稿。
-            auto& backup = *project->m_settings.m_autoBackupOverride;
+            auto& backup = *draft.m_autoBackupOverride;
             // 模式决定显示定时参数、事件触发开关或仅禁用状态。
             // 枚举以整数引用传给通用 helper，选项值必须与枚举常量一致。
             addRadioSetting(
@@ -560,22 +561,31 @@ void SettingsView::drawProjectSettings()
         // 这样不会在同一帧使 backup 引用或已登记的控件回调失效。
         if ( useProjectAutoBackupConfig ) {
             // 开启覆盖时复制当前全局配置，提供与原行为一致的编辑起点。
-            project->m_settings.m_autoBackupOverride =
+            draft.m_autoBackupOverride =
                 Config::AppConfig::instance().getEditorSettings().autoBackup;
         } else {
             // 关闭覆盖清空 optional，项目后续实时继承全局配置。
-            project->m_settings.m_autoBackupOverride.reset();
+            draft.m_autoBackupOverride.reset();
         }
         // 此处只改变数据模型；下一帧根据新 optional 值重建对应控件集合。
     }
 
-    if ( changed ) {
-        // 先同步引擎当前项目备份策略，再统一保存项目配置和资源清单。
-        // 调色板和备份修改共享一次保存，避免一次交互造成多次磁盘写入。
-        // 折叠、滚动和普通悬浮不会设置 changed，因此不会触发保存。
-        engine.setProjectAutoBackupOverride(
-            project->m_settings.m_autoBackupOverride);
-        engine.saveProject();
+    ImGui::EndDisabled();
+    if ( changed && !project->m_isTemporaryProject ) {
+        Logic::ProjectUiSettingsEdit edit;
+        // 代次绑定的是读取草稿的工程实例，即便新工程复用了同一目录也不能提交。
+        edit.m_generation = project->m_generation;
+        // 比较每个字段，防止另一入口已改动的值被这帧的完整快照覆盖。
+        if ( draft.m_colorPaletteSchemeName !=
+             project->m_settings.m_colorPaletteSchemeName )
+            edit.m_colorPaletteSchemeName =
+                std::move(draft.m_colorPaletteSchemeName);
+        if ( draft.m_autoBackupOverride !=
+             project->m_settings.m_autoBackupOverride )
+            // 外层表示请求存在，空的内部值仍须实际清除工程覆盖。
+            edit.m_autoBackupOverride.emplace(draft.m_autoBackupOverride);
+        if ( edit.m_colorPaletteSchemeName || edit.m_autoBackupOverride )
+            controller.queueUiSettingsEdit(std::move(edit));
     }
 }
 

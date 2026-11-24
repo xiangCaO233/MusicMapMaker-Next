@@ -13,6 +13,7 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectController.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/project/Project.h"
@@ -236,7 +237,7 @@ std::filesystem::path stripProjectFolderPrefix(
 }
 
 /// @brief 将项目资源路径规整为项目根相对路径。
-/// @param project 当前项目。
+/// @param root 工程根目录。
 /// @param path 资源路径。
 /// @return 可用于谱面元数据持久化的项目相对路径。
 ///
@@ -246,13 +247,13 @@ std::filesystem::path stripProjectFolderPrefix(
 /// 只有自动剥离前缀属于推测性修复，因此要求目标真实存在才采用。
 /// 本函数不复制文件，导入动作由 importProjectResource 的独立流程负责。
 std::filesystem::path normalizeProjectResourcePath(
-    const MMM::Project& project, const std::filesystem::path& path)
+    const std::filesystem::path& root, const std::filesystem::path& path)
 {
     // 空选择继续以空路径表示未绑定资源。
     if ( path.empty() ) return {};
 
     // 词法规整项目根，避免后续组合出现多余点号分量。
-    const auto projectRoot = project.m_projectRoot.lexically_normal();
+    const auto projectRoot = root.lexically_normal();
     if ( path.is_relative() ) {
         // 先处理压缩包或对话框可能返回的重复根目录名。
         const auto stripped = stripProjectFolderPrefix(projectRoot, path);
@@ -489,13 +490,12 @@ std::string NewBeatmapWizard::findAudioTrackIdForPath(
     const std::filesystem::path& path) const
 {
     // 没有当前项目或空路径时无法解析资源表。
-    auto* project = Logic::EditorEngine::instance().getCurrentProject();
-    if ( !project || path.empty() ) return {};
+    auto project = Logic::ProjectController::instance().uiSnapshot();
+    if ( !project || project->m_generation != m_projectGeneration ||
+         path.empty() )
+        return {};
 
     for ( const auto& resource : project->m_audioResources ) {
-        // 音效等非主音轨不作为新谱面的时间基准。
-        if ( resource.m_type != MMM::AudioTrackType::Main ) continue;
-
         // 同时支持路径比较和历史 filename-ID 约定。
         const auto resourcePath = Config::utf8ToPath(resource.m_path);
         if ( resourcePathMatches(resourcePath, path) ||
@@ -776,17 +776,17 @@ std::string NewBeatmapWizard::formatMeasuredTimingSummary() const
 bool NewBeatmapWizard::hasInternalNameConflict() const
 {
     // 项目关闭过渡中没有可比较的谱面列表。
-    auto* project = Logic::EditorEngine::instance().getCurrentProject();
-    if ( !project ) return false;
+    auto project = Logic::ProjectController::instance().uiSnapshot();
+    if ( !project || project->m_generation != m_projectGeneration )
+        return false;
 
     // 空内部名由其他创建校验处理，这里不制造重复提示。
     std::string name(m_nameBuf);
     if ( name.empty() ) return false;
 
     // 使用精确大小写比较，与项目 m_name 身份规则保持一致。
-    return std::any_of(project->m_beatmaps.begin(),
-                       project->m_beatmaps.end(),
-                       [&](const auto& entry) { return entry.m_name == name; });
+    return std::ranges::find(project->m_beatmapNames, name) !=
+           project->m_beatmapNames.end();
 }
 
 /// @brief 汇总向导状态并向编辑器命令队列提交创建谱面请求。
@@ -804,9 +804,11 @@ void NewBeatmapWizard::submitCreateRequest()
 
     // 命令使用值语义携带新谱面初始状态。
     Logic::CmdCreateBeatmap cmd;
-    cmd.origin         = m_origin;
-    cmd.baseMeta       = m_meta;
-    cmd.initialTimings = m_measuredTimings;
+    cmd.origin = m_origin;
+    // 命令可能等待正在更新的会话；项目代次在真正创建前再次由引擎检查。
+    cmd.projectGeneration = m_projectGeneration;
+    cmd.baseMeta          = m_meta;
+    cmd.initialTimings    = m_measuredTimings;
     if ( m_createMode == CreateMode::OpenTemplate && m_templateBeatmap ) {
         // 源谱面可能在向导打开期间发生编辑，提交前刷新一次。
         syncSelectedTemplateBeatmap();
@@ -851,9 +853,9 @@ void NewBeatmapWizard::renderTemplatePickerPopup(
             for ( const auto& option : templateOptions ) {
                 // 可见标签包含显示名和内部名，## 后使用唯一 cameraId。
                 std::string label    = fmt::format("{} ({})##{}",
-                                                   option.displayName,
-                                                   option.internalName,
-                                                   option.cameraId);
+                                                option.displayName,
+                                                option.internalName,
+                                                option.cameraId);
                 bool        selected = option.cameraId == m_templateCameraId;
                 if ( ::MMM::UI::FeedbackSelectable(label.c_str(), selected) ) {
                     // 选择行为同时更新模式、源对象和资源默认值。
@@ -1199,8 +1201,8 @@ void NewBeatmapWizard::openResourcePicker(ResourceTarget target)
     config.path              = settings.lastFilePickerPath;
     config.countSelectionMax = 1;
     config.flags             = ImGuiFileDialogFlags_Modal |
-                               ImGuiFileDialogFlags_HideColumnType |
-                               ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                   ImGuiFileDialogFlags_HideColumnType |
+                   ImGuiFileDialogFlags_ReadOnlyFileNameField;
     // 稳定 key 供 renderResourcePicker 在后续帧查询同一实例。
     ImGuiFileDialog::Instance()->OpenDialog(
         "NewBeatmapResourcePicker",
@@ -1298,7 +1300,12 @@ void NewBeatmapWizard::importResource(const std::filesystem::path& path)
     // 项目资源表和导入命令需要与会话切换互斥。
     auto&           engine = Logic::EditorEngine::instance();
     std::lock_guard lock(engine.getSessionMutex());
-    // 项目可能在文件选择器打开期间被关闭。
+    // 所有权转移与本确认持同一锁。同目录重开也不能消费旧草稿的导入，
+    // 临时工程则仅用于预览，不允许从这个入口复制新资源。
+    const auto snapshot = Logic::ProjectController::instance().uiSnapshot();
+    if ( !snapshot || snapshot->m_generation != m_projectGeneration ||
+         snapshot->m_isTemporaryProject )
+        return;
     auto* project = engine.getCurrentProject();
     if ( !project ) return;
     if ( m_resourceTarget == ResourceTarget::Audio &&
@@ -1467,19 +1474,21 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     // 基础信息字段直接编辑向导缓冲，提交时统一同步到 m_meta。
     ImGui::SeparatorText(TR("ui.settings.beatmap.info").data());
     // 仅当前项目能提供权威信息；没有项目时继续显示下方已有的错误说明。
-    auto* project = Logic::EditorEngine::instance().getCurrentProject();
+    auto project = Logic::ProjectController::instance().uiSnapshot();
+    // 向导绑定打开时的工程，切换后不允许重新绑定旧草稿中的相对路径。
+    if ( project && project->m_generation != m_projectGeneration )
+        project.reset();
     if ( project &&
          FeedbackButton(
              TR("ui.wizard.new_beatmap.fill_from_project").data()) ) {
         // 项目标题和艺术家没有独立 Unicode 字段，复制到两种谱面展示文本。
-        const auto& metadata = project->m_metadata;
-        copyToBuffer(m_titleBuf, sizeof(m_titleBuf), metadata.m_title);
+        copyToBuffer(m_titleBuf, sizeof(m_titleBuf), project->m_title);
         copyToBuffer(
-            m_titleUnicodeBuf, sizeof(m_titleUnicodeBuf), metadata.m_title);
-        copyToBuffer(m_artistBuf, sizeof(m_artistBuf), metadata.m_artist);
+            m_titleUnicodeBuf, sizeof(m_titleUnicodeBuf), project->m_title);
+        copyToBuffer(m_artistBuf, sizeof(m_artistBuf), project->m_artist);
         copyToBuffer(
-            m_artistUnicodeBuf, sizeof(m_artistUnicodeBuf), metadata.m_artist);
-        copyToBuffer(m_authorBuf, sizeof(m_authorBuf), metadata.m_mapper);
+            m_artistUnicodeBuf, sizeof(m_artistUnicodeBuf), project->m_artist);
+        copyToBuffer(m_authorBuf, sizeof(m_authorBuf), project->m_mapper);
         // 本次按钮操作覆盖展示字段；随后重新选音频则由新音频标签更新这些字段。
         // 难度、BPM、资源和轨道数属于单张谱面，不从项目展示元数据推导。
     }
@@ -1572,14 +1581,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         m_selectedAudioPath.empty()
             ? TR("ui.wizard.new_beatmap.select_audio").data()
             : Config::pathToUtf8(m_selectedAudioPath);
-    /// @brief 当前项目是否至少存在一个可绑定到谱面的主音轨。
-    const bool hasSelectableMainAudio =
-        std::any_of(project->m_audioResources.begin(),
-                    project->m_audioResources.end(),
-                    [](const auto& resource) {
-                        // 音效轨道不能成为谱面的时间基准。
-                        return resource.m_type == MMM::AudioTrackType::Main;
-                    });
+    // 发布模型已过滤音效资源，静置绘制只读容器大小。
+    const bool hasSelectableMainAudio = !project->m_audioResources.empty();
 
     // 标签宽度在当前字体下测量，保证按钮列对齐且完整显示翻译文本。
     const char* measureBpmLabel =
@@ -1606,8 +1609,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         ImGui::GetStyle().FramePadding.x * 2.0f;
     const float measureBpmWidth = ImGui::CalcTextSize(measureBpmLabel).x +
                                   ImGui::GetStyle().FramePadding.x * 2.0f;
-    const float autoBpmWidth    = ImGui::CalcTextSize(autoBpmLabel).x +
-                                  ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float autoBpmWidth = ImGui::CalcTextSize(autoBpmLabel).x +
+                               ImGui::GetStyle().FramePadding.x * 2.0f;
     const auto  renameLabel = TR("ui.file_manager.context.rename").toString();
     const float renameButtonWidth = ImGui::CalcTextSize(renameLabel.c_str()).x +
                                     ImGui::GetStyle().FramePadding.x * 2.0F;
@@ -1640,10 +1643,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     const ImVec2 audioRowMin = ImGui::GetCursorScreenPos();
     if ( ::MMM::UI::FeedbackBeginCombo("##NewBeatmapAudioSelect",
                                        audioPreview.c_str()) ) {
-        // 只列出项目资源表中的主音轨。
+        // 候选直接借用本帧项目快照，不在组合框中读取可变资源表。
         for ( const auto& res : project->m_audioResources ) {
-            if ( res.m_type != MMM::AudioTrackType::Main ) continue;
-
             bool        isSelected = (m_selectedAudioTrackId == res.m_id);
             std::string label      = res.m_id + "##" + res.m_path;
             if ( ::MMM::UI::FeedbackSelectable(label.c_str(), isSelected) ) {
@@ -1996,7 +1997,10 @@ void NewBeatmapWizard::open(Logic::BeatmapCreateOrigin origin)
     m_shouldOpen = true;
     // 每次显式打开都是独立创建流程，入口在 reset 后写入以免被旧状态覆盖。
     reset();
-    m_origin = origin;
+    m_origin           = origin;
+    const auto project = Logic::ProjectController::instance().uiSnapshot();
+    // 无工程时保存哨兵代次；随后打开另一个工程也不沿用这次草稿。
+    m_projectGeneration = project ? project->m_generation : 0;
     publishInteraction(Event::BeatmapCreateInteractionStage::WizardOpened);
 }
 
@@ -2011,17 +2015,20 @@ void NewBeatmapWizard::open(Logic::BeatmapCreateOrigin origin)
 bool NewBeatmapWizard::openWithMeasuredTimings(
     const std::string& audioTrackId, const std::vector<::MMM::Timing>& timings)
 {
-    const auto* project = Logic::EditorEngine::instance().getCurrentProject();
+    const auto project = Logic::ProjectController::instance().uiSnapshot();
     if ( m_isOpen || !project || audioTrackId.empty() || timings.empty() )
         return false;
 
     for ( const auto& resource : project->m_audioResources ) {
-        if ( resource.m_id != audioTrackId ||
-             resource.m_type != ::MMM::AudioTrackType::Main ||
-             resource.m_path.empty() )
+        if ( resource.m_id != audioTrackId || resource.m_path.empty() )
             continue;
 
         open();
+        if ( m_projectGeneration != project->m_generation ) {
+            // 工程可在工具结果与真正打开向导之间更换，不能复用旧轨道的测量值。
+            close();
+            return false;
+        }
         m_selectedAudioTrackId = resource.m_id;
         onAudioSelected(Config::utf8ToPath(resource.m_path));
         if ( applyMeasuredTimingsFromTool(audioTrackId, timings) ) return true;
@@ -2149,14 +2156,15 @@ void NewBeatmapWizard::onAudioSelected(const std::filesystem::path& path)
     m_measuredTimings.clear();
 
     // 项目关闭竞态下仍记录原路径，待后续用户修正。
-    auto* project = Logic::EditorEngine::instance().getCurrentProject();
-    if ( !project ) {
+    auto project = Logic::ProjectController::instance().uiSnapshot();
+    if ( !project || project->m_generation != m_projectGeneration ) {
         m_selectedAudioPath = path;
         return;
     }
 
     // 项目内资源尽量使用可移植相对路径。
-    m_selectedAudioPath = normalizeProjectResourcePath(*project, path);
+    m_selectedAudioPath =
+        normalizeProjectResourcePath(project->m_projectRoot, path);
     // 路径已规范化且满足提交条件后才记录准备阶段；探针失败不撤销有效选择。
     publishInteraction(Event::BeatmapCreateInteractionStage::AudioSelected);
 

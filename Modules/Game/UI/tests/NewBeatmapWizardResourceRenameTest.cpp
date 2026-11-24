@@ -187,6 +187,7 @@ int main(int argc, char** argv)
     resource.m_type = MMM::AudioTrackType::Main;
     project->m_audioResources.push_back(resource);
     MMM::UI::NewBeatmapWizard wizard;
+    wizard.open();
     // 草稿与物理文件必须同时验证，选择路径变化不能代替磁盘提交。
     const bool passed =
         MMM::UI::NewBeatmapWizardResourceRenameTestAccess::run(wizard,

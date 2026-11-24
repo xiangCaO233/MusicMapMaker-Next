@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include "common/LogicCommands.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/timing/Timing.h"
@@ -104,6 +106,10 @@ private:
     std::shared_ptr<const bool> m_resourcePickerLifetime;
     /// @brief 当前资源选择器的导入用途。
     ResourceTarget m_resourceTarget{ ResourceTarget::Audio };
+    /// @brief 向导启动时的工程代次，工程更换后所有旧草稿操作失效。
+    std::uint64_t m_projectGeneration{};
+    /// @brief 改名请求冻结的工程代次，确认时在会话锁内复核。
+    std::uint64_t m_renameProjectGeneration{};
     /// @brief 最近一次导入失败的说明。
     std::string m_resourceImportError;
     /// @brief 消费当前下拉框收到的操作系统文件拖放。
