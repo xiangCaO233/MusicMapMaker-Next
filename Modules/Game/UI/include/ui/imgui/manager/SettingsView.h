@@ -273,11 +273,9 @@ private:
     /// @brief 固定 UTF-8 文件名输入缓冲；过长旧名称拒绝而不是截断。
     std::array<char, 1024> m_resourceRenameBuffer{};
 
-    /// @brief 选择器打开时的项目根目录，用于拒绝跨项目误绑定。
-    std::filesystem::path m_resourceImportProjectRoot;
-
-    /// @brief 选择器打开时的谱面路径，用于拒绝切谱后的旧结果。
-    std::filesystem::path m_resourceImportBeatmapPath;
+    /// @brief 按钮点击时的设置快照，弱引用绑定工程中的具体载图实例。
+    std::shared_ptr<const Logic::BeatmapSettingsSnapshot>
+        m_resourceImportSource;
 
     /// @brief 最近一次资源导入错误，仅在用户再次选择或成功后清空。
     std::string m_beatmapResourceImportError;

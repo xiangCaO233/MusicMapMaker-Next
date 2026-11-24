@@ -493,7 +493,9 @@
 
 ### P1 · R02 · 资源导入可能覆盖另一处编辑
 
-- [ ] 弹窗按工程根和谱面路径校验，拿旧草稿补几个实时字段后提交整份元数据，绕过 PERF-05 的实例及差量保护。打开选择器后修改标题、同路径重载，再导入封面，验证只改变目标资源且拒绝旧实例。
+- [x] 弹窗按工程根和谱面路径校验，拿旧草稿补几个实时字段后提交整份元数据，绕过 PERF-05 的实例及差量保护。打开选择器后修改标题、同路径重载，再导入封面，验证只改变目标资源且拒绝旧实例。
+
+  已验证。Linux Clang 22 RelWithDebInfo 全量构建和 3 项回归通过，覆盖导入期间排队的标题更新和同路径重载后拒绝旧请求。
 
 [Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp:204](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp#L204) [Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp:221](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp#L221) [Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp:273](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp#L273) [Modules/Game/Logic/src/logic/session/BeatmapSession_Commands.cpp:2731](../Modules/Game/Logic/src/logic/session/BeatmapSession_Commands.cpp#L2731)
 

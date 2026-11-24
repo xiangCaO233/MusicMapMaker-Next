@@ -8,6 +8,7 @@
 #include "config/skin/translation/Translation.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
+#include "logic/BeatmapSettingsSnapshot.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectController.h"
 #include "logic/SharedResourceRenameService.h"
@@ -183,8 +184,8 @@ struct SettingsResourceRenameTestAccess {
         // 普通确认和复制确认的文案宽度不同，每次动作都重新定位。
         // 取消与确认位于同一行，不能复用第一次按钮的旧命中范围。
         const auto click = [&](bool cancel) {
-            const auto  title  = TR("ui.file_manager.rename_title").toString() +
-                                 "###SettingsResourceRename";
+            const auto title = TR("ui.file_manager.rename_title").toString() +
+                               "###SettingsResourceRename";
             const auto* window = ImGui::FindWindowByName(title.c_str());
             // 找不到生产模态窗口必须立即失败，不能继续点击旧坐标。
             // 固定内部 ID 排除本地化标题不同导致误认窗口的情况。
@@ -495,6 +496,64 @@ struct SettingsResourceRenameTestAccess {
                   bytes(root / "solo-new.png") == image,
               "exclusive resource retains direct rename behavior",
               passed);
+        // 模拟选择器跨帧持有旧草稿。逻辑队列先收到别处改标题，再收到导入结果。
+        // 断言在消费两条命令后执行，所以仅从当前模型复制旧标题也无法通过。
+        // 这和直接改模型再打开弹窗不同，可覆盖同一轮 update 的写入顺序。
+        view.m_beatmapResourceTarget =
+            SettingsView::BeatmapResourceTarget::Cover;
+        auto source = std::make_shared<Logic::BeatmapSettingsSnapshot>();
+        // 弹窗打开时读取这些值，返回时即使同一文件仍在也要重新校验。
+        source->projectRoot         = root;
+        source->session             = session;
+        source->beatmap             = session->getContext().currentBeatmap;
+        view.m_resourceImportSource = source;
+        auto newerMeta =
+            session->getContext().currentBeatmap->m_baseMapMetadata;
+        newerMeta.title = "Title changed during picker";
+        session->pushCommand(Logic::CmdUpdateBeatmapMetadata{ newerMeta });
+        // 工程内资源可直接复用，无需依赖图片解码或外部测试文件。
+        std::ofstream(root / "Fresh.png") << "cover import fixture";
+        view.importBeatmapResource(root / "Fresh.png");
+        session->update(0, engine.getEditorConfig(), true);
+        const auto& imported =
+            session->getContext().currentBeatmap->m_baseMapMetadata;
+        check(view.m_beatmapResourceImportError.empty() &&
+                  imported.title == newerMeta.title &&
+                  imported.cover_path == "Fresh.png",
+              "import applies only its resource fields after queued edit",
+              passed);
+
+        // 同路径重新加载后，旧选择结果不能被复制到新实例。
+        // 使用真实载图命令，保留原资源请求并经过正常保存和载图边界。
+        // 不换项目根，保证只比较路径的回归实现仍会在本例失败。
+        auto replacement = std::make_shared<BeatMap>(
+            BeatMap::loadFromFile(root / "current.mmm"));
+        // 文件加载返回绝对路径，但已打开会话在保存后可能使用工程相对路径。
+        // 复用现有路径值，确保测试只更换载图实例，不靠表示形式触发拒绝。
+        replacement->m_baseMapMetadata.map_path = newerMeta.map_path;
+        session->pushCommand(Logic::CmdLoadBeatmap{ replacement });
+        session->update(0, engine.getEditorConfig(), true);
+        check(source->beatmap.lock() != session->getContext().currentBeatmap &&
+                  session->getContext()
+                          .currentBeatmap->m_baseMapMetadata.map_path ==
+                      newerMeta.map_path,
+              "test reloaded the same path with a new beatmap instance",
+              passed);
+        // 读取新的封面基线，区分拒绝旧请求与误将结果排队到下一次 update。
+        // 选择资源仍走公开文件路径，不依赖鼠标或桌面文件对话框。
+        const auto beforeStaleImport =
+            session->getContext().currentBeatmap->m_baseMapMetadata.cover_path;
+        std::filesystem::create_directory(root / "picker", error);
+        std::ofstream(root / "picker" / "AfterReload.png") << "stale cover";
+        view.importBeatmapResource(root / "picker" / "AfterReload.png");
+        session->update(0, engine.getEditorConfig(), true);
+        check(!view.m_beatmapResourceImportError.empty() &&
+                  session->getContext()
+                          .currentBeatmap->m_baseMapMetadata.cover_path ==
+                      beforeStaleImport &&
+                  !std::filesystem::exists(root / "AfterReload.png"),
+              "same-path replacement rejects old picker result",
+              passed);
         return passed;
     }
 };
@@ -549,9 +608,9 @@ int main(int argc, char** argv)
     // 资源 ID 与实际文件名一致，覆盖当前歌曲提示和自动采样的常见表示。
     // 音量刻意不同于导入默认值，复制丢失配置时断言才能识别。
     project->m_audioResources                         = { MMM::AudioResource{
-        .m_id   = "Song.wav",
-        .m_path = "Song.wav",
-        .m_type = MMM::AudioTrackType::Main } };
+                                .m_id   = "Song.wav",
+                                .m_path = "Song.wav",
+                                .m_type = MMM::AudioTrackType::Main } };
     project->m_audioResources.front().m_config.volume = .75F;
     project->m_beatmaps = { { "current", "current.mmm", "" },
                             { "imd", "Song_4k_Test.imd", "" },
