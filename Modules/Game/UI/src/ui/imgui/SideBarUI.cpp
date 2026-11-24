@@ -7,6 +7,7 @@
 #include "event/ui/UISubViewToggleEvent.h"
 #include "imgui.h"
 #include "logic/ProjectController.h"
+#include "logic/ProjectUiState.h"
 #include "mmm/SafeParse.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
@@ -212,16 +213,16 @@ void SideBarUI::setActiveTab(SideBarTab tab)
 void SideBarUI::persistWorkspaceActiveTab(SideBarTab tab) const
 {
     // 无活动项目时侧栏状态只保留在本次 UI 会话。
-    auto* project = Logic::ProjectController::instance().currentProject();
-    if ( !project ) {
-        return;
-    }
-
-    // 稳定英文名称写入项目级工作区，不依赖当前翻译文本。
-    project->m_settings.m_workspace.m_sidebarActiveTab =
-        SideBarUI::workspaceNameFromTab(tab);
-    // 页签点击后立即保存，保证异常退出前仍可恢复工作区。
-    Logic::ProjectController::instance().saveProject();
+    auto&      controller = Logic::ProjectController::instance();
+    const auto project    = controller.uiSnapshot();
+    if ( !project ) return;
+    // 侧栏只提交当前页签。逻辑侧按打开实例校验并保存，旧页签不会覆盖新工作区。
+    // 差量仅修改页签，其他控件排入的设置保留到逻辑侧合并。
+    // 当前 UI 不等待磁盘保存，下一帧使用本地已切换的页签。
+    controller.queueUiSettingsEdit({
+        .m_generation       = project->m_generation,
+        .m_sidebarActiveTab = SideBarUI::workspaceNameFromTab(tab),
+    });
 }
 
 /// @brief 同步侧栏管理器状态并绘制固定页签条。

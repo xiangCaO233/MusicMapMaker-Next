@@ -24,8 +24,10 @@
 #include "logic/ImdPackageExportService.h"
 #include "logic/MalodyPackageCompatibility.h"
 #include "logic/MczAudioOriginAlignment.h"
+#include "logic/ProjectController.h"
 #include "logic/ProjectDraftLaneService.h"
 #include "logic/ProjectResourceService.h"
+#include "logic/ProjectUiState.h"
 #include "logic/audio/AudioTimelineDescriptor.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteComponent.h"
@@ -507,8 +509,8 @@ std::filesystem::path prepareMalodySaveAudio(
         resolveCurrentProjectPath(snapshot.m_baseMapMetadata.map_path);
     auto* project = MMM::Logic::EditorEngine::instance().getCurrentProject();
     const auto* resource  = project ? MMM::Logic::ProjectResourceService::
-                                         findDefaultBeatmapAudioResource(
-                                             *project, snapshot, sourcePath)
+                                          findDefaultBeatmapAudioResource(
+                                              *project, snapshot, sourcePath)
                                     : nullptr;
     auto        audioPath = snapshot.m_baseMapMetadata.song_file_hint;
     if ( resource ) {
@@ -723,9 +725,9 @@ bool clearLinkedMainBgmSamples(MMM::Logic::SessionContext& ctx,
                               : oldMetadata.song_file_hint;
     if ( oldHint.empty() || ctx.trackCount <= 0 ) return false;
 
-    const auto* project      = ctx.collaborationProject
-                                   ? ctx.collaborationProject.get()
-                                   : EditorEngine::instance().getCurrentProject();
+    const auto* project = ctx.collaborationProject
+                              ? ctx.collaborationProject.get()
+                              : EditorEngine::instance().getCurrentProject();
     const auto  oldReference = MMM::Config::pathToUtf8(oldHint);
     auto        view         = ctx.sampleRegistry.view<const SampleComponent>();
     std::vector<entt::entity>     candidates;
@@ -4353,9 +4355,9 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
         // 资源找不到时终止导出，不能回退成恰好同名的无效 ID。
         const auto extension = Config::pathToUtf8(savePath.extension());
         const bool isBms     = packageExtensionEquals(extension, ".bms") ||
-                           packageExtensionEquals(extension, ".bme") ||
-                           packageExtensionEquals(extension, ".bml") ||
-                           packageExtensionEquals(extension, ".pms");
+                               packageExtensionEquals(extension, ".bme") ||
+                               packageExtensionEquals(extension, ".bml") ||
+                               packageExtensionEquals(extension, ".pms");
         const bool needsResourceSnapshot =
             isBms || packageExtensionEquals(extension, ".mc");
         auto exportMap = needsResourceSnapshot
@@ -4537,6 +4539,17 @@ void BeatmapSession::handleCommand(const CmdExportImdPackage& cmd)
         });
     };
 
+    // 资源包选择器在 UI 线程打开，返回路径时旧会话可能已退出。
+    // 检查发生在读取谱面和重建混音图之前，避免用新谱生成旧请求的产物。
+    // 旧工具或测试调用允许不带 UI 代次，仍按当前逻辑上下文导出。
+    // 任何提前返回都会经过文档守卫，避免留下系统选择器创建的空文件。
+    if ( cmd.projectGeneration ) {
+        const auto snapshot = ProjectController::instance().uiSnapshot();
+        if ( !snapshot || snapshot->m_generation != *cmd.projectGeneration ) {
+            publishFailure("项目已切换，已取消资源包导出");
+            return;
+        }
+    }
     if ( !m_ctx->currentBeatmap ) {
         // 无谱面时没有时间线、元数据或资源依赖可供拼装。
         publishFailure("没有可导出的当前谱面");
@@ -4630,6 +4643,23 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
 {
     // 系统保存器可能已创建空目标，所有提前退出都必须结束该平台事务。
     PackageDocumentGuard documentGuard{ cmd.exportPath };
+    // 代次属于一次打开生命周期；重新打开相同目录也不共享打包上下文。
+    // 相对候选和转换选项都由旧目录枚举得到，不能用新项目重新解释。
+    // 过期请求复用导出失败事件，调用方仍能完成原来的状态提示流程。
+    // 不提前保存脏谱，避免已作废的导出命令连带触发持久化。
+    // 在保存脏谱或读取工程数据前验证打开实例，旧选择不能写入新工程。
+    if ( cmd.projectGeneration ) {
+        const auto snapshot = ProjectController::instance().uiSnapshot();
+        if ( !snapshot || snapshot->m_generation != *cmd.projectGeneration ) {
+            Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+                .path         = cmd.exportPath,
+                .success      = false,
+                .isExport     = true,
+                .errorMessage = "项目已切换，已取消打包",
+            });
+            return;
+        }
+    }
     // 打包读取磁盘项目文件，必须先把所有打开会话的脏内容完整落盘。
     if ( !EditorEngine::instance().saveDirtyBeatmapsForPackaging() ) {
         XERROR("PackBeatmap: dirty beatmaps could not be saved");

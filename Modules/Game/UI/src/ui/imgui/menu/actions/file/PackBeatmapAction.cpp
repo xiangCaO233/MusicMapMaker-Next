@@ -5,12 +5,15 @@
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
 
 #include "common/LogicCommands.h"
+#include "common/platform/DocumentStorage.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectController.h"
 #include "logic/ProjectResourceService.h"
+#include "logic/ProjectUiState.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/beatmap/MyO2Bms.h"
 #include "mmm/project/PackageFileTypes.h"
@@ -183,7 +186,9 @@ std::string sanitizePackageFileNamePart(std::string value)
 std::string getPackagePickerDefaultPath(const Config::EditorSettings& settings)
 {
     // 已打开项目时优先在项目根目录旁生成包，便于用户定位。
-    auto* project = Logic::EditorEngine::instance().getCurrentProject();
+    // 默认位置只读访问发布状态，系统对话框要用的是立即复制的目录字符串。
+    const auto  snapshot = Logic::ProjectController::instance().uiSnapshot();
+    const auto* project  = snapshot ? snapshot->m_details.get() : nullptr;
     if ( project && !project->m_projectRoot.empty() ) {
         return Config::pathToUtf8(project->m_projectRoot);
     }
@@ -1115,7 +1120,7 @@ bool PackBeatmapAction::isEnabled(const MainMenuContext& context) const
 {
     // 启用条件不依赖上下文内的窗口或焦点状态。
     (void)context;
-    return Logic::EditorEngine::instance().getCurrentProject() != nullptr;
+    return static_cast<bool>(Logic::ProjectController::instance().uiSnapshot());
 }
 
 /// @brief 打开打包格式选择流程。
@@ -1191,6 +1196,9 @@ void PackBeatmapAction::requestPackBeatmapTo(std::string path)
         return;
     }
 
+    // 目录扫描、目标选取和覆盖确认可能分属多个 UI 帧。
+    // 命令携带最初打开模态的工程代次，不能在确认时改用另一工程的当前值。
+    // 逻辑在读取候选文件或保存打开谱面前再次验证。
     // 命令按值携带路径、候选和覆盖项，UI 状态可在分发后立即清理。
     MenuUtil::dispatchCommand(Logic::CmdPackBeatmap{
         .exportPath                   = path,
@@ -1232,6 +1240,7 @@ void PackBeatmapAction::requestPackBeatmapTo(std::string path)
         .bmsMyO2Grid = m_package.m_bmsMyO2Grid,
         // 覆盖项只作用于本次转换，不回写源谱面元数据。
         .metadataOverrides = m_package.pendingMetadataOverrides,
+        .projectGeneration = m_package.projectGeneration,
     });
     // 命令已获得值副本，清空临时列表避免重复点击再次分发同一请求。
     m_package.pendingRelativePaths.clear();
@@ -1241,6 +1250,7 @@ void PackBeatmapAction::requestPackBeatmapTo(std::string path)
 /// @brief 请求把当前谱面导出为独立 RM/IMD 资源包。
 /// @param path 输出 zip 路径。
 /// @note 目标扩展名统一替换为 .zip，保持资源包协议稳定。
+/// @pre 动作已从当前工程开启格式选择并冻结工程代次。
 /// @warning 该函数只分发命令，不在 UI 线程执行归档写入。
 void PackBeatmapAction::requestExportImdPackageTo(std::string path)
 {
@@ -1249,9 +1259,11 @@ void PackBeatmapAction::requestExportImdPackageTo(std::string path)
     // 即使选择器返回其他后缀，也强制输出 ZIP 容器。
     auto outputPath = Config::utf8ToPath(path);
     outputPath.replace_extension(".zip");
+    // RM/IMD 也依赖项目资源表，独立输出对话框必须保留同一打开实例。
     // 实际资源收集与写盘由逻辑层完成，UI 只提交目标路径。
     MenuUtil::dispatchCommand(Logic::CmdExportImdPackage{
-        .path = Config::pathToUtf8(outputPath),
+        .path              = Config::pathToUtf8(outputPath),
+        .projectGeneration = m_package.projectGeneration,
     });
 }
 
@@ -2019,9 +2031,15 @@ bool PackBeatmapAction::preparePackageBeatmapMetadataEdits(
     m_package.beatmapMetadataEdits.clear();
     m_package.pendingMetadataOverrides.clear();
 
+    // 元数据覆写只对本次选中的相对路径成立，不能在同名的新工程中重用。
+    // 获取其完整投影后再派生源文件路径，避免扫描过程中单条入口悬空。
+    // 没有活动事务时不构造默认覆写，以便调用方终止流程。
     // 项目可能在多个模态窗口之间被关闭，必须重新验证。
-    auto* project = Logic::EditorEngine::instance().getCurrentProject();
-    if ( !project || project->m_projectRoot.empty() ) return false;
+    const auto  snapshot = Logic::ProjectController::instance().uiSnapshot();
+    const auto* project  = snapshot ? snapshot->m_details.get() : nullptr;
+    if ( !project || snapshot->m_generation != m_package.projectGeneration ||
+         project->m_projectRoot.empty() )
+        return false;
 
     // 仅遍历用户冻结的选择，不依赖当前候选 selected 标志。
     for ( const auto& relativePathUtf8 : selectedRelativePaths ) {
@@ -2301,8 +2319,15 @@ void PackBeatmapAction::rebuildPackageCandidateFiles()
     // 先丢弃旧格式候选，扫描失败时不会误显示过期文件。
     m_package.candidateFiles.clear();
 
+    // 当前候选清空后才验证；失效操作不能继续展示上一项目的残留条目。
+    // 即使目录名称相同，打开代次改变也要求重新发起整个打包流程。
+    // 通过 const 投影取得文件路径后，不再向控制器借用可变工程。
     // 格式选择后项目可能已关闭，扫描前重新验证根目录。
-    auto* project = Logic::EditorEngine::instance().getCurrentProject();
+    // 出错时保留空候选，生成路径也不能隐式切换到当时的活动谱面。
+    const auto snapshot = Logic::ProjectController::instance().uiSnapshot();
+    if ( !snapshot || snapshot->m_generation != m_package.projectGeneration )
+        return;
+    const auto* project = snapshot->m_details.get();
     if ( !project || project->m_projectRoot.empty() ) return;
 
     // 目标格式规则决定可读取谱面源和可直接打包的资源扩展名。
@@ -2692,7 +2717,8 @@ std::string PackBeatmapAction::makePackageDefaultFileName() const
 {
     // 无项目或根目录名为空时使用通用 map 基名。
     std::string baseName = "map";
-    auto*       project  = Logic::EditorEngine::instance().getCurrentProject();
+    // 默认输出名只用于提示；无项目时回退通用名，不据此推断已获授权。
+    const auto project = Logic::ProjectController::instance().uiSnapshot();
     if ( project && !project->m_projectRoot.empty() ) {
         // filename 只取项目根最后一段，不把父目录带入保存文件名。
         baseName = Config::pathToUtf8(project->m_projectRoot.filename());
@@ -2712,7 +2738,12 @@ void PackBeatmapAction::openPackFilePicker()
     // 在途系统选择拥有已冻结的相对路径，不能被第二次菜单触发覆盖。
     // 正常取消以后可立即重新进入，不依赖定时器或线程等待。
     if ( m_outputPickerPending ) return;
-    m_bmsTouchFiles = false;
+    const auto project = Logic::ProjectController::instance().uiSnapshot();
+    if ( !project ) return;
+    // 格式选择是本轮事务的开始，后续模态都使用这里采集的身份。
+    // 同一个动作实例还负责消费异步选择结果，过程中保留冻结的输入。
+    m_package.projectGeneration = project->m_generation;
+    m_bmsTouchFiles             = false;
     // 清除所有依赖目标格式或上次候选选择的瞬态数据。
     m_package.candidateFiles.clear();
     m_package.pendingRelativePaths.clear();
@@ -2761,35 +2792,37 @@ void PackBeatmapAction::openPackageOutputFilePicker()
         const nfdu8filteritem_t filter{ "Beatmap Package",
                                         getNativePackageOutputFilterText(
                                             m_package.selectedFileType) };
-        const auto*             project =
-            Logic::EditorEngine::instance().getCurrentProject();
-        // 根路径值只作为本轮请求的项目身份，不持有可变 Project 的观察指针。
-        // 后续返回时重新查询当前项目，不能解引用打开系统界面前的临时引用。
-        // 同一路径的普通文件选择仍按现有覆盖确认流程执行。
-        // 请求期间本动作不能重新进入，选项与候选相对路径因而保持同一事务。
-        // 默认目录和文件名只供选择器初始化，绝不当作用户最终同意的目标。
-        // 原生回调的空路径是取消或失败，不允许自动退回默认文件名导出。
-        // 平台目标创建不等于保存成功，实际写入与发布结果仍由逻辑层报告。
-        // 在 UI 回调这里只冻结路径，不提前读取或转换候选谱面内容。
-        // 因此用户停留在系统界面不会阻塞渲染、逻辑或后台资源处理线程。
-        const auto root =
-            project ? project->m_projectRoot : std::filesystem::path{};
+        // 过滤器和初始路径由选择器入口读取；用户停留期间只保留值状态。
+        // 原始选择和格式选项由同一个事务持有，重复触发一律被 pending 门禁拦住。
+        const auto generation = m_package.projectGeneration;
         // Java 只获得目标 URI，返回值仍是集中工作副本，由原 writer 完成写出。
-        // 回调捕获动作与根路径值，不借用过滤器、默认名或某个窗口的临时地址。
+        // 回调只保存工程代次，不能凭目录名把结果交给同路径重新打开的工程。
+        // 选择器的默认名仅用于初始展示；平台返回路径才代表用户选中的目标。
         NativeFileDialog::saveFileAsync(
             &filter,
             1,
             defaultPath.c_str(),
             defaultFileName.c_str(),
-            [this, root](nfdresult_t result, const std::string& path) {
+            [this, generation](nfdresult_t result, const std::string& path) {
                 // 先解除在途状态，所有失败分支都能让下一次用户操作重新开始。
                 // 原生桌面可能同步完成，Android 则在后续有效 UI 帧消费结果。
                 m_outputPickerPending = false;
-                const auto* current =
-                    Logic::EditorEngine::instance().getCurrentProject();
+                // 回调进入时项目生命周期可能已推进，不能依据旧根指针判断。
+                // UI 先释出在途标志，拒绝该结果后仍可立即开启新的打包事务。
+                // 浏览到了同路径也必须校验，因为用户可以关闭后重新打开。
+                const auto current =
+                    Logic::ProjectController::instance().uiSnapshot();
                 // 取消或换项目后不把旧相对路径交给新项目，也不发空路径命令。
                 if ( result != NFD_OKAY || path.empty() || !current ||
-                     current->m_projectRoot != root ) {
+                     current->m_generation != generation ) {
+                    // Android 可能已创建文档；只释放尚未写入的托管文档路径。
+                    // 取消结果没有文档所有权；仅处理真实选中的托管目标。
+                    // 普通本地路径不属于文档桥接器，不会在这里被删除。
+                    if ( result == NFD_OKAY && !path.empty() ) {
+                        std::string cleanupError;
+                        (void)Common::discardUnwrittenDocument(path,
+                                                               cleanupError);
+                    }
                     m_package.pendingRelativePaths.clear();
                     m_package.pendingMetadataOverrides.clear();
                     if ( result == NFD_ERROR )
@@ -2799,6 +2832,8 @@ void PackBeatmapAction::openPackageOutputFilePicker()
                 // 扩展名仍由已选择格式规范化，ZIP 目标不能误带 MCZ 或 OSZ
                 // 后缀。
                 // 只检测最终本机工作路径；文件系统失败不能落入新文件成功分支。
+                // 后缀归一化只作用于本次返回值，冻结的候选保持原扩展名。
+                // 覆盖弹窗确认后逻辑层仍会复核代次，期间切换项目也可安全结束。
                 auto            filePath = applyPackSelectedFormatToPath(path);
                 std::error_code error;
                 if ( std::filesystem::exists(Config::utf8ToPath(filePath),
@@ -2809,6 +2844,7 @@ void PackBeatmapAction::openPackageOutputFilePicker()
                     m_pendingOverwriteIsImdPackage = false;
                     m_showPackageOverwriteWarning  = true;
                 } else if ( !error )
+                    // 路径选择只决定输出位置，工程身份沿用用户开始打包时的代次。
                     requestPackBeatmapTo(std::move(filePath));
                 else
                     XERROR("Package target inspection failed: {}",
@@ -2851,6 +2887,7 @@ void PackBeatmapAction::openImdPackageOutputFilePicker()
     auto& config = Config::AppConfig::instance().getEditorSettings();
     const std::string defaultFileName =
         MenuUtil::makeExportFileNameForExtension(".zip", "map.zip");
+    // 初始目录来自只读快照；若用户在选择中切换工程，实际导出仍由原代次约束。
     const std::string defaultPath = getPackagePickerDefaultPath(config);
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
         // 原生保存窗口是用户显式触发的允许阻塞路径。

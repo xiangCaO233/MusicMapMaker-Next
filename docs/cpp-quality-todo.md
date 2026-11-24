@@ -114,11 +114,13 @@
 
 保留审查时的风险等级与编号，便于按独立问题验收。
 
-- [ ] **R45 · P1 · 侧栏、工程音频和打包仍直接借用可替换的工程**
+- [x] **R45 · P1 · 侧栏、工程音频和打包仍直接借用可替换的工程**
 
   控制器返回 unique_ptr.get()，逻辑线程换工程时可移走所有权。侧栏直接改工作区字段再保存，音频工具将字段地址交给控件，打包还跨目录扫描借用工程信息。事先查询过切换标志不能保证随后访问的寿命。R03 的快照修复没有覆盖这些入口。 目录与图集读者拿带工程代次的值快照；设置写入交给所有者按代次核对的字段命令。覆盖读取和关闭交错、同目录重开、旧 UI 写入被拒绝，新工程配置保持原值。
 
   [ProjectController.cpp L1248](../Modules/Game/Logic/src/logic/ProjectController.cpp#L1248)、[SideBarUI.cpp L215](../Modules/Game/UI/src/ui/imgui/SideBarUI.cpp#L215)、[ProjectAudioToolView.cpp L1971](../Modules/Game/UI/src/ui/imgui/manager/ProjectAudioToolView.cpp#L1971)、[Basic2DCanvas_Rendering.cpp L212](../Modules/Game/Canvas/src/Basic2DCanvas_Rendering.cpp#L212)、[OpenProjectDirectoryAction.cpp L37](../Modules/Game/UI/src/ui/imgui/menu/actions/file/OpenProjectDirectoryAction.cpp#L37)、[PackBeatmapAction.cpp L2305](../Modules/Game/UI/src/ui/imgui/menu/actions/file/PackBeatmapAction.cpp#L2305)
+
+  已验证。侧栏、工程音频、资源目录、图集和打包使用不可变工程快照；设置和延迟打包按打开代次校验。回归覆盖同路径重开、旧快照寿命和旧设置拒绝。
 
 - [ ] **R46 · P1 · Windows 窗口适配器析构后仍有拖拽区域订阅**
 

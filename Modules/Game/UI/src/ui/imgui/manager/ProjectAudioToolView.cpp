@@ -11,6 +11,8 @@
 #include "config/skin/translation/Translation.h"
 #include "event/project/ProjectEvents.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectController.h"
+#include "logic/ProjectUiState.h"
 #include "mmm/project/Project.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/audio/ProjectAudioPreviewControls.h"
@@ -591,42 +593,13 @@ void ProjectAudioToolView::requestFocus()
 /// visibleWidth 只影响尚无保存位置的 Effect 自动换行。
 /// 已有 placement 的位置不会因窗口变窄而自动改写。
 /// 非有限保存值视为损坏输入并回退安全默认值。
-void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
+void ProjectAudioToolView::rebuildItems(const Logic::ProjectUiState& snapshot,
+                                        float visibleWidth, float dpiScale)
 {
-    // 项目对象只在当前 UI 线程调用期间借用，不保存裸指针到成员。
-    auto* project = Logic::EditorEngine::instance().getCurrentProject();
-    if ( !project ) {
-        // 所有方块及派生可见区都与旧项目资源绑定，必须整体清空。
-        m_items.clear();
-        m_interactionBaseLabelRects.clear();
-        m_batchDragEntries.clear();
-        m_batchDragUnionCells.clear();
-        m_marqueeBaseSelection.clear();
-        // 搜索、重命名和选择 ID 不得跨越项目关闭边界。
-        m_searchBuffer.fill('\0');
-        m_searchResults.clear();
-        m_searchFocusRequestId.clear();
-        m_renameAudioResourceId.clear();
-        m_renameBuffer.fill('\0');
-        m_selectedAudioResourceId.clear();
-        m_selectedAudioLabel.clear();
-        m_openVolumeEditorResourceId.clear();
-        // 清除缓存键可保证下一次打开项目一定执行完整初始化。
-        m_cachedProjectRoot.clear();
-        m_cachedDpiScale = 0.0F;
-        // 视角状态恢复默认，避免新项目继承旧项目滚动与缩放。
-        m_canvasZoom = 1.0F;
-        m_pendingCanvasScroll.reset();
-        // 指针交互可能因项目关闭中断，所有进行中状态都直接取消。
-        m_batchDragging      = false;
-        m_marqueeSelecting   = false;
-        m_searchResultsDirty = true;
-        return;
-    }
-
-    // 规范化后的 UTF-8 根路径作为项目身份缓存键。
-    const std::string projectRoot = Config::pathToUtf8(project->m_projectRoot);
-    const bool        projectChanged = projectRoot != m_cachedProjectRoot;
+    // 同一路径重新打开也要清理旧会话的缓存。
+    const auto* project = snapshot.m_details.get();
+    const bool  projectChanged =
+        snapshot.m_generation != m_cachedProjectGeneration;
     // 同一项目的资源刷新保留仍存在的批量选择集合。
     std::unordered_set<std::string> batchSelectedResourceIds;
     if ( !projectChanged ) {
@@ -640,6 +613,8 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
         // 搜索焦点请求不能跨项目解析到同名但语义不同的资源。
         m_searchBuffer.fill('\0');
         m_searchFocusRequestId.clear();
+        m_renameAudioResourceId.clear();
+        m_renameBuffer.fill('\0');
     }
 
     // 重建会使索引变化，所有保存索引的即时交互状态必须作废。
@@ -658,8 +633,10 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
     m_snapLocks    = {};
 
     // 更新缓存身份与 DPI，后续帧仅在它们变化时再次重建。
-    m_cachedProjectRoot = projectRoot;
-    m_cachedDpiScale    = dpiScale;
+    m_cachedProjectGeneration = snapshot.m_generation;
+    // 缓存投影身份，保存通知和快照读取发生交错时，下一帧仍能看到新版本。
+    m_cachedProjectDetails = snapshot.m_details;
+    m_cachedDpiScale       = dpiScale;
     // 工作区持久化选择、画笔音量和方块布局，是本视图的项目级状态源。
     auto& workspace           = project->m_settings.m_workspace;
     m_selectedAudioResourceId = workspace.m_projectAudioToolSelectedResourceId;
@@ -809,10 +786,9 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
             return item.audioResourceId == m_selectedAudioResourceId;
         });
     if ( !selectedStillExists ) {
-        // 同步清除视图显示和项目工作区中的选择。
+        // 只清理本地显示。当前快照可能在逻辑侧已被新的选择替换。
         m_selectedAudioResourceId.clear();
         m_selectedAudioLabel.clear();
-        workspace.m_projectAudioToolSelectedResourceId.clear();
     } else {
         // 仍存在的选择更新标签和类型，以反映重命名或类型变更。
         const auto selected =
@@ -969,35 +945,31 @@ void ProjectAudioToolView::refreshInteractionLabelRects()
 /// 保存失败反馈由 EditorEngine 统一处理，视图不自行重试。
 void ProjectAudioToolView::persistWorkspace()
 {
-    // 项目可能在交互期间关闭，缺失时安全丢弃本次持久化请求。
-    auto& engine  = Logic::EditorEngine::instance();
-    auto* project = engine.getCurrentProject();
-    if ( !project ) return;
-
-    // 先同步轻量选择与画笔状态，再整体重建方块 placement 列表。
-    auto& workspace = project->m_settings.m_workspace;
-    workspace.m_projectAudioToolSelectedResourceId = m_selectedAudioResourceId;
-    workspace.m_projectAudioToolBrushVolume        = m_brushAudioVolume;
-    // placement 与当前资源方块一一对应，旧记录不应残留已删除资源。
-    workspace.m_projectAudioToolPlacements.clear();
-    workspace.m_projectAudioToolPlacements.reserve(m_items.size());
+    // 使用方块缓存所属的代次，不能在提交时重新绑定当前打开的工程。
+    Logic::ProjectAudioToolLayoutEdit layout{
+        .m_selectedResourceId = m_selectedAudioResourceId,
+        .m_brushVolume        = m_brushAudioVolume,
+    };
+    layout.m_placements.reserve(m_items.size());
     for ( const auto& item : m_items ) {
         // 资源 ID 是布局记录与项目资源重新关联的稳定键。
-        workspace.m_projectAudioToolPlacements.push_back(
-            ProjectAudioToolItemPlacement{
-                .m_audioResourceId = item.audioResourceId,
-                .m_x               = item.rect.x,
-                .m_y               = item.rect.y,
-                // 零尺寸标记“使用自动默认值”，不是实际退化矩形。
-                .m_width  = item.widthCustomized ? item.rect.width : 0.0F,
-                .m_height = item.heightCustomized ? item.rect.height : 0.0F,
-                .m_zOrder = item.zOrder,
-                // 两种视图共用同一稳定资源记录，重开项目也保留独立倍率。
-                .m_audioVolume = item.audioVolume,
-            });
+        layout.m_placements.push_back(ProjectAudioToolItemPlacement{
+            .m_audioResourceId = item.audioResourceId,
+            .m_x               = item.rect.x,
+            .m_y               = item.rect.y,
+            // 零尺寸标记“使用自动默认值”，不是实际退化矩形。
+            .m_width  = item.widthCustomized ? item.rect.width : 0.0F,
+            .m_height = item.heightCustomized ? item.rect.height : 0.0F,
+            .m_zOrder = item.zOrder,
+            // 两种视图共用同一稳定资源记录，重开项目也保留独立倍率。
+            .m_audioVolume = item.audioVolume,
+        });
     }
     // 所有字段更新完成后一次保存，避免产生部分工作区快照。
-    engine.saveProject();
+    Logic::ProjectController::instance().queueUiSettingsEdit({
+        .m_generation      = m_cachedProjectGeneration,
+        .m_audioToolLayout = std::move(layout),
+    });
 }
 
 /// @brief 重置当前项目全部采样倍率，不改变选择、方块布局或音频资源 DSP。
@@ -1005,19 +977,19 @@ void ProjectAudioToolView::persistWorkspace()
 /// 已存在物件的独立音量不被重写，避免一次界面重置改写整张谱面。
 /// 原始音频资源的 EQ、静音及基础增益仍由资源配置负责。
 /// @warning 用户显式操作的低频路径，缓存失效时重建一次并执行一次项目保存。
-void ProjectAudioToolView::resetSampleVolumes()
+void ProjectAudioToolView::resetSampleVolumes(
+    const Logic::ProjectUiState& snapshot)
 {
-    auto&       engine  = Logic::EditorEngine::instance();
-    const auto* project = engine.getCurrentProject();
-    if ( !project ) return;
+    auto& engine = Logic::EditorEngine::instance();
     // 按钮位于两种视图的公共工具区，点击时可能尚未消费资源变化事件。
     // 先恢复当前项目完整缓存，搜索筛选不能缩小“全部采样”的作用范围。
     const float dpiScale =
         Config::AppConfig::instance().getWindowContentScale();
     if ( m_itemsDirty.exchange(false, std::memory_order_acq_rel) ||
-         m_cachedProjectRoot != Config::pathToUtf8(project->m_projectRoot) ||
+         snapshot.m_details != m_cachedProjectDetails ||
          std::abs(dpiScale - m_cachedDpiScale) > 1e-4F ) {
         rebuildItems(
+            snapshot,
             std::max(1.0F, ImGui::GetContentRegionAvail().x / dpiScale),
             dpiScale);
     }
@@ -1028,7 +1000,8 @@ void ProjectAudioToolView::resetSampleVolumes()
     engine.pushCommand(
         Logic::CmdSetBrushAudioResource{ m_selectedAudioResourceId,
                                          m_selectedAudioTrackType,
-                                         m_brushAudioVolume });
+                                         m_brushAudioVolume,
+                                         m_cachedProjectGeneration });
     persistWorkspace();
 }
 
@@ -1073,12 +1046,11 @@ std::optional<std::size_t> ProjectAudioToolView::activateItem(
     // 切换采样时恢复它自己的倍率，随后绘制的新物件不会继承前一采样音量。
     m_brushAudioVolume = item.audioVolume;
     // 通过逻辑命令同步画布放置工具使用的音频 ID、类型和音量。
-    Logic::EditorEngine::instance().pushCommand(
-        Logic::LogicCommand(Logic::CmdSetBrushAudioResource{
-            item.audioResourceId,
-            item.type,
-            m_brushAudioVolume,
-        }));
+    Logic::EditorEngine::instance().pushCommand(Logic::LogicCommand(
+        Logic::CmdSetBrushAudioResource{ item.audioResourceId,
+                                         item.type,
+                                         m_brushAudioVolume,
+                                         m_cachedProjectGeneration }));
     return activeIndex;
 }
 
@@ -1095,9 +1067,12 @@ void ProjectAudioToolView::previewEffectSelection(const Item& item) const
     if ( item.type != AudioTrackType::Effect ) return;
 
     // 当前项目与项目级开关必须同时有效。
-    auto* project = Logic::EditorEngine::instance().getCurrentProject();
-    if ( !project || !project->m_settings.m_workspace
-                          .m_projectAudioToolPreviewEffectOnSelection ) {
+    const auto snapshot = Logic::ProjectController::instance().uiSnapshot();
+    if ( !snapshot || snapshot->m_generation != m_cachedProjectGeneration )
+        return;
+    const auto* project = snapshot->m_details.get();
+    if ( !project->m_settings.m_workspace
+              .m_projectAudioToolPreviewEffectOnSelection ) {
         return;
     }
 
@@ -1122,12 +1097,11 @@ void ProjectAudioToolView::clearActiveItem()
     m_selectedAudioLabel.clear();
     m_selectedAudioTrackType = AudioTrackType::Effect;
     // 空 ID 明确表示画笔不绑定音频资源，类型恢复 Effect 默认值。
-    Logic::EditorEngine::instance().pushCommand(
-        Logic::LogicCommand(Logic::CmdSetBrushAudioResource{
-            {},
-            AudioTrackType::Effect,
-            m_brushAudioVolume,
-        }));
+    Logic::EditorEngine::instance().pushCommand(Logic::LogicCommand(
+        Logic::CmdSetBrushAudioResource{ {},
+                                         AudioTrackType::Effect,
+                                         m_brushAudioVolume,
+                                         m_cachedProjectGeneration }));
 }
 
 /// @brief 退出专业编辑时清除工具选择和未结束的方块手势，并关闭窗口。
@@ -1404,8 +1378,9 @@ void ProjectAudioToolView::renderRenamePopup(float dpiScale)
         // 命令保存稳定资源 ID 和用户缓冲内容，实际文件操作由逻辑层处理。
         Logic::EditorEngine::instance().pushCommand(
             Logic::LogicCommand(Logic::CmdRenameAudioResource{
-                .id          = m_renameAudioResourceId,
-                .newFileName = m_renameBuffer.data(),
+                .id                = m_renameAudioResourceId,
+                .newFileName       = m_renameBuffer.data(),
+                .projectGeneration = m_cachedProjectGeneration,
             }));
         // 提交后清除目标并关闭弹窗，等待资源变更事件触发方块重建。
         m_renameAudioResourceId.clear();
@@ -1967,9 +1942,9 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         Utils::renderProjectTransitionPlaceholder();
         return;
     }
-    // 当前项目在本帧入口读取一次，后续回调不跨帧保存该指针。
-    auto* project = Logic::EditorEngine::instance().getCurrentProject();
-    if ( !project ) {
+    // 持有本帧的工程投影，逻辑线程换图也不会使控件读取失效。
+    const auto snapshot = Logic::ProjectController::instance().uiSnapshot();
+    if ( !snapshot ) {
         // 无项目状态不绘制搜索、画布和项目设置控件。
         ImGui::TextUnformatted(m_translationCache.noProject);
         return;
@@ -1982,36 +1957,32 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     // 方块操作说明仅在方块视图显示，避免误导表格用户拖动行来布局。
     if ( !m_tableView ) ImGui::TextWrapped("%s", m_translationCache.hint);
 
-    // 选择 Effect 时是否自动试听属于项目工作区偏好。
-    auto& previewEffectOnSelection =
-        project->m_settings.m_workspace
-            .m_projectAudioToolPreviewEffectOnSelection;
-    if ( ::MMM::UI::FeedbackCheckbox(
-             m_translationCache.previewEffectOnSelection,
-             &previewEffectOnSelection) ) {
-        // 设置变化低频发生，可立即保存以保证重新打开项目后恢复。
-        Logic::EditorEngine::instance().saveProject();
-    }
-
-    // 布局吸附随项目工作区保存，表格视图没有移动或缩放操作，不显示此选项。
-    auto& snapEnabled =
-        project->m_settings.m_workspace.m_projectAudioToolSnapEnabled;
+    // 控件编辑本地副本，提交只携带变化字段及本帧工程代次。
+    const auto* project   = snapshot->m_details.get();
+    const auto& workspace = project->m_settings.m_workspace;
+    // 资源与设置都来自本帧快照，复选框只修改短生命周期的本地副本。
+    // 保存任务按字段合并，点击吸附开关不会回滚同时提交的音量设置。
+    Logic::ProjectUiSettingsEdit edit{ .m_generation = snapshot->m_generation };
+    bool preview     = workspace.m_projectAudioToolPreviewEffectOnSelection;
+    bool snapEnabled = workspace.m_projectAudioToolSnapEnabled;
+    bool showVolume  = workspace.m_projectAudioToolShowVolume;
+    if ( FeedbackCheckbox(m_translationCache.previewEffectOnSelection,
+                          &preview) )
+        edit.m_audioToolPreview = preview;
     if ( !m_tableView ) {
         ImGui::SameLine();
         if ( FeedbackCheckbox(m_translationCache.snap, &snapEnabled) ) {
-            // 立即丢弃旧手势的滞回状态，重新开启时不能抢回上次的参考线。
-            m_snapLocks = {};
-            Logic::EditorEngine::instance().saveProject();
+            m_snapLocks          = {};
+            edit.m_audioToolSnap = snapEnabled;
         }
-    }
-    auto& showVolume =
-        project->m_settings.m_workspace.m_projectAudioToolShowVolume;
-    if ( !m_tableView ) {
-        // 只在方块视图显示开关，表格本来就提供每行音量滑块和读数。
-        // 切换时才保存项目；普通显示帧不产生文件操作或采样资源更新。
+        // 表格始终有独立音量列，方块模式才需要显示选项。
         if ( FeedbackCheckbox("显示物件音量（0–200）", &showVolume) )
-            Logic::EditorEngine::instance().saveProject();
+            edit.m_audioToolShowVolume = showVolume;
     }
+    if ( edit.m_audioToolPreview || edit.m_audioToolSnap ||
+         edit.m_audioToolShowVolume )
+        Logic::ProjectController::instance().queueUiSettingsEdit(
+            std::move(edit));
     // 外部工作区恢复也能改变开关；关闭后所有交互层都不应保留参考线。
     // 该分支每帧只清理两个可选轴锁，不重建方块索引或查询磁盘配置。
     // 移动与缩放仍保留可见面积和最小尺寸约束，开关只影响布局自动对齐。
@@ -2020,11 +1991,11 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     if ( !snapEnabled ) m_snapLocks = {};
 
     // 公共入口同时覆盖表格与方块视图，重置全部资源而非当前选中项。
-    if ( FeedbackButton("重置所有采样音量") ) resetSampleVolumes();
+    if ( FeedbackButton("重置所有采样音量") ) resetSampleVolumes(*snapshot);
 
     if ( m_tableView ) {
         // 表格与方块互斥绘制，保持重命名模态入口的共同生命周期。
-        renderTableView(dpiScale);
+        renderTableView(*snapshot, dpiScale);
         renderRenamePopup(dpiScale);
         return;
     }
@@ -2245,8 +2216,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                  canvasWindow->InnerRect.GetHeight() -
                      canvasWindow->WindowPadding.y * 2.0F),
     };
-    const std::string projectRoot = Config::pathToUtf8(project->m_projectRoot);
-    if ( projectRoot != m_cachedProjectRoot ) {
+    if ( snapshot->m_generation != m_cachedProjectGeneration ) {
         // 项目切换先恢复视角默认值，方块缓存稍后在统一脏判断中重建。
         m_canvasZoom = 1.0F;
         m_pendingCanvasScroll.reset();
@@ -2308,11 +2278,17 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     // 新方块默认排布只随窗口 DPI，不随用户画布缩放重新换行。
     const float layoutVisibleWidth =
         std::max(1.0F, visibleSizePixels.x / dpiScale);
-    // 事件标脏、项目身份或 DPI 改变任一成立时重建方块缓存。
-    if ( m_itemsDirty.exchange(false, std::memory_order_acq_rel) ||
-         projectRoot != m_cachedProjectRoot ||
-         std::abs(dpiScale - m_cachedDpiScale) > 1e-4F ) {
-        rebuildItems(layoutVisibleWidth, dpiScale);
+    // 同代更新在松手后消费，避免外部保存或吸附开关打断手势。
+    // 切换工程仍须先重建，旧手势不能向新工程提交坐标。
+    // 本帧保持当前拖拽索引有效，延后的刷新会在手势结束后重新检查。
+    const bool layoutGestureActive = m_draggingItem || m_resizingItem ||
+                                     m_batchDragging || m_marqueeSelecting;
+    if ( snapshot->m_generation != m_cachedProjectGeneration ||
+         (!layoutGestureActive &&
+          (m_itemsDirty.exchange(false, std::memory_order_acq_rel) ||
+           snapshot->m_details != m_cachedProjectDetails ||
+           std::abs(dpiScale - m_cachedDpiScale) > 1e-4F)) ) {
+        rebuildItems(*snapshot, layoutVisibleWidth, dpiScale);
     }
 
     // 内容尺寸覆盖视口和最远方块，作为滚动上限与末尾 Dummy 的共同依据。
@@ -2549,12 +2525,11 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         } else if ( sampleVolumeChanged && volumeItem != m_items.end() ) {
             // 当前资源不变时镜像自己的新倍率，再提交画笔资源命令。
             m_brushAudioVolume = volumeItem->audioVolume;
-            Logic::EditorEngine::instance().pushCommand(
-                Logic::LogicCommand(Logic::CmdSetBrushAudioResource{
-                    m_selectedAudioResourceId,
-                    m_selectedAudioTrackType,
-                    m_brushAudioVolume,
-                }));
+            Logic::EditorEngine::instance().pushCommand(Logic::LogicCommand(
+                Logic::CmdSetBrushAudioResource{ m_selectedAudioResourceId,
+                                                 m_selectedAudioTrackType,
+                                                 m_brushAudioVolume,
+                                                 m_cachedProjectGeneration }));
         }
         if ( resourceChanged || sampleVolumeChanged ) {
             // 仅状态实际变化时保存，悬浮控件不会产生磁盘写入。

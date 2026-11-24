@@ -11,9 +11,20 @@
 #include <cstddef>
 #include <cstdint>
 #include <imgui.h>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
+
+namespace MMM
+{
+struct Project;
+}
+
+namespace MMM::Logic
+{
+struct ProjectUiState;
+}
 
 namespace MMM::UI
 {
@@ -61,7 +72,7 @@ private:
     /// @brief 绘制可滚动资源表格，复用选择、试听、音量与重命名流程。
     /// @param dpiScale 当前窗口内容缩放。
     /// @warning UI 热路径：只提交可见缓存行；资源筛选仅在脏标记变化时重建。
-    void renderTableView(float dpiScale);
+    void renderTableView(const Logic::ProjectUiState& snapshot, float dpiScale);
     /// @brief 当前窗口的展示模式，不改变项目资源或布局的存储格式。
     bool m_tableView{ false };
     /// @brief 搜索词或资源缓存变化后需重新生成表格行索引。
@@ -195,7 +206,8 @@ private:
     /// @brief 从当前项目资源和工作区布局低频重建方块缓存。
     /// @param visibleWidth 当前可见画布的逻辑宽度。
     /// @param dpiScale 当前内容缩放。
-    void rebuildItems(float visibleWidth, float dpiScale);
+    void rebuildItems(const Logic::ProjectUiState& snapshot, float visibleWidth,
+                      float dpiScale);
 
     /// @brief 重建叠层后各方块的可见文本区域。
     /// @warning 低频布局路径：会按叠层检查相交方块，只在打开、资源刷新或拖动
@@ -215,7 +227,7 @@ private:
 
     /// @brief 将全部采样的工具倍率恢复为 100，并同步当前画笔及项目保存。
     /// @warning 仅由重置按钮触发，允许重建脏缓存并保存一次，不得每帧调用。
-    void resetSampleVolumes();
+    void resetSampleVolumes(const Logic::ProjectUiState& snapshot);
 
     /// @brief 选择方块并将其提升到最上层。
     /// @param itemIndex 方块缓存下标。
@@ -423,7 +435,9 @@ private:
     std::string m_openVolumeEditorResourceId;
 
     /// @brief 方块缓存对应的项目根目录 UTF-8 键。
-    std::string m_cachedProjectRoot;
+    std::uint64_t m_cachedProjectGeneration{};
+    /// @brief 方块采用的不可变资源投影，用于检测读取快照后才完成的同代保存。
+    std::shared_ptr<const Project> m_cachedProjectDetails;
 
     /// @brief 方块默认尺寸上次测量时的内容缩放。
     float m_cachedDpiScale{ 0.0F };

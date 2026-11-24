@@ -532,47 +532,103 @@ bool testProjectUiStateAfterReopen(const std::filesystem::path& root)
     // 打开前不提供资源；后续出现的文件只能来自指定扫描，不会被初始打开记录。
     if ( error || !controller.openProject(root).m_opened ) return false;
     // 持有关闭前的快照，模拟渲染已开始而逻辑线程正在释放项目的顺序。
+    // 快照与控制器分属不同所有者，读者只保留已发布结果。
     const auto previous = controller.uiSnapshot();
     // 旧对象释放后发布槽必须为空，读者持有的旧快照仍有效。
-    if ( !previous || !controller.closeProject().m_closed ||
-         controller.uiSnapshot() || !controller.openProject(root).m_opened )
+    if ( !previous || !previous->m_details ||
+         !controller.closeProject().m_closed || controller.uiSnapshot() ||
+         !controller.openProject(root).m_opened )
         return false;
     // 新快照必须可独立读取，旧快照保留的根仍应匹配同一路径。
+    // 先验证两个根相同，再用身份差异证明时序检查未依赖路径变化。
     const auto current = controller.uiSnapshot();
     // 复用同一个目录，确保测试不会仅靠根路径不同就通过。
-    bool ok =
-        check(current && previous->m_projectRoot == current->m_projectRoot &&
-                  previous->m_generation != current->m_generation,
-              "a new project instance must have a fresh generation");
+    bool ok = check(current && current->m_details &&
+                        previous->m_projectRoot == current->m_projectRoot &&
+                        previous->m_generation != current->m_generation &&
+                        previous->m_details->m_projectRoot ==
+                            current->m_details->m_projectRoot &&
+                        previous->m_details.get() != current->m_details.get(),
+                    "a new project instance must have a fresh generation");
 
     // 过期请求故意在新工程建立后排入，验证拒绝发生在提交点而非关闭时碰巧清槽。
+    // 同时用错误的页签和画笔作为哨兵，确保新追加的字段也受代次约束。
     controller.queueUiSettingsEdit({
         .m_generation             = previous->m_generation,
         .m_colorPaletteSchemeName = "stale",
+        .m_sidebarActiveTab       = "stale",
+        .m_audioToolLayout =
+            MMM::Logic::ProjectAudioToolLayoutEdit{
+                .m_selectedResourceId = "stale",
+            },
     });
     ok &= check(!controller.applyPendingUiSettingsEdit(),
                 "a queued edit from the closed project must be discarded");
-    if ( current ) {
+    // 只在新工程确实打开后应用同一轮设置，失败时保留前面断言的诊断。
+    // 两个请求有互补字段，不能由后到请求整包覆盖先到请求。
+    // 在任何成功写入之前确认旧项目的页签和选择未污染新项目。
+    // 检查所有者状态，旧写入若未触发发布也同样能被这一断言发现。
+    // 不依赖默认布局内容，只要求显式提交的错误哨兵从未写入。
+    // 之后的有效提交不能用覆盖结果掩盖这里的旧命令泄漏。
+    // 旧快照仍留在测试进程内，验证可与当前配置断言同时成立。
+    // 重新使用本地目录正是为了排除路径判定碰巧保护到新工程。
+    const auto* reopened = controller.currentProject();
+    ok &= check(
+        reopened &&
+            reopened->m_settings.m_workspace.m_sidebarActiveTab != "stale" &&
+            reopened->m_settings.m_workspace
+                    .m_projectAudioToolSelectedResourceId != "stale",
+        "new project settings must be unchanged after a stale edit");
+    if ( current && current->m_details ) {
         // 两项独立设置先后队列，模拟逻辑循环尚未取走第一项时提交另一项。
         controller.queueUiSettingsEdit({
             .m_generation             = current->m_generation,
             .m_colorPaletteSchemeName = "current",
+            .m_sidebarActiveTab       = "AudioExplorer",
+            .m_audioToolSnap          = false,
         });
         // 明确选择与默认不同的数值，避免空操作也满足最终断言。
         // 调色板请求没有备份字段，备份请求也不能清除排队的调色板字段。
         MMM::Config::AutoBackupConfig backup;
         backup.maxBackupCount = 42;
         controller.queueUiSettingsEdit({
-            .m_generation         = current->m_generation,
-            .m_autoBackupOverride = std::optional{ backup },
+            .m_generation          = current->m_generation,
+            .m_autoBackupOverride  = std::optional{ backup },
+            .m_audioToolShowVolume = true,
+            .m_audioToolLayout =
+                MMM::Logic::ProjectAudioToolLayoutEdit{
+                    .m_selectedResourceId = "current",
+                    .m_brushVolume        = 0.75F,
+                },
         });
         // 控制器入口正常由逻辑线程调用。测试不启动并发线程，按既定顺序
         // 分别调用应用和保存，使回归不依赖调度碰巧撞上工程切换。
         ok &= check(
             controller.applyPendingUiSettingsEdit() && controller.saveProject(),
             "both current project fields should be committed");
-        // 最终设置需从保存后重新发布的快照读取；旧版本也继续保持原值。
+        // 侧栏及音频字段在同代次合并，过期布局不得改写新工程的选择。
         const auto committed = controller.uiSnapshot();
+        // 侧栏写入的证明来自工作区本体，音频读者的证明来自公开投影。
+        const auto* live = controller.currentProject();
+        // 读取原投影及新的独立副本，验证在保存前后均未借用可变工程。
+        // 关闭早于此处读取，旧 Project 本体已经从控制器撤下并释放。
+        const auto& oldWorkspace = previous->m_details->m_settings.m_workspace;
+        // 保存失败时不解引用未发布的结果，保留前面失败的测试结论。
+        if ( !committed || !committed->m_details ) return false;
+        const auto& workspace = committed->m_details->m_settings.m_workspace;
+        // 检查稳定页签名称、归属资源及明确的非默认音量。
+        // false 也是有效差量，关闭吸附不能被解释为字段未提供。
+        ok &= check(
+            live &&
+                live->m_settings.m_workspace.m_sidebarActiveTab ==
+                    "AudioExplorer" &&
+                oldWorkspace.m_projectAudioToolSelectedResourceId.empty() &&
+                workspace.m_projectAudioToolSelectedResourceId == "current" &&
+                workspace.m_projectAudioToolBrushVolume == 0.75F &&
+                !workspace.m_projectAudioToolSnapEnabled &&
+                workspace.m_projectAudioToolShowVolume,
+            "sidebar and audio edits must merge without affecting the old "
+            "projection");
         ok &= check(
             committed &&
                 committed->m_settings.m_colorPaletteSchemeName == "current" &&

@@ -2,6 +2,8 @@
 
 #include "config/Utf8Path.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectController.h"
+#include "logic/ProjectUiState.h"
 #include "mmm/project/Project.h"
 #include "ui/imgui/audio/ProjectAudioPreviewControls.h"
 #include "ui/imgui/manager/ProjectAudioToolSearch.h"
@@ -75,21 +77,20 @@ void ProjectAudioToolView::setTableView(bool enabled)
 /// - 只有音量实际变化时才提交新的画笔命令并保存工作区。
 /// - 每行按钮使用资源稳定 ID，重名文件不能共享弹窗状态。
 /// - 表格结束后外层再绘制重命名模态，不把模态留在滚动裁剪区内。
-void ProjectAudioToolView::renderTableView(float dpiScale)
+void ProjectAudioToolView::renderTableView(
+    const Logic::ProjectUiState& snapshot, float dpiScale)
 {
-    auto* project = Logic::EditorEngine::instance().getCurrentProject();
-    // 外层已经检查项目，此处仍防御切换期间的调用，不保存跨帧项目指针。
-    if ( !project ) return;
-    const std::string projectRoot = Config::pathToUtf8(project->m_projectRoot);
-    // 与方块一致地消费事件脏标记；项目切换不能复用旧行下标。
-    // 初始默认排布仍按窗口宽度计算，不用表格内的横向内容宽度。
+    // 共用外层帧的工程投影；同一路径重新打开也不能复用旧行下标。
     if ( m_itemsDirty.exchange(false, std::memory_order_acq_rel) ||
-         projectRoot != m_cachedProjectRoot ||
+         snapshot.m_details != m_cachedProjectDetails ||
          std::abs(dpiScale - m_cachedDpiScale) > 1e-4F ) {
         rebuildItems(
+            snapshot,
             std::max(1.0F, ImGui::GetContentRegionAvail().x / dpiScale),
             dpiScale);
     }
+
+    const auto* project = snapshot.m_details.get();
 
     // 搜索输入与列表分离，纵向滚动不能把输入框带离视口。
     // Enter 只选择已有匹配行，不创建资源或修改筛选条件。
