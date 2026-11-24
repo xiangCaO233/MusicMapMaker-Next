@@ -1,3 +1,4 @@
+#include "VKContextStartupDiagnostics.h"
 #include "graphic/glfw/GLFWHeader.h"
 #include "graphic/imguivk/VKContext.h"
 #include "log/colorful-log.h"
@@ -168,7 +169,7 @@ bool hasExtension(const std::vector<vk::ExtensionProperties>& extensions,
 /// 本缓存没有并发保护，因为整个启动链固定由创建图形上下文的主线程执行。
 ///
 /// @param line 已格式化且不依赖外部生命周期的诊断文本。
-void VKContext::addStartupDiagnostic(std::string line)
+void VKContext::StartupDiagnostics::addStartupDiagnostic(std::string line)
 {
     m_startupDiagnosticLines.push_back(std::move(line));
 }
@@ -180,7 +181,7 @@ void VKContext::addStartupDiagnostic(std::string line)
 ///
 /// @warning 启动诊断路径：调用 GLFW/Vulkan 探测 API，只能在 GLFW 已初始化且尚未
 /// 终止时执行。
-void VKContext::collectGLFWDiagnostics()
+void VKContext::StartupDiagnostics::collectGLFWDiagnostics()
 {
     // Android 的启动错误必须来自本机 SDL 后端，不能把未链接的 GLFW
     // 错误当作证据。 此分支只在初始化诊断阶段运行，常态帧不查询平台错误文本。
@@ -220,7 +221,8 @@ void VKContext::collectGLFWDiagnostics()
 /// 没提供描述，也记录调用上下文和数值码，避免诊断快照出现无法解释的空洞。
 ///
 /// @param context 说明哪个 GLFW 操作触发本次查询的静态上下文文本。
-void VKContext::collectLastGLFWErrorDiagnostic(const char* context)
+void VKContext::StartupDiagnostics::collectLastGLFWErrorDiagnostic(
+    const char* context)
 {
 #ifdef __ANDROID__
     addStartupDiagnostic(
@@ -262,7 +264,7 @@ void VKContext::collectLastGLFWErrorDiagnostic(const char* context)
 ///
 /// @warning 启动低频路径：包含多次 loader 枚举与动态内存分配，禁止从渲染循环
 /// 调用。
-void VKContext::collectVulkanLoaderDiagnostics()
+void VKContext::StartupDiagnostics::collectVulkanLoaderDiagnostics()
 {
 #ifdef VK_HEADER_VERSION_COMPLETE
     // 完整 header 版本可直接分解；旧头仅提供 patch 宏时保留有限但真实的信息。
@@ -405,16 +407,18 @@ void VKContext::collectVulkanLoaderDiagnostics()
 ///
 /// @warning 启动诊断路径：必须在所有扩展和 layer 注册完成后、创建 instance 前
 /// 调用。
-void VKContext::collectVulkanInstanceCreateDiagnostics()
+void VKContext::StartupDiagnostics::collectVulkanInstanceCreateDiagnostics(
+    const vk::ApplicationInfo&      appInfo,
+    const std::vector<const char*>& extensions)
 {
     // 应用 API 版本来自持久化的 ApplicationInfo，与实际创建参数完全一致。
     addStartupDiagnostic(
         fmt::format("Requested Vulkan application API version: {}",
-                    formatVulkanVersion(m_vkAppInfo.apiVersion)));
+                    formatVulkanVersion(appInfo.apiVersion)));
     addStartupDiagnostic(fmt::format("Requested Vulkan instance extensions: {}",
-                                     m_vkExtensions.size()));
+                                     extensions.size()));
     // 保持容器顺序，便于发现重复注册或平台扩展追加顺序变化。
-    for ( const char* extension : m_vkExtensions ) {
+    for ( const char* extension : extensions ) {
         addStartupDiagnostic(fmt::format("Requested instance extension: {}",
                                          extension ? extension : "<null>"));
     }
@@ -434,7 +438,7 @@ void VKContext::collectVulkanInstanceCreateDiagnostics()
 /// KHR 扩展证明支持时通过 properties2 链查询。队列族始终记录能力与数量；只有
 /// includeSurfaceSupport 为 true 且 surface 有效时才额外查询实际呈现能力。
 ///
-/// 本函数用于诊断候选全集，不执行设备排序，也不修改 m_vkPhysicalDevice。单个
+/// 本函数用于诊断候选全集，不执行设备排序，也不修改 physicalDevice。单个
 /// 设备的可选扩展或驱动属性查询失败不会阻止继续记录其余设备。
 ///
 /// 基础 feature 列表仅解释固定管线可能遇到的能力差异，不代表应用已经请求启用
@@ -444,17 +448,20 @@ void VKContext::collectVulkanInstanceCreateDiagnostics()
 /// @param includeSurfaceSupport 是否为每个队列族查询当前窗口 surface 呈现支持。
 /// @warning 启动低频路径：可能遍历全部 GPU、扩展和队列族并进行多次驱动调用，
 /// 禁止从渲染循环调用。
-void VKContext::collectPhysicalDeviceDiagnostics(bool includeSurfaceSupport)
+void VKContext::StartupDiagnostics::collectPhysicalDeviceDiagnostics(
+    vk::Instance instance, vk::SurfaceKHR surface, bool includeSurfaceSupport)
 {
     // instance 不存在时没有合法的物理设备查询入口；记录跳过原因而非静默返回。
-    if ( !m_vkInstance ) {
+    // surface 可能尚未创建：首轮诊断只记录实例下的设备与队列信息。
+    // 句柄只用于这次同步采集，诊断缓存中保存渲染资源无关的文本。
+    if ( !instance ) {
         addStartupDiagnostic(
             "Physical device diagnostics skipped: Vulkan instance is null.");
         return;
     }
 
     // 无异常 Vulkan-Hpp 通过 result/value 返回，失败值下不得读取设备数组。
-    auto devicesResult = m_vkInstance.enumeratePhysicalDevices();
+    auto devicesResult = instance.enumeratePhysicalDevices();
     if ( devicesResult.result != vk::Result::eSuccess ) {
         addStartupDiagnostic(
             fmt::format("Failed to enumerate physical devices: {}",
@@ -538,13 +545,12 @@ void VKContext::collectPhysicalDeviceDiagnostics(bool includeSurfaceSupport)
                 auto getProperties2 =
                     reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
                         vkGetInstanceProcAddr(
-                            m_vkInstance, "vkGetPhysicalDeviceProperties2"));
+                            instance, "vkGetPhysicalDeviceProperties2"));
                 if ( !getProperties2 ) {
                     getProperties2 =
                         reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
                             vkGetInstanceProcAddr(
-                                m_vkInstance,
-                                "vkGetPhysicalDeviceProperties2KHR"));
+                                instance, "vkGetPhysicalDeviceProperties2KHR"));
                 }
 
                 if ( getProperties2 ) {
@@ -610,11 +616,11 @@ void VKContext::collectPhysicalDeviceDiagnostics(bool includeSurfaceSupport)
               ++queueIndex ) {
             // 明确区分“未查询”“支持/不支持”和 Vulkan 查询错误三种状态。
             std::string presentText = "not-queried";
-            if ( includeSurfaceSupport && m_vkSurface ) {
+            if ( includeSurfaceSupport && surface ) {
                 // 呈现支持属于 device、queue family 与 surface 三者组合，不能由
                 // graphics 标志推断。
                 auto presentResult = devices[deviceIndex].getSurfaceSupportKHR(
-                    queueIndex, m_vkSurface);
+                    queueIndex, surface);
                 presentText = presentResult.result == vk::Result::eSuccess
                                   ? yesNo(presentResult.value == VK_TRUE)
                                   : vk::to_string(presentResult.result);
@@ -646,10 +652,13 @@ void VKContext::collectPhysicalDeviceDiagnostics(bool includeSurfaceSupport)
 /// @param width 调用方请求的 framebuffer 宽度。
 /// @param height 调用方请求的 framebuffer 高度。
 /// @warning 窗口初始化低频路径：会同步调用 surface 查询并分配临时数组。
-void VKContext::collectSelectedSurfaceDiagnostics(int width, int height)
+void VKContext::StartupDiagnostics::collectSelectedSurfaceDiagnostics(
+    vk::PhysicalDevice physicalDevice, vk::SurfaceKHR surface, int width,
+    int height)
 {
     // 只有设备与 surface 同时存在时查询才有定义；缺失哪个不影响记录统一原因。
-    if ( !m_vkPhysicalDevice || !m_vkSurface ) {
+    // 窗口恢复失败时句柄可以为空，不让诊断改变设备或表面的状态。
+    if ( !physicalDevice || !surface ) {
         addStartupDiagnostic(
             "Selected surface diagnostics skipped: device or surface is null.");
         return;
@@ -661,8 +670,8 @@ void VKContext::collectSelectedSurfaceDiagnostics(int width, int height)
     // capabilities 是单次固定大小查询，记录图像数量、extent 和当前预变换约束。
     VkSurfaceCapabilitiesKHR capabilities{};
     VkResult                 result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
-        static_cast<VkPhysicalDevice>(m_vkPhysicalDevice),
-        static_cast<VkSurfaceKHR>(m_vkSurface),
+        static_cast<VkPhysicalDevice>(physicalDevice),
+        static_cast<VkSurfaceKHR>(surface),
         &capabilities);
     if ( result == VK_SUCCESS ) {
         // maxImages 为零表示没有上限，保留原始零值供交换链数量选择逻辑解释。
@@ -688,8 +697,8 @@ void VKContext::collectSelectedSurfaceDiagnostics(int width, int height)
     // Surface format 使用两阶段枚举；首阶段失败时跳过数组分配并在统一出口记录。
     uint32_t formatCount = 0;
     result               = vkGetPhysicalDeviceSurfaceFormatsKHR(
-        static_cast<VkPhysicalDevice>(m_vkPhysicalDevice),
-        static_cast<VkSurfaceKHR>(m_vkSurface),
+        static_cast<VkPhysicalDevice>(physicalDevice),
+        static_cast<VkSurfaceKHR>(surface),
         &formatCount,
         nullptr);
     if ( result == VK_SUCCESS ) {
@@ -699,8 +708,8 @@ void VKContext::collectSelectedSurfaceDiagnostics(int width, int height)
             // 第二阶段允许驱动回写实际数量；数组仍按首阶段容量分配，避免依赖固定
             // 上限或栈上大对象。
             result = vkGetPhysicalDeviceSurfaceFormatsKHR(
-                static_cast<VkPhysicalDevice>(m_vkPhysicalDevice),
-                static_cast<VkSurfaceKHR>(m_vkSurface),
+                static_cast<VkPhysicalDevice>(physicalDevice),
+                static_cast<VkSurfaceKHR>(surface),
                 &formatCount,
                 formats.data());
         }
@@ -727,8 +736,8 @@ void VKContext::collectSelectedSurfaceDiagnostics(int width, int height)
     // 呈现模式独立于格式查询重新使用 result，确保前一失败不会阻止继续诊断。
     uint32_t presentModeCount = 0;
     result                    = vkGetPhysicalDeviceSurfacePresentModesKHR(
-        static_cast<VkPhysicalDevice>(m_vkPhysicalDevice),
-        static_cast<VkSurfaceKHR>(m_vkSurface),
+        static_cast<VkPhysicalDevice>(physicalDevice),
+        static_cast<VkSurfaceKHR>(surface),
         &presentModeCount,
         nullptr);
     if ( result == VK_SUCCESS ) {
@@ -738,8 +747,8 @@ void VKContext::collectSelectedSurfaceDiagnostics(int width, int height)
             // 与格式路径相同，查询错误只影响本组诊断，不覆盖已经记录的
             // capabilities 或 surface format 信息。
             result = vkGetPhysicalDeviceSurfacePresentModesKHR(
-                static_cast<VkPhysicalDevice>(m_vkPhysicalDevice),
-                static_cast<VkSurfaceKHR>(m_vkSurface),
+                static_cast<VkPhysicalDevice>(physicalDevice),
+                static_cast<VkSurfaceKHR>(surface),
                 &presentModeCount,
                 presentModes.data());
         }
@@ -778,7 +787,7 @@ void VKContext::collectSelectedSurfaceDiagnostics(int width, int height)
 ///
 /// @param deviceExtensions 请求启用的 device 扩展名称。
 /// @param queueFamilies 请求创建至少一条队列的队列族索引。
-void VKContext::collectLogicalDeviceCreateDiagnostics(
+void VKContext::StartupDiagnostics::collectLogicalDeviceCreateDiagnostics(
     const std::vector<const char*>& deviceExtensions,
     const std::vector<uint32_t>&    queueFamilies)
 {
@@ -810,7 +819,7 @@ void VKContext::collectLogicalDeviceCreateDiagnostics(
 /// @param reason 触发本次输出的直接失败原因；空指针显示为 unknown。
 /// @warning 仅供启动失败路径调用：包含完整 vector 遍历和大量日志 I/O，绝对禁止
 /// 放入渲染或逻辑热路径。
-void VKContext::logStartupDiagnostics(const char* reason)
+void VKContext::StartupDiagnostics::logStartupDiagnostics(const char* reason)
 {
     // 幂等保护只限制完整快照，仍保留后续调用的直接原因以辅助发现重复失败路径。
     if ( m_startupDiagnosticsPrinted ) {

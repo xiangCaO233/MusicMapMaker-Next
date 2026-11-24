@@ -1,7 +1,8 @@
-#include "common/MessageBox.h"
+#include "VKContextStartupDiagnostics.h"
 #include "graphic/imguivk/VKContext.h"
 #include "log/colorful-log.h"
 
+#include <cstring>
 #include <fmt/format.h>
 
 namespace MMM::Graphic
@@ -10,11 +11,12 @@ namespace MMM::Graphic
 /// @details 实例创建参数通过 pNext 借用本配置，因此创建期间也能接收诊断。
 /// 独立 messenger 在实例及动态分派器就绪后创建，覆盖实例存活期间的后续调用。
 /// @note 两处复用同一配置，避免启动和正常运行使用不同的诊断筛选条件。
-void VKContext::enableVKDebugExt()
+void VKContext::StartupDiagnostics::enableVKDebugExt(
+    std::vector<const char*>& extensions)
 {
     // instance 创建时引用调试配置，扩展必须同时列入待启用的实例扩展。
     // 此函数只组装参数，不依赖尚未建立的 instance 级动态分派入口。
-    m_vkExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 
     // 在 Vulkan 层过滤严重级别，避免大量正常诊断进入回调和日志队列。
     // 警告也能定位驱动及配置问题，因此它与错误同样保留。
@@ -28,7 +30,7 @@ void VKContext::enableVKDebugExt()
                         vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance)
         // 使用静态函数，避免回调从 pUserData 借用可能已经开始销毁的上下文。
         .setPfnUserCallback(vk::PFN_DebugUtilsMessengerCallbackEXT(
-            &VKContext::vkDebug_callback));
+            &VKContext::StartupDiagnostics::vkDebug_callback));
 }
 
 /// @brief 检查构建选项要求的全部 Vulkan Validation Layer 是否可用。
@@ -37,7 +39,7 @@ void VKContext::enableVKDebugExt()
 /// 与其依赖 loader 返回不透明错误，这里先给出缺失名称与目标系统安装提示。
 /// @note 校验层是实例级选项，此处不依赖物理设备枚举及设备扩展状态。
 /// @warning 仅在初始化阶段枚举 loader 的配置，不能从 Vulkan 调试回调中查询。
-void VKContext::enableVKValidateLayer()
+bool VKContext::StartupDiagnostics::checkValidationLayers()
 {
     // Vulkan 的两阶段枚举先取得数量，再由调用方分配连续存储并读取属性。
     uint32_t layerCount;
@@ -55,7 +57,7 @@ void VKContext::enableVKValidateLayer()
     for ( const char* layerName : m_vkValidationLayers ) {
         bool layerFound = false;
         for ( const auto& layerProperties : availableLayers ) {
-            if ( strcmp(layerName, layerProperties.layerName) == 0 ) {
+            if ( std::strcmp(layerName, layerProperties.layerName) == 0 ) {
                 layerFound = true;
                 break;
             }
@@ -70,25 +72,13 @@ void VKContext::enableVKValidateLayer()
         }
     }
 
-    // 此时尚未创建 Vulkan instance，失败路径只需关闭 GLFW 并冻结初始化错误。
     if ( !allLayersAvailable ) {
+        // 遗漏项已经逐个记录，调用方仍持有窗口库并负责释放顺序。
         logStartupDiagnostics("Requested Vulkan validation layer is missing.");
-        std::string msg =
-            "Vulkan validation layers are missing.\n"
-            "This build enables Vulkan validation layers, so they are "
-            "required.\n"
-            "Install VK_LAYER_KHRONOS_validation on the target system.";
-        // 提示入口先记录完整诊断，无桌面环境时仍可查到失败原因。
-        UI::showFatalError("MusicMapMaker - Vulkan Validation Layer Missing",
-                           msg);
-
-        releaseGLFW();
-        failInitialization(
-            "Fatal: Not all requested validation layers are available!");
-        return;
-    } else {
-        XDEBUG("Validation layers enabled.");
+        return false;
     }
+    XDEBUG("Validation layers enabled.");
+    return true;
 }
 
 /// @brief 将 Vulkan 验证和驱动诊断交给应用日志。
@@ -99,7 +89,7 @@ void VKContext::enableVKValidateLayer()
 /// @return VK_FALSE，继续触发该诊断的 Vulkan 调用。
 /// @warning 回调在引发诊断的线程内执行，可能从多个线程同时进入；禁止调用
 /// Vulkan 命令、变更渲染状态或等待需要由调用线程完成的工作。
-VKAPI_ATTR VkBool32 VKAPI_CALL VKContext::vkDebug_callback(
+VKAPI_ATTR VkBool32 VKAPI_CALL VKContext::StartupDiagnostics::vkDebug_callback(
     VkDebugUtilsMessageSeverityFlagBitsEXT      messageSeverity,
     VkDebugUtilsMessageTypeFlagsEXT             messageTypes,
     const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData)
@@ -133,6 +123,43 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VKContext::vkDebug_callback(
     // 验证层开发可使用的 VK_TRUE 不属于应用程序的诊断返回约定。
     // 此处始终由调用方依据 Vulkan 命令结果决定后续行为。
     return VK_FALSE;
+}
+
+/// @brief 使实例创建调用借用生命周期内稳定的验证层名称和回调结构。
+void VKContext::StartupDiagnostics::configureInstance(
+    vk::InstanceCreateInfo& info) const
+{
+    if ( validationLayersEnabled() ) {
+        // 实例尚未创建时借用 pNext；实例就绪后由独立消息器接管。
+        info.setPEnabledLayerNames(m_vkValidationLayers);
+        info.setPNext(&m_vkDebugUtilCreateInfo);
+    }
+}
+
+/// @brief 只有 Vulkan 成功返回时才记住消息器句柄，失败由调用方处理。
+vk::Result VKContext::StartupDiagnostics::createMessenger(
+    vk::Instance instance, const vk::detail::DispatchLoaderDynamic& dispatch)
+{
+    const auto result = instance.createDebugUtilsMessengerEXT(
+        m_vkDebugUtilCreateInfo, nullptr, dispatch);
+    // 失败时不保存未定义句柄。后续统一释放仍可安全检查空消息器。
+    if ( result.result == vk::Result::eSuccess )
+        m_vkDebugMessenger = result.value;
+    return result.result;
+}
+
+/// @brief 清理已建立的消息器，复用其创建时的实例和动态分派器。
+void VKContext::StartupDiagnostics::destroyMessenger(
+    vk::Instance instance, const vk::detail::DispatchLoaderDynamic& dispatch)
+{
+    if ( m_vkDebugMessenger ) {
+        // 销毁顺序由 VKContext 控制；此时实例仍可处理 Vulkan 扩展调用。
+        instance.destroyDebugUtilsMessengerEXT(
+            m_vkDebugMessenger, nullptr, dispatch);
+        // 清除所有权记录，部分初始化失败和正常退出都经过同一个入口。
+        m_vkDebugMessenger = nullptr;
+        XDEBUG("VK Debug Messenger destroyed.");
+    }
 }
 
 }  // namespace MMM::Graphic

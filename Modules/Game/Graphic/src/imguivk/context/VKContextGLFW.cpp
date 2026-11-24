@@ -1,3 +1,4 @@
+#include "VKContextStartupDiagnostics.h"
 #include "graphic/glfw/GLFWHeader.h"
 #include "graphic/imguivk/VKContext.h"
 #include "graphic/imguivk/VKRenderer.h"
@@ -87,13 +88,13 @@ void VKContext::initGLFW()
     // GLFW 是进程级资源；一旦初始化失败，统一通过 failInitialization 固化首个
     // 错误，避免构造函数继续创建依赖 GLFW 扩展列表的 Vulkan instance。
     if ( !glfwInit() ) {
-        collectLastGLFWErrorDiagnostic("glfwInit failed.");
-        logStartupDiagnostics("glfwInit failed.");
+        m_diagnostics->collectLastGLFWErrorDiagnostic("glfwInit failed.");
+        m_diagnostics->logStartupDiagnostics("glfwInit failed.");
         failInitialization("GLFW init failed");
         return;
     };
     XDEBUG("GLFW initialized successfully.");
-    collectGLFWDiagnostics();
+    m_diagnostics->collectGLFWDiagnostics();
 
     // 窗口不创建 OpenGL/OpenGL ES 上下文，后续呈现表面完全由 Vulkan 接管。
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -101,9 +102,11 @@ void VKContext::initGLFW()
     // 该探测同时验证 loader 和平台 surface 支持；失败时补采 loader 清单，便于
     // 区分缺少驱动、缺少 instance 扩展与 GLFW 平台后端不可用。
     if ( !glfwVulkanSupported() ) {
-        collectLastGLFWErrorDiagnostic("glfwVulkanSupported failed.");
-        collectVulkanLoaderDiagnostics();
-        logStartupDiagnostics("GLFW reports that Vulkan is not supported.");
+        m_diagnostics->collectLastGLFWErrorDiagnostic(
+            "glfwVulkanSupported failed.");
+        m_diagnostics->collectVulkanLoaderDiagnostics();
+        m_diagnostics->logStartupDiagnostics(
+            "GLFW reports that Vulkan is not supported.");
         // 构造尚未进入 Vulkan instance 阶段，此处只需回收 GLFW 的进程级状态。
         releaseGLFW();
         failInitialization("Fatal: GLFW reports that Vulkan is not supported!");
@@ -127,14 +130,14 @@ void VKContext::registerGLFWExtensions()
     const char** glfwExtensions{ nullptr };
     glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
     if ( glfwExtensions == nullptr ) {
-        collectLastGLFWErrorDiagnostic(
+        m_diagnostics->collectLastGLFWErrorDiagnostic(
             "glfwGetRequiredInstanceExtensions failed.");
-        addStartupDiagnostic(
+        m_diagnostics->addStartupDiagnostic(
             fmt::format("GLFW required Vulkan extension "
                         "count: {}",
                         glfwExtensionCount));
-        collectVulkanLoaderDiagnostics();
-        logStartupDiagnostics(
+        m_diagnostics->collectVulkanLoaderDiagnostics();
+        m_diagnostics->logStartupDiagnostics(
             "glfwGetRequiredInstanceExtensions returned null.");
         releaseGLFW();
         failInitialization(
@@ -151,13 +154,13 @@ void VKContext::registerGLFWExtensions()
         m_vkExtensions.push_back(glfwExtension);
         XDEBUG("  - {}", glfwExtension);
     }
-    addStartupDiagnostic(
+    m_diagnostics->addStartupDiagnostic(
         fmt::format("GLFW required Vulkan extensions: {}", glfwExtensionCount));
     for ( int i{ 0 }; i < glfwExtensionCount; ++i ) {
-        addStartupDiagnostic(
+        m_diagnostics->addStartupDiagnostic(
             fmt::format("GLFW required extension: {}", glfwExtensions[i]));
     }
-    collectVulkanLoaderDiagnostics();
+    m_diagnostics->collectVulkanLoaderDiagnostics();
 
 #ifdef __APPLE__
     // MoltenVK 将非原生 Vulkan 设备标记为 portability 实现；同时请求属性查询

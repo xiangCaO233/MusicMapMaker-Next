@@ -1,3 +1,4 @@
+#include "VKContextAppearance.h"
 #include "config/AppConfig.h"
 #include "config/AppPaths.h"
 #include "config/EditorSettings.h"
@@ -35,11 +36,10 @@ namespace MMM::Graphic
 
 /// @brief 获取当前上下文持有的内置与插件主题注册表。
 /// @return 与 VKContext 生命周期一致的只读注册表引用。
-/// @warning 设置/UI 查询路径：只解引用已在上下文初始化阶段创建的 owning
-/// pointer。
-const ImGuiThemeRegistry& VKContext::getThemeRegistry() const
+/// @warning 设置/UI 查询路径：只借用已经在初始化阶段创建的注册表。
+const ImGuiThemeRegistry& VKContext::Appearance::getThemeRegistry() const
 {
-    return *m_themeRegistry;
+    return m_themeRegistry;
 }
 
 /// @brief Wayland 下独立图标字体的视觉缩放，避免 DPI 下方形按钮裁切字形。
@@ -406,8 +406,8 @@ void VKContext::imguiVulkanInit(PlatformWindowHandle* windowHandle,
 
     if ( mode == VKWindowResourceMode::Bootstrap ) {
         // 启动窗口不能依赖尚未同步的皮肤资源或 Lua 插件。
-        setupBootstrapFonts();
-        applyBootstrapTheme();
+        m_appearance->setupBootstrapFonts();
+        m_appearance->applyBootstrapTheme();
     } else {
         // 正式窗口加载皮肤字体后再注册/应用内置与插件主题。
         setupFonts();
@@ -425,7 +425,7 @@ void VKContext::imguiVulkanInit(PlatformWindowHandle* windowHandle,
 ///
 /// @warning 启动低频路径：枚举系统字体并读取字体文件，只在 Bootstrap context
 /// 初始化时调用。
-void VKContext::setupBootstrapFonts()
+void VKContext::Appearance::setupBootstrapFonts()
 {
     // 非 2 次幂高度减少系统 CJK 字体 atlas 的无效空白。
     ImGuiIO& io = ImGui::GetIO();
@@ -512,7 +512,7 @@ void VKContext::setupBootstrapFonts()
 
 /// @brief 在资源到位前应用默认皮肤的内置浅色或深色主题。
 /// @warning 启动低频路径：读取一次系统外观，只在 Bootstrap 初始化调用。
-void VKContext::applyBootstrapTheme()
+void VKContext::Appearance::applyBootstrapTheme()
 {
     // 沿用默认皮肤的 Cecilia/Moonlight
     // 映射；系统未报告外观时与正式界面一样回退浅色。
@@ -555,7 +555,7 @@ void VKContext::applyBootstrapTheme()
 ///
 /// @warning 初始化或低频字体重建路径：访问配置/字体文件并向动态 atlas 添加多个
 /// face，禁止进入每帧 UI 热路径。
-void VKContext::setupFonts()
+void VKContext::Appearance::setupFonts()
 {
     // 本轮所有字体共享同一 atlas 与 SkinManager runtimeFonts 注册表。
     ImGuiIO& io        = ImGui::GetIO();
@@ -753,13 +753,13 @@ void VKContext::setupFonts()
 ///
 /// @warning 低频字体热重载路径：内部 device.waitIdle
 /// 且访问字体文件，只能响应明确 重建请求，禁止从每帧无条件调用。
-void VKContext::rebuildFonts()
+void VKContext::Appearance::rebuildFonts(vk::Device device)
 {
     // 日志标记资源热重载边界，便于定位字体文件和 Vulkan 同步问题。
     XINFO("Hot-reloading ImGui fonts...");
     // 旧 atlas 纹理或 ImFont 可能仍被在途 draw data 引用，清理前必须 device
     // idle。
-    if ( m_vkLogicalDevice.waitIdle() != vk::Result::eSuccess ) {
+    if ( device.waitIdle() != vk::Result::eSuccess ) {
         XERROR("Failed to wait for device idle during font reload.");
         return;
     }
@@ -789,7 +789,7 @@ void VKContext::rebuildFonts()
 ///
 /// @warning 仅响应 DPI 或字体设置变化时调用；会遍历
 /// runtimeFonts，但不访问文件或 等待 GPU，不应进入每帧 UI 热路径。
-void VKContext::updateFontScales()
+void VKContext::Appearance::updateFontScales()
 {
     // 样式字段影响 ImGui 当前主字体倍率，与每个 ImFont 的 atlas base scale
     // 分离。
@@ -813,7 +813,7 @@ void VKContext::updateFontScales()
 ///
 /// @warning 原子写入路径：可由 UI/资源线程调用，使用 release 与消费端 acquire
 /// 配对。
-void VKContext::requestFontRebuild()
+void VKContext::Appearance::requestFontRebuild()
 {
     m_fontRebuildRequested.store(true, std::memory_order_release);
 }
@@ -824,11 +824,11 @@ void VKContext::requestFontRebuild()
 ///
 /// @warning 渲染准备热路径：每帧只执行一次原子 exchange；命中后会进入阻塞式低频
 /// rebuildFonts，调用位置必须位于允许 device idle 的资源维护阶段。
-void VKContext::checkAndRebuildFonts()
+void VKContext::Appearance::checkAndRebuildFonts(vk::Device device)
 {
     // acq_rel 既消费 release 发布的数据，也保证同一时刻只有一次重建取得 true。
     if ( m_fontRebuildRequested.exchange(false, std::memory_order_acq_rel) ) {
-        rebuildFonts();
+        rebuildFonts(device);
     }
 }
 
@@ -839,7 +839,7 @@ void VKContext::checkAndRebuildFonts()
 ///
 /// @warning UI 更新路径：每帧可调用，但常态仅比较时间点；系统探测和主题应用限频
 /// 到一秒一次，不执行固定时长阻塞等待。
-void VKContext::checkAndApplySystemTheme()
+void VKContext::Appearance::checkAndApplySystemTheme()
 {
     // 显式主题不应受系统外观变化影响。
     const auto& settings = Config::AppConfig::instance().getEditorSettings();
@@ -868,15 +868,15 @@ void VKContext::checkAndApplySystemTheme()
 /// 跳过已有项，供 reload/apply 安全复用。
 ///
 /// @warning 初始化/插件重载低频路径：会分配主题对象，禁止每帧调用。
-void VKContext::registerBuiltInThemes()
+void VKContext::Appearance::registerBuiltInThemes()
 {
     // 局部 helper 集中构造内置主题元数据和失败日志。
     auto registerTheme = [this](const char*               id,
                                 ImGuiTheme::ApplyFunction applyFunction) {
         // 幂等检查保留首次注册顺序，不重复创建 owning 对象。
-        if ( m_themeRegistry->contains(id) ) return;
+        if ( m_themeRegistry.contains(id) ) return;
         // registry 再验证来源、空 base、ID 字符集和唯一性。
-        if ( !m_themeRegistry->registerBuiltInTheme(
+        if ( !m_themeRegistry.registerBuiltInTheme(
                  std::make_unique<ImGuiTheme>(id,
                                               id,
                                               ImGuiThemeOrigin::BuiltIn,
@@ -923,13 +923,13 @@ void VKContext::registerBuiltInThemes()
 /// @return 插件目录扫描、加载和错误统计。
 /// @warning 显式资源重载路径：会访问文件系统、执行
 /// Lua、分配主题并修改全局样式。
-ThemePluginReloadResult VKContext::reloadPlugins()
+ThemePluginReloadResult VKContext::Appearance::reloadPlugins()
 {
     // 内置基底必须在解析插件主题继承关系前存在。
     registerBuiltInThemes();
     const auto& settings = Config::AppConfig::instance().getEditorSettings();
     // disabledPluginIds 决定本轮完全跳过执行的插件文件。
-    ThemePluginReloadResult result = m_themeRegistry->reloadThemePlugins(
+    ThemePluginReloadResult result = m_themeRegistry.reloadThemePlugins(
         Config::AppPaths::themePluginsRootPath(), settings.disabledPluginIds);
     // 清除旧插件后当前主题 ID 可能失效，统一走 applyTheme 的回退策略。
     applyTheme();
@@ -945,10 +945,11 @@ ThemePluginReloadResult VKContext::reloadPlugins()
 /// @param enabled 目标启用状态。
 /// @return AppConfig 持久化是否成功；未知插件直接返回 false。
 /// @warning 设置操作低频路径：修改配置、写文件并完整重载 Lua 插件。
-bool VKContext::setPluginEnabled(std::string_view pluginId, bool enabled)
+bool VKContext::Appearance::setPluginEnabled(std::string_view pluginId,
+                                             bool             enabled)
 {
     // 只允许操作已发现插件，防止配置积累任意无效 ID。
-    if ( !m_themeRegistry->findPlugin(pluginId) ) return false;
+    if ( !m_themeRegistry.findPlugin(pluginId) ) return false;
 
     auto& disabledPluginIds =
         Config::AppConfig::instance().getEditorSettings().disabledPluginIds;
@@ -977,7 +978,7 @@ bool VKContext::setPluginEnabled(std::string_view pluginId, bool enabled)
 ///
 /// @warning 主题切换低频路径：重置全局 ImGuiStyle
 /// 并发布事件，不得每帧无条件调用。
-void VKContext::applyTheme()
+void VKContext::Appearance::applyTheme()
 {
     // 主题 registry 在首次调用或插件清理后都必须保有全部内置 fallback。
     registerBuiltInThemes();
@@ -1004,11 +1005,11 @@ void VKContext::applyTheme()
     }
 
     // registry 会从全新 ImGuiStyle 应用内置或“内置基底 + 插件 patch”。
-    if ( !m_themeRegistry->applyTheme(appliedThemeId, ImGui::GetStyle()) ) {
+    if ( !m_themeRegistry.applyTheme(appliedThemeId, ImGui::GetStyle()) ) {
         XWARN("Unknown or invalid ImGui theme '{}'; falling back to DeepDark",
               appliedThemeId);
         // DeepDark 由上方幂等注册保证存在，作为最终视觉后备。
-        m_themeRegistry->applyTheme("DeepDark", ImGui::GetStyle());
+        m_themeRegistry.applyTheme("DeepDark", ImGui::GetStyle());
     }
 
     // registry 每次从默认 style 开始，ScaleAllSizes 不会在多次切换中累积。
@@ -6677,6 +6678,69 @@ static void applyKazamCherryStyle(ImGuiStyle& style)
     style.Colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0.8f, 0.8f, 0.8f, 0.2f);
     // 模态遮罩明确阻断下层交互，透明度同时维持来源窗口可见。
     style.Colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.8f, 0.8f, 0.8f, 0.35f);
+}
+
+/// @brief 借用主题注册表供设置页读取插件和内置主题。
+const ImGuiThemeRegistry& VKContext::getThemeRegistry() const
+{
+    return m_appearance->getThemeRegistry();
+}
+
+/// @brief 建立正式窗口的完整样式字体。
+void VKContext::setupFonts()
+{
+    m_appearance->setupFonts();
+}
+
+/// @brief 在允许设备空闲等待的维护点重建字体 atlas。
+/// @warning 等待旧的 GPU 使用并加载字体文件，仅用于低频资源切换。
+void VKContext::rebuildFonts()
+{
+    m_appearance->rebuildFonts(m_vkLogicalDevice);
+}
+
+/// @brief 恢复 atlas 已固定的字号倍率。
+void VKContext::updateFontScales()
+{
+    m_appearance->updateFontScales();
+}
+
+/// @brief 跨线程发布字体重建请求，不触碰 atlas 或窗口资源。
+void VKContext::requestFontRebuild()
+{
+    m_appearance->requestFontRebuild();
+}
+
+/// @brief 在提交下一帧前交由外观组件消费重建请求。
+/// @warning 每帧只消费一次原子脏位；收到请求时才允许设备空闲等待。
+void VKContext::checkAndRebuildFonts()
+{
+    m_appearance->checkAndRebuildFonts(m_vkLogicalDevice);
+}
+
+/// @brief 按原节流周期检查是否需要应用自动主题。
+/// @warning 每帧调用，常态只进行枚举或时间点比较。
+void VKContext::checkAndApplySystemTheme()
+{
+    m_appearance->checkAndApplySystemTheme();
+}
+
+/// @brief 将当前选择的主题应用到活动 ImGui 上下文。
+void VKContext::applyTheme()
+{
+    m_appearance->applyTheme();
+}
+
+/// @brief 重新加载可用插件主题并返回扫描和加载统计。
+ThemePluginReloadResult VKContext::reloadPlugins()
+{
+    return m_appearance->reloadPlugins();
+}
+
+/// @brief 根据设置页操作启用或禁用已发现的插件，并立即刷新主题。
+bool VKContext::setPluginEnabled(std::string_view pluginId, bool enabled)
+{
+    return m_appearance->setPluginEnabled(pluginId, enabled);
 }
 
 }  // namespace MMM::Graphic

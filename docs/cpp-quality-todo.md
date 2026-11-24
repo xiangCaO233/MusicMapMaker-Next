@@ -78,11 +78,13 @@
 
   已验证。背景视频提交、GPU 确认与演练动作使用各自的画布私有组件，保留现有解码器和视图入口。Linux RelWithDebInfo 全量构建与 12 项相关 CTest 通过。Ninja 活动对象依赖数为 Basic2DCanvas.h 6,Basic2DCanvas_Private.h 4。
 
-- [ ] **R71 · P0 · VKContext 同时拥有设备寿命、启动诊断与主题字体状态**
+- [x] **R71 · P0 · VKContext 同时拥有设备寿命、启动诊断与主题字体状态**
 
   25 个对象依赖。字体切换与实例诊断变更波及设备和 swapchain 消费者。 先移出低频主题/字体重建状态及实例诊断配置，保留已有 Vulkan 句柄借用接口，逐步缩小 friend 范围。验证主题切换、字体重建、诊断开关、设备重建和关闭顺序。
 
   [VKContext.h L210](../Modules/Game/Graphic/include/graphic/imguivk/VKContext.h#L210)
+
+  已验证。主题字体资源和实例启动诊断移入私有组件，保留 Vulkan 对象借用和渲染入口。Linux RelWithDebInfo 全量构建与 11 项相关 CTest 通过。Ninja 活动对象依赖数为 VKContext.h 25,VKContextStartupDiagnostics.h 6,VKContextAppearance.h 2。在隔离 Weston 与 Lavapipe 上通过 Vulkan 启动、绘制与关闭，验证实际皮肤互切和延迟字体重建。默认配置与启用 Khronos 验证层的探针均通过。
 
 - [ ] **R72 · P0 · ICE 文件接收器在公开头承载编码会话私有状态**
 
