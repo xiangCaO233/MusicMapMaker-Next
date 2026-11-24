@@ -3,7 +3,11 @@
 #include "beatmap/LoadRMMap.hpp"
 #include "mmm/beatmap/BeatMap.h"
 
+#include <algorithm>
 #include <fstream>
+#include <istream>
+#include <sstream>
+#include <string>
 #include <system_error>
 
 /// @file IMDConsistencyTest.cpp
@@ -69,6 +73,86 @@ bool checkRMFlacAudioResolution()
     return passed;
 }
 
+/// @brief 用真实读取缓冲和独立的定位结果模拟 IMD 文件长度变化。
+/// @details 不使用另一个线程截断文件，因此覆盖窗口不依赖测试机器的调度速度。
+/// 定位由探针模拟，字符流的短读和 EOF 行为仍由标准库执行。
+/// 流中实际字符全部相同，可以检查成功读入是否既未丢失也未追加内容。
+/// 模拟输入不接触文件系统，也不会为超限用例创建 64 MiB 的夹具。
+class IMDLengthProbe : public std::stringbuf
+{
+public:
+    /// @brief 构造探针，允许读入字节数与模拟的末尾位置不同。
+    /// @param actualBytes 流中实际可读取的字节数。
+    /// @param reportedSize 模拟 seek 到末尾后 tellg 返回的位置。
+    /// @param canRewind 是否允许加载器从长度探测状态返回开头。
+    IMDLengthProbe(std::size_t actualBytes, std::streamoff reportedSize,
+                   bool canRewind)
+        : std::stringbuf(std::string(actualBytes, 'x'), std::ios::in)
+        , m_reportedSize(reportedSize)
+        , m_canRewind(canRewind)
+    {
+    }
+
+protected:
+    /// @brief 提供可控的末尾位置，只让真正的回卷操作修改读游标。
+    pos_type seekoff(off_type offset, std::ios::seekdir direction,
+                     std::ios::openmode mode) override
+    {
+        // seek 到末尾与紧随其后的 tellg 都使用同一个模拟长度。
+        // -1 模拟底层设备不支持定位；基础缓冲仍保留供 read 使用的数据。
+        if ( direction != std::ios::beg ) return pos_type(m_reportedSize);
+        if ( !m_canRewind ) return pos_type(-1);
+        return std::stringbuf::seekoff(offset, direction, mode);
+    }
+
+private:
+    /// @brief 文件打开时加载器可以观察到的长度，与后台实际内容无关。
+    std::streamoff m_reportedSize;
+    /// @brief 模拟底层允许读取长度但无法重新定位到开头的情况。
+    bool m_canRewind;
+};
+
+/// @brief 验证同一读入入口拒绝不可信的长度及不完整的数据。
+/// @return 所有失败返回空，完整输入保留原字节时为真。
+/// @details 先隔离定位失败，再分别验证长度上下界与探测后的数据变化。
+/// 精确长度成功用例防止将任何读取都拒绝的实现误判为已修复。
+/// 使用与常规加载相同的生产读取器，格式往返仍在下方独立验证。
+bool checkIMDFileRead()
+{
+    /// @brief 将不同定位和读入行为交给生产读取器，避免副本逻辑掩盖回归。
+    const auto read =
+        [](std::size_t actual, std::streamoff reported, bool canRewind = true) {
+            IMDLengthProbe buffer(actual, reported, canRewind);
+            std::istream   input(&buffer);
+            return MMM::Internal::readIMDBytes(input, "imd-length-probe.imd");
+        };
+
+    // 同时覆盖末尾无法定位和读取前回卷失败；两者都不应进入分配阶段。
+    const bool seekFailed = read(8, -1).empty() && read(8, 8, false).empty();
+    // 故意报告超过预算的长度，无须实际分配大夹具；也保留既有最小帧判定。
+    const bool sizeRejected =
+        read(8, MMM::Internal::MAX_IMD_FILE_BYTES + 1).empty() &&
+        read(7, 7).empty();
+    // 读到旧长度后的额外字节和读取中提前遇到 EOF 都表示输入快照不完整。
+    const bool changingFileRejected = read(8, 9).empty() && read(9, 8).empty();
+    const auto exact                = read(8, 8);
+    const bool exactAccepted =
+        exact.size() == 8 && std::all_of(exact.begin(),
+                                         exact.end(),
+                                         [](char c) { return c == 'x'; });
+
+    // 分组输出失败原因，便于区分定位、限额和实际读入的回归。
+    const bool passed =
+        seekFailed && sizeRejected && changingFileRejected && exactAccepted;
+    if ( !passed )
+        XERROR("[IMD File Read]: seek={}, size={}, changed={}, exact={}",
+               seekFailed,
+               sizeRejected,
+               changingFileRejected,
+               exactAccepted);
+    return passed;
+}
+
 /// @brief 执行 IMD 字节布局、统一模型和伴随资源解析的往返验证。
 /// @param argc 需要输入与输出路径两个参数。
 /// @param argv argv[1] 为基准 IMD，argv[2] 提供输出目录。
@@ -76,7 +160,7 @@ bool checkRMFlacAudioResolution()
 int main(int argc, char* argv[])
 {
     // 缺少显式路径时不猜测资源位置，交由 CTest 配置提供稳定输入。
-    if ( argc < 3 ) return 1;
+    if ( argc < 3 || !checkIMDFileRead() ) return 1;
     std::filesystem::path input  = argv[1];
     std::filesystem::path output = argv[2];
     // 加载器从文件名解析标题、轨道数与难度，因此往返输出沿用原始文件名；
@@ -136,7 +220,7 @@ int main(int argc, char* argv[])
     // FLAC 发现属于明确的兼容性契约，也必须独立通过。
     int totalPassed = binaryPassed + (logicPassed ? 1 : 0) +
                       (flacAudioResolutionPassed ? 1 : 0);
-    int totalTests  = TOTAL_IMD_CHUNKS + 2;
+    int totalTests = TOTAL_IMD_CHUNKS + 2;
     XINFO("========================================");
     bool isConsideredPassed =
         // 完全一致是理想结果；历史样本至少要求三个核心区块及全部逻辑通过。

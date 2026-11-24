@@ -533,7 +533,9 @@
 
 ### P2 · R07 · IMD 读取前未核实长度
 
-- [ ] seek/tell 失败可将负位置转成巨大的 size_t，正常大文件也按整文件一次分配。读取前检查定位、长度预算和实际读完状态；回归无法定位、短读和超过预算的输入。
+- [x] seek/tell 失败可将负位置转成巨大的 size_t，正常大文件也按整文件一次分配。读取前检查定位、长度预算和实际读完状态；回归无法定位、短读和超过预算的输入。
+
+  已验证。Linux Clang 22 RelWithDebInfo 全量构建和 3 项回归通过。IMD 读入检查定位、64 MiB 预算和实际读取长度，覆盖定位失败、短读、增长、超限和正常往返。
 
 [Modules/MMM/src/beatmap/LoadRMMap.hpp:244](../Modules/MMM/src/beatmap/LoadRMMap.hpp#L244)
 

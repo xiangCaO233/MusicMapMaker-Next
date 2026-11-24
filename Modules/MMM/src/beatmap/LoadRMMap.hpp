@@ -11,7 +11,9 @@
 #include <filesystem>
 #include <fmt/format.h>
 #include <fstream>
+#include <istream>
 #include <string>
+#include <vector>
 
 namespace MMM
 {
@@ -121,6 +123,59 @@ inline std::filesystem::path resolveRMAudioPath(
     }
     return {};
 }
+
+namespace Internal
+{
+
+/// @brief IMD 原始输入的字节预算，在绑定解析游标前验证。
+/// @details 与 Malody 的原始文本预算相同。此上限仅约束原文件缓冲，
+/// 已解码物件仍按实际记录保存。
+/// @note 读取前只按真实文件大小分配，声明的记录数量不得扩大此缓冲。
+/// 超限失败返回空模型，调用方不会把对应路径记录为有效谱面。
+inline constexpr std::streamoff MAX_IMD_FILE_BYTES = 64 * 1024 * 1024;
+
+/// @brief 读入完整定长文件，为现有 IMD 游标提供稳定存储。
+/// @param input 以二进制模式读取、可定位的输入流。
+/// @param path 仅用于读入失败时标注输入来源。
+/// @return 完整的非空字节缓冲。定位失败、长度越界和读取期间长度变化时返回空。
+inline std::vector<char> readIMDBytes(std::istream&                input,
+                                      const std::filesystem::path& path)
+{
+    // tellg 可能返回 -1。保留有符号值，避免在分配缓冲前发生无符号回绕。
+    input.seekg(0, std::ios::end);
+    const std::streamoff size = input.tellg();
+    if ( size < 0 || size > MAX_IMD_FILE_BYTES ) {
+        XWARN("无法确定 IMD 文件大小或超出字节上限（{} 字节）: {}",
+              MAX_IMD_FILE_BYTES,
+              Config::pathToUtf8(path));
+        return {};
+    }
+
+    // 最小读入长度保持兼容：前两个字段是 mapLength 和 timingCount，
+    // 后续字段是否完整仍交给现有解析器按历史规则判定。
+    if ( size < 8 ) {
+        XWARN("imd文件太小，格式不合法: {}", Config::pathToUtf8(path));
+        return {};
+    }
+
+    // 流也可能只能定位到末尾、无法返回开头。先重置位置，再分配目标缓冲区。
+    if ( !input.seekg(0, std::ios::beg) ) {
+        XWARN("无法定位 IMD 文件头: {}", Config::pathToUtf8(path));
+        return {};
+    }
+    std::vector<char> bytes(static_cast<std::size_t>(size));
+    // 到达快照长度时仍需确认 EOF。读失败或末尾还有字节时丢弃整份输入，
+    // 防止半途截断或扩展的文件被标记为有效谱面。
+    if ( !input.read(bytes.data(), static_cast<std::streamsize>(size)) ||
+         input.peek() != std::char_traits<char>::eof() || input.bad() ) {
+        XWARN("读取 IMD 文件失败或文件长度已变化: {}",
+              Config::pathToUtf8(path));
+        return {};
+    }
+    return bytes;
+}
+
+}  // namespace Internal
 
 /// @brief 加载 RM/imd 谱面文件。
 /// @param path 谱面文件路径。
@@ -232,42 +287,30 @@ inline BeatMap loadRMMap(std::filesystem::path path)
         }
     }
 
-    // 下面进入文件体解析。只有完整读入内存后才建立首尾游标，从而让所有
-    // 定宽字段共享同一套边界判断，不在多次流读取之间遗漏失败状态。
+    // IMD 必须能按偏移确定长度。先拒绝管道等特殊文件，避免打开时等待生产者。
+    if ( !std::filesystem::is_regular_file(basemeta.map_path, ec) ) {
+        XWARN("IMD 路径不是可读取的普通文件: {}",
+              Config::pathToUtf8(basemeta.map_path));
+        return {};
+    }
     std::ifstream file(basemeta.map_path, std::ios::binary);
     if ( !file ) {
         XWARN("无法打开imd文件: {}", Config::pathToUtf8(basemeta.map_path));
         return {};
     }
+    const auto bufferData = Internal::readIMDBytes(file, basemeta.map_path);
+    if ( bufferData.empty() ) return {};
 
-    // 文件头至少包含 mapLength 与 timingCount 两个 int32 字段。
-    file.seekg(0, std::ios::end);
-    size_t fileSize = file.tellg();
-    file.seekg(0, std::ios::beg);
-
-    if ( fileSize < 8 ) {
-        XWARN("imd文件太小，格式不合法: {}",
-              Config::pathToUtf8(basemeta.map_path));
-        return {};
-    }
-
-    // 一次性读取也保证游标引用在整个解析周期内保持稳定。
-    std::vector<char> buffer_data(fileSize);
-    if ( !file.read(buffer_data.data(), fileSize) ) {
-        XWARN("读取imd文件数据失败: {}", Config::pathToUtf8(basemeta.map_path));
-        return {};
-    }
-
-    // data_pos 是唯一前进游标；data_end 是所有字段读取的硬边界。
+    // data_pos 是唯一前进游标；data_end 来自已经实际读入的字节数。
     BinaryReader reader;
-    const char*  data_start = buffer_data.data();
-    const char*  data_end   = data_start + fileSize;
+    const char*  data_start = bufferData.data();
+    const char*  data_end   = data_start + bufferData.size();
     const char*  data_pos   = data_start;
 
     // 每个字段组在解码前声明所需字节数。失败时返回已解析对象，既不越界，
     // 也不把未初始化内容写入模型。宏仅在本函数解析区间内可见。
 #define CHECK_BOUNDS(needed)                 \
-    if ( data_pos + (needed) > data_end ) {  \
+    if ( data_end - data_pos < (needed) ) {  \
         XERROR("imd文件意外结束，读取失败"); \
         return beatMap;                      \
     }
