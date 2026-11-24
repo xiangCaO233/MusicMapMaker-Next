@@ -19,6 +19,7 @@
 #include "log/colorful-log.h"
 #include <algorithm>
 #include <cmath>
+#include <compare>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -382,16 +383,19 @@ void BeatMap::sync()
         m_allNotes.push_back(std::ref(poly));
     }
 
-    // 时间使用容差视为同组，再以轨道和类型生成跨平台稳定顺序。
+    // 以实际时间戳为主键，同一时间再比较轨道和类型。
     std::stable_sort(m_allNotes.begin(),
                      m_allNotes.end(),
                      [](const std::reference_wrapper<Note>& a_ref,
                         const std::reference_wrapper<Note>& b_ref) {
                          const Note& a = a_ref.get();
                          const Note& b = b_ref.get();
-                         // 超出容差才比较浮点时间，避免微小写出误差重排同拍物件。
-                         if ( std::abs(a.m_timestamp - b.m_timestamp) > 1e-4 )
-                             return a.m_timestamp < b.m_timestamp;
+                         // 两两容差不能形成传递的等价关系；弱序也为 NaN
+                         // 定义分组。
+                         if ( const auto order =
+                                  std::weak_order(a.m_timestamp, b.m_timestamp);
+                              order != 0 )
+                             return order < 0;
                          // 同时刻先按轨道排列，便于保存器和测试得到确定输出。
                          if ( a.m_track != b.m_track )
                              return a.m_track < b.m_track;

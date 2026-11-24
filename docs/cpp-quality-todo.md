@@ -525,7 +525,9 @@
 
 ### P2 · R06 · 排序比较器违反严格弱序
 
-- [ ] 相邻时间差在 ε 内时切换到次键。取时间 0、0.75ε、1.5ε、轨道依次 2、1、0，可同时得到第三个排第二个之前、第二个排第一个之前、第一个又排第三个之前。影响物件索引与多格式导出。建立可传递的排序键，测三元组及输入排列。
+- [x] 相邻时间差在 ε 内时切换到次键。取时间 0、0.75ε、1.5ε、轨道依次 2、1、0，可同时得到第三个排第二个之前、第二个排第一个之前、第一个又排第三个之前。影响物件索引与多格式导出。建立可传递的排序键，测三元组及输入排列。
+
+  已验证。Linux Clang 22 RelWithDebInfo 全量构建和 11 项回归通过。循环三元组的六种输入排列在物件索引、原生采样和批注输出中均按时间先后排列。
 
 [Modules/MMM/src/beatmap/BeatMap.cpp:393](../Modules/MMM/src/beatmap/BeatMap.cpp#L393) [Modules/MMM/src/beatmap/SaveOSUMap.hpp:428](../Modules/MMM/src/beatmap/SaveOSUMap.hpp#L428) [Modules/MMM/src/beatmap/SaveMMMMap.hpp:266](../Modules/MMM/src/beatmap/SaveMMMMap.hpp#L266) [Modules/MMM/src/beatmap/SaveMMMMap.hpp:654](../Modules/MMM/src/beatmap/SaveMMMMap.hpp#L654) [Modules/MMM/src/beatmap/SaveMalodyMap.hpp:1302](../Modules/MMM/src/beatmap/SaveMalodyMap.hpp#L1302) [Modules/MMM/src/beatmap/SaveMalodyMap.hpp:1366](../Modules/MMM/src/beatmap/SaveMalodyMap.hpp#L1366)
 
