@@ -102,11 +102,25 @@ public static class UpdaterUnicodeProbe {
     }
 
     # 正常路径传入已经退出的真实 PID，验证超时路径之后仍可以完成安装。
-    $parent = Start-Process -FilePath $env:ComSpec -ArgumentList '/d /c exit 0' -NoNewWindow -PassThru -Wait
+    # 直接保留 Process 句柄，立即退出的 cmd 也可以稳定取得 PID 并等待。
+    # Start-Process -Wait 会再次按 PID 查询进程组，短命进程可能已从系统移除。
+    # 此进程只用于让更新器收到真实退出过的 PID，无需另起测试 Shell。
+    # Process 对象会在进程退出后继续保存标识直到 Dispose。
+    $parent = [Diagnostics.Process]::Start($env:ComSpec, '/d /c exit 0')
+    if (!$parent.WaitForExit(15000)) {
+        $parent.Kill()
+        $parent.Dispose()
+        throw 'Fixture parent did not exit'
+    }
     $exitedParentId = $parent.Id
     $start.Arguments = '"{0}" "{1}" {2}' -f $download, $target, $exitedParentId
+    # 不把仍持有的进程作为安装起点。此时被测试进程可决策为已退出。
+    # 复制 PID 后释放句柄，使系统能够移除短命进程的内核记录。
     $parent.Dispose()
     # 模拟旧更新器在移动原程序后退出。即使下载已丢失，也须恢复唯一副本。
+    # 保持已安装文件的摘要作为恢复证据。临时输入故意缺失，由更新器拒绝。
+    # 本步骤验证旧安装恢复与新下载是否有效是两个独立决策。
+    # 如果只检查失败退出码，丢失旧文件也会造成测试假通过。
     [IO.File]::Move($target, $target + '.old')
     $validArguments = $start.Arguments
     $start.Arguments = '"{0}" "{1}" {2}' -f ($download + '.missing'), $target, $exitedParentId
@@ -124,6 +138,9 @@ public static class UpdaterUnicodeProbe {
     $start.Arguments = $validArguments
 
     # 拒绝删除共享让同卷提交失败，已完成的暂存副本也不能覆盖正式文件。
+    # 允许按路径读取摘要，但不允许重命名或删除，明确令发布步骤失败。
+    # 复制落在同卷的独立目录，只有提交到正式文件时才会观察到占用。
+    # 一旦释放占用，下一轮继续使用原下载源并重新验证正常替换。
     $locked = [IO.File]::Open($target, 'Open', 'Read', 'Read')
     try {
         $process = [Diagnostics.Process]::Start($start)
@@ -142,6 +159,9 @@ public static class UpdaterUnicodeProbe {
     } finally {
         $locked.Dispose()
     }
+    # 两次失败覆盖安装中断和当前锁定，成功路径继续使用同一个目标。
+    # 标记与重启见证都应只在成功用例结束后观察到新值。
+    # 生命周期由 finally 收尾，避免过程失败后给后续夹具留下打开句柄。
     Write-Output 'Legacy interruption and failed staged commit preserved the installation.'
 
     # 使用进程 API 调用实际二进制，跳过交互式终端或 cmd 的代码页转换。

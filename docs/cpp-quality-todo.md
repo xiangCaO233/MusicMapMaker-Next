@@ -94,11 +94,13 @@
 
   已验证。EncoderSession 独占 FFmpeg 编码资源。部分初始化失败、取消后重开、529 帧短尾和重复使用均通过。ICE 独立全量构建与 5 项 CTest 通过，[ICE #15](https://github.com/xiangCaO233/IonCachyEngine/pull/15) 合并提交为 b23ad52e4ea16cd1bef10a00b8ee94e65025b01a。主仓 Linux RelWithDebInfo 全量构建与 8 项相关 CTest 通过。接收器布局变更使用配套源码头和库验证。默认预编译头与库待既定 Runner 成套刷新。
 
-- [ ] **R73 · P0 · 独立更新器的多平台实现仍集中在入口文件**
+- [x] **R73 · P0 · 独立更新器的多平台实现仍集中在入口文件**
 
   平台宏分隔进程等待、原生重启、macOS 包事务和 Linux 安装。修改一侧需要在共同入口中维护多套失败与回滚路径。 common 只负责参数、状态和错误结果，由 CMake 选取各系统的进程与安装实现。复跑原生 Windows 目标占用/重启、macOS 包替换、Linux 回滚，以及父进程退出判定。
 
   [main.cpp L73](../Modules/Updater/main.cpp#L73)
+
+  已验证。CMake 选择各平台原生入口与安装实现，共用参数与安装生命周期。Linux RelWithDebInfo 全量构建与 2 项相关 CTest 通过。debsrv LLVM-MinGW 构建及 Win10 原生回归通过，覆盖父进程仍在、目标占用、旧安装恢复和 Unicode 重启。原生 AppleClang 最低部署目标 11.0 编译通过，已验证坏归档保全旧应用、签名包替换、重启与成功标记。
 
 - [ ] **R74 · P0 · ICE OpenAL 播放器内嵌平台驱动环境和线程优先级策略**
 

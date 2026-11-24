@@ -5,8 +5,19 @@ if(WIN32 AND NOT MSVC)
   set(UPDATER_RESOURCE MusicMapMaker-Updater.rc)
 endif()
 
-# 平台资源变量在非匹配平台为空，只编译同一份更新流程入口。
-add_executable(MusicMapMaker-Updater main.cpp ${UPDATER_RESOURCE})
+# 共同流程独立编译，各平台只加入适用的进程入口、安装事务和重启实现。 Windows 从 CRT 接收宽字符命令行，POSIX 共用窄入口和 PID
+# 等待代码。 macOS 和 Linux 的替换语义独立，源码选择与目标平台一致。 macOS 主程序和更新器仍共享成功标记协议头。
+# 平台条件不传播到共同流程的翻译单元。
+if(WIN32)
+  set(UPDATER_PLATFORM UpdaterWindows.cpp)
+elseif(APPLE)
+  set(UPDATER_PLATFORM UpdaterPosix.cpp UpdaterMac.cpp)
+else()
+  set(UPDATER_PLATFORM UpdaterPosix.cpp UpdaterLinux.cpp)
+endif()
+
+add_executable(MusicMapMaker-Updater main.cpp ${UPDATER_PLATFORM}
+                                     ${UPDATER_RESOURCE})
 
 # 输出到与主程序相同的 bin 目录，便于主程序用稳定相对路径启动更新器。
 set_target_properties(
