@@ -13,6 +13,8 @@
  * 完全独立，不依赖任何项目库，仅使用标准库和平台 API。
  */
 
+#include "UpdateSuccessMarker.h"
+
 #include <cerrno>
 #include <charconv>
 #include <chrono>
@@ -459,26 +461,6 @@ bool installMacApplication(const std::filesystem::path& archivePath,
     return true;
 }
 
-/// @brief 兼容旧版调用参数并定位 macOS App bundle 根路径。
-/// @param targetPath 新版传入的 .app 路径或旧版传入的包内 Mach-O 路径。
-/// @return 成功定位时返回 .app 根路径，否则返回空路径。
-///
-/// 只做词法父路径上溯，不访问文件系统；实际存在性随后由安装函数验证。
-std::filesystem::path normalizeMacApplicationTarget(
-    const std::filesystem::path& targetPath)
-{
-    std::filesystem::path current = targetPath;
-    // 从传入路径自身开始，兼容参数已经指向 bundle 根目录。
-    while ( !current.empty() ) {
-        if ( current.extension() == ".app" ) return current;
-        const std::filesystem::path parent = current.parent_path();
-        // 根目录 parent 等于自身时终止，避免无限循环。
-        if ( parent == current ) break;
-        current = parent;
-    }
-    return {};
-}
-
 #    else
 
 /// @brief 在 Linux 安装已验证的更新文件，仅用 rename 发布正式目标。
@@ -587,7 +569,7 @@ std::filesystem::path updateSuccessMarkerPath(
     const auto      tempPath = std::filesystem::temp_directory_path(tempError);
     // 临时目录查询失败时跳过标记，不影响已经完成的安装结果。
     if ( tempError ) return {};
-    return tempPath / "MusicMapMaker-Next.mm_update_success";
+    return MMM::Update::macUpdateMarkerPath(targetPath, tempPath);
 #else
     return targetPath.parent_path() / ".mm_update_success";
 #endif
@@ -612,6 +594,12 @@ void writeUpdateSuccessMarker(const std::filesystem::path& targetPath)
         const auto pathText = targetPath.u8string();
         marker.write(reinterpret_cast<const char*>(pathText.data()),
                      static_cast<std::streamsize>(pathText.size()));
+#elif defined(__APPLE__)
+        // 用绝对包身份写正文，启动端不依赖调用更新器时的工作目录。
+        std::error_code error;
+        const auto identity = std::filesystem::canonical(targetPath, error);
+        // 该正文与文件名独立，启动端即使找到同名标记也要复核实际包身份。
+        if ( !error ) marker << identity.native();
 #else
         // POSIX 保留原生路径字节，与现有标记的读取语义一致。
         marker << targetPath.native();
@@ -703,7 +691,7 @@ int main(int argc, char* argv[])
     }
 
 #if defined(__APPLE__)
-    targetPath = normalizeMacApplicationTarget(targetPath);
+    targetPath = MMM::Update::macApplicationRoot(targetPath);
     if ( targetPath.empty() ) {
         writeStderr("Cannot locate the macOS app bundle update target\n");
         return 1;

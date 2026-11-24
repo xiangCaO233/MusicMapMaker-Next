@@ -16,6 +16,10 @@ endif()
 # 对消费模块公开网络服务接口，不暴露 src 内部帮助器。
 target_include_directories(Network PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
+# 仅实现与更新器测试共享磁盘标记协议，不将更新器路径传播到 Network 消费者。
+set(MMM_UPDATE_MARKER_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../Updater")
+target_include_directories(Network PRIVATE "${MMM_UPDATE_MARKER_INCLUDE}")
+
 # curl、miniz、JSON 与项目基础模块构成公开同步接口依赖。
 target_link_libraries(Network PUBLIC 3rd_curl 3rd_miniz 3rd_nlohmann_json
                                      Config Log Event)
@@ -37,8 +41,9 @@ if(WIN32 AND NOT MSVC)
   target_sources(UpdateCheckerTest PRIVATE tests/UpdateCheckerTest.rc)
 endif()
 target_link_libraries(UpdateCheckerTest PRIVATE Network Log)
-target_include_directories(UpdateCheckerTest
-                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(
+  UpdateCheckerTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+                            "${MMM_UPDATE_MARKER_INCLUDE}")
 
 mmm_add_test_executable(Network AssetSyncServiceTest
                         tests/AssetSyncServiceTest.cpp)
