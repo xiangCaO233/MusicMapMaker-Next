@@ -549,7 +549,9 @@
 
 ### P2 · R09 · Windows 更新器路径在进程边界丢失 Unicode
 
-- [ ] 主程序用宽字符启动更新器，后者从窄 argv 解析安装与下载路径，又调用 ShellExecuteA。安装路径超出 ANSI 代码页时可能无法替换或重启。用含非当前代码页字符的路径走完整更新回归。
+- [x] 主程序用宽字符启动更新器，后者从窄 argv 解析安装与下载路径，又调用 ShellExecuteA。安装路径超出 ANSI 代码页时可能无法替换或重启。用含非当前代码页字符的路径走完整更新回归。
+
+  已验证。Linux 全量构建和 2 项更新回归通过。debsrv 上 clang-cl 23 与 llvm-mingw 的 Windows x64 构建均通过，两个产物在原生 Win10 ACP 936 上均验证含空格和非 BMP 字符的下载路径、程序替换、成功标记及实际重启路径和工作目录。
 
 [Modules/Network/src/UpdateChecker.cpp:657](../Modules/Network/src/UpdateChecker.cpp#L657) [Modules/Updater/main.cpp:549](../Modules/Updater/main.cpp#L549) [Modules/Updater/main.cpp:118](../Modules/Updater/main.cpp#L118)
 
