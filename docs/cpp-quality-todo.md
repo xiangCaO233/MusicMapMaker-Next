@@ -30,11 +30,13 @@
 
   已验证。将时间线准备、安装、退休与分析源归入 TimelinePlayback，将音效池和后台加载归入 SoundEffectBank。保留公开入口及音频回调节点的稳定地址。Linux RelWithDebInfo 全量构建及 11 项相关 CTest 通过。同一 Ninja 构建的活动对象依赖数如下。AudioManager.h 44,AudioManagerTimelinePlayback.h 6,AudioManagerSoundEffectBank.h 4。
 
-- [ ] **R65 · P0 · CollaborationRoom 同时承担文档事务、目录连接与资源收发**
+- [x] **R65 · P0 · CollaborationRoom 同时承担文档事务、目录连接与资源收发**
 
   11 个对象依赖；公开头携带两套文档 codec、跨线程本地编辑队列与锁、资源收发状态、目录重连和视口限频。 保留房间门面和公开值类型。先把编解码及本地/远端事务队列归给复制组件，资源任务另归协调器，随后拆目录重连和视口发布。Impl 一次构造。验证房间退出时回调回收、断线补同步、资源取消、视口末次发布及重连。
 
   [CollaborationRoom.h L412](../Modules/Network/Collaboration/include/network/collaboration/CollaborationRoom.h#L412)、[CollaborationRoom.cpp L981](../Modules/Network/Collaboration/src/CollaborationRoom.cpp#L981)
+
+  已验证。拆分房间的目录连接、文档复制、资源收发与视口发布。独立值类型头保留公开配置、条目与进度数据。Linux RelWithDebInfo 全量构建及 15 项相关 CTest 通过。同一 Ninja 构建的活动对象依赖数如下。CollaborationRoom.h 11,CollaborationDirectoryClient.h 5,BeatmapDocumentCodec.h 3,CollaborationResourceSync.h 3,WebRtcTransport.h 3。本地真实 WebRTC 的 follow 与 resource 探针通过。额外的 p2p 探针在拆分前 main 和本分支均于并发添加物件阶段失败。
 
 - [ ] **R66 · P0 · CollaborationPeer 的播放时钟与编辑提交日志共享头布局**
 

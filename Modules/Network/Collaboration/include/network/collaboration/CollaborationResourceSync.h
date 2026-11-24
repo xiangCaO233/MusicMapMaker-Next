@@ -1,5 +1,7 @@
 #pragma once
 
+#include "network/collaboration/CollaborationResourceTypes.h"
+
 #include "network/collaboration/CollaborationProtocol.h"
 
 #include <cstdint>
@@ -16,50 +18,6 @@ class Project;
 
 namespace MMM::Network::Collaboration
 {
-/// @brief 协作项目资源同步阶段。
-enum class CollaborationResourceSyncPhase {
-    Idle,
-    Preparing,
-    WaitingManifest,
-    ComparingCache,
-    Downloading,
-    Verifying,
-    Ready,
-    Error,
-};
-
-/// @brief UI 可直接读取的资源同步进度快照。
-struct CollaborationResourceSyncProgress {
-    /// @brief 当前阶段。
-    CollaborationResourceSyncPhase phase{
-        CollaborationResourceSyncPhase::Idle
-    };
-    /// @brief 清单中的总文件数。
-    std::uint32_t totalFiles = 0;
-    /// @brief 已通过 SHA-256 校验的文件数。
-    std::uint32_t completedFiles = 0;
-    /// @brief 已完成本地缓存比对的文件数。
-    std::uint32_t comparedFiles = 0;
-    /// @brief 直接命中本地内容缓存的文件数。
-    std::uint32_t cachedFiles = 0;
-    /// @brief 访客缺失文件的总字节数；房主就绪时为清单总字节数。
-    std::uint64_t totalBytes = 0;
-    /// @brief 已接收并落入临时文件的字节数。
-    std::uint64_t transferredBytes = 0;
-    /// @brief 当前处理的缓存相对路径。
-    std::string currentFile;
-    /// @brief 错误或补充状态文本。
-    std::string detail;
-};
-
-/// @brief 已完成并可绑定给访客会话的只读项目资源。
-struct CollaborationResourceBundle {
-    /// @brief 以内容缓存为根、只登记本谱引用音频的临时项目。
-    std::shared_ptr<::MMM::Project> project;
-    /// @brief 房主谱面相对路径到访客缓存相对路径的映射。
-    std::unordered_map<std::string, std::string> pathRemap;
-};
-
 /// @brief 资源后台状态机向房间网络循环发布的非阻塞事件。
 struct CollaborationResourceSyncEvent {
     /// @brief 事件类别。
@@ -84,6 +42,8 @@ struct CollaborationResourceSyncEvent {
 };
 
 /// @brief 在后台执行资源哈希、缓存比对、分块读写和完整性验证。
+/// @par 调用边界
+/// 前台通过快照和事件消费结果，准备和落盘由后台任务推进。
 class CollaborationResourceSync
 {
 public:
