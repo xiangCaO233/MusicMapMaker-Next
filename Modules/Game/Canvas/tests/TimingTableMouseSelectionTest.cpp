@@ -1,5 +1,6 @@
 /// @file TimingTableMouseSelectionTest.cpp
 /// @brief 使用正式表格控件验证纯鼠标集合操作、筛选范围和输入收尾。
+#include "../src/TimelineCanvas_Private.h"
 #include "canvas/TimelineCanvas.h"
 #include "common/render/RenderSnapshot.h"
 #include "config/AppConfig.h"
@@ -36,6 +37,45 @@ namespace MMM::Canvas
 /// @brief 夹具只设置窗口与筛选前置条件，选择动作必须来自实际 ImGui 输入。
 /// @details 不调用生产选择辅助方法，不直接改选区，避免遗漏控件绑定错误。
 struct TimingTableMouseSelectionTestAccess {
+    /// @brief 验证复用同一快照时不会叠加发光命令或污染原始顶点颜色。
+    static bool decorationRestoresReusedSnapshot()
+    {
+        Common::Render::RenderSnapshot snapshot{};
+        snapshot.hasBeatmap = true;
+        snapshot.vertices.resize(1);
+        const Graphic::Vertex::Color original{ 0.2f, 0.3f, 0.4f, 1.0f };
+        snapshot.vertices.front().color = original;
+        snapshot.indices.push_back(0);
+        snapshot.glowCmds.emplace_back();
+
+        // 使用已有实体标记几何，让正式擦除预览同时改写颜色和追加 glow。
+        constexpr entt::entity entity{ 1 };
+        auto&                  row = snapshot.timelineElements.emplace_back();
+        row.effects                = Common::Render::SCROLL_EFFECT_SCROLL;
+        row.scrollEntity           = entity;
+        row.scrollMarker           = { true, 0, 1, 0, 1 };
+        TimelineCanvas canvas("Decoration", 500, 500, nullptr);
+        canvas.m_currentSnapshot = &snapshot;
+        canvas.m_timingEraseTargetEntities.insert(entity);
+
+        // 连续两次预览共享同一几何，第二次必须恢复后再处理。
+        canvas.m_snapshotDecorator->refresh(canvas, { 500, 500 });
+        const bool first = snapshot.glowCmds.size() == 2 &&
+                           snapshot.vertices.front().color.a == 0.5f;
+        canvas.m_snapshotDecorator->refresh(canvas, { 500, 500 });
+        const bool next = snapshot.glowCmds.size() == 2 &&
+                          snapshot.vertices.front().color.a == 0.5f;
+
+        // 首帧清除手势必须撤销装饰，原本已有的 glow 不受影响。
+        canvas.m_timingEraseTargetEntities.clear();
+        canvas.m_snapshotDecorator->refresh(canvas, { 500, 500 });
+        const auto& restored = snapshot.vertices.front().color;
+        return first && next && snapshot.glowCmds.size() == 1 &&
+               snapshot.indices.size() == 1 && snapshot.vertices.size() == 1 &&
+               restored.r == original.r && restored.g == original.g &&
+               restored.b == original.b && restored.a == original.a;
+    }
+
     /// @brief 绑定快照并打开独立表格，不需要创建 Vulkan 或 Timeline 图像。
     /// @param snapshot 实例令牌与测试拥有的内存谱面匹配。
     /// @param canvas 由本场景拥有的视图，不能借用应用中正在编辑的窗口。
@@ -44,8 +84,8 @@ struct TimingTableMouseSelectionTestAccess {
     static void open(TimelineCanvas&                 canvas,
                      Common::Render::RenderSnapshot& snapshot)
     {
-        canvas.m_currentSnapshot                            = &snapshot;
-        canvas.m_auxiliaryWindowState.timingPointsTableOpen = true;
+        canvas.m_currentSnapshot = &snapshot;
+        canvas.m_table->m_auxiliaryWindowState.timingPointsTableOpen = true;
     }
     /// @brief 仅替换平台呈现，行布局、数据源和集合更新仍为正式实现。
     static void mobile(TimelineCanvas& canvas)
@@ -82,7 +122,7 @@ struct TimingTableMouseSelectionTestAccess {
     /// @details 过滤不预先清除隐藏行的选择，才能检测全选与清空各自的范围。
     static void onlyBpm(TimelineCanvas& canvas)
     {
-        canvas.m_tableOnlyShowBpm = true;
+        canvas.m_table->m_tableOnlyShowBpm = true;
     }
     /// @brief 构造合法但无匹配的数值过滤，不模拟点击全选的副作用。
     /// @post 保留既有选区，禁用全选按钮的用例必须自行证明它不会清空选区。
@@ -94,7 +134,7 @@ struct TimingTableMouseSelectionTestAccess {
         constexpr std::string_view value = "99999";
         std::copy(value.begin(),
                   value.end(),
-                  canvas.m_tableSearchValueBuffer.begin());
+                  canvas.m_table->m_tableSearchValueBuffer.begin());
     }
 };
 }  // namespace MMM::Canvas
@@ -275,9 +315,9 @@ bool run()
     // 不同数值和稳定实体一起构成目标证据，不用显示序号替代实体身份。
     std::array<entt::entity, 4> entities{};
     constexpr std::array        types{ TimingEffect::BPM,
-                                       TimingEffect::SCROLL,
-                                       TimingEffect::JUMP,
-                                       TimingEffect::BPM };
+                                TimingEffect::SCROLL,
+                                TimingEffect::JUMP,
+                                TimingEffect::BPM };
     for ( std::size_t i = 0; i < entities.size(); ++i ) {
         // 两个 BPM 中间夹入其他类型，以便筛选全选能识别隐藏行误选。
         entities[i] = registry.create();
@@ -739,7 +779,8 @@ int main()
     // 像素由 ImGui 拥有，测试只借用图集构建结果，不将其注册为应用纹理。
     // 上下文销毁时统一释放，无需独立资源清理或图形设备同步。
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
-    const bool passed = run() & touchTable();
+    const bool passed =
+        run() & touchTable() & Access::decorationRestoresReusedSnapshot();
     ImGui::DestroyContext();
     return passed ? 0 : 1;
 }

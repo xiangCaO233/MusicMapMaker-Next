@@ -1,4 +1,5 @@
 #include "canvas/TimelineCanvas.h"
+#include "TimelineCanvas_Private.h"
 #include "presentation/TimelineInteractionPresentation.h"
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/workspace/IWorkspacePresentation.h"
@@ -293,7 +294,7 @@ ImU32 timelineGearBackgroundColor(const ImVec4& gearColor, bool hovered)
     const float luminance = 0.2126f * gearColor.x * gearColor.x +
                             0.7152f * gearColor.y * gearColor.y +
                             0.0722f * gearColor.z * gearColor.z;
-    const int   alpha     = hovered ? 242 : 218;
+    const int alpha = hovered ? 242 : 218;
     if ( luminance < 0.18f ) {
         // 深色齿轮配浅底，浅色齿轮配近黑底；悬停只提高底板 alpha。
         return IM_COL32(248, 250, 255, alpha);
@@ -384,11 +385,19 @@ uint64_t timelineMarkerKey(uint32_t indexOffset, uint32_t indexCount)
 
 }  // namespace
 
+/// @brief 查询表格当前窗口意图，不依赖准备完成的快照。
+bool TimelineCanvas::isTimingPointsTableOpen() const
+{
+    return m_table->m_auxiliaryWindowState.timingPointsTableOpen;
+}
+
 TimelineCanvas::TimelineCanvas(
     const std::string& name, uint32_t w, uint32_t h,
     std::shared_ptr<Common::Render::RenderSnapshotBuffer> syncBuffer)
     : UI::IUIView(name)
     , UI::IRenderableView(name)
+    , m_table(std::make_unique<TimingTableController>())
+    , m_snapshotDecorator(std::make_unique<TimelineSnapshotDecorator>())
     , m_timingPresentation(createTimelineInteractionPresentation())
     , m_canvasName(name)
     , m_syncBuffer(std::move(syncBuffer))
@@ -618,10 +627,10 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 ImGui::IsItemDeactivatedAfterEdit();
             if ( sliderChanged ) {
                 // UI 滑块编辑视觉时间，逻辑 Seek 使用扣除视觉偏移的音频时间。
-                float  visualOffset = Config::AppConfig::instance()
-                                          .getVisualConfig()
-                                          .getEffectiveVisualOffset();
-                double targetTime   = static_cast<double>(time);
+                float visualOffset = Config::AppConfig::instance()
+                                         .getVisualConfig()
+                                         .getEffectiveVisualOffset();
+                double targetTime = static_cast<double>(time);
                 if ( UI::Interaction::snapTimelineScrub() ) {
                     // 经典读取 Shift，纯鼠标读取专用开关；只吸附本次候选。
                     // 继续使用原拍线算法及视觉偏移，不改写全局 beat divisor。
@@ -854,8 +863,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
             auto isNearInlineGearTime =
                 [&](const Common::Render::TimelineInteractiveElement& el) {
-                    bool isNearTime  = hoveredSnapped &&
-                                       std::abs(el.time - hoveredTime) < 1e-5;
+                    bool isNearTime = hoveredSnapped &&
+                                      std::abs(el.time - hoveredTime) < 1e-5;
                     bool isNearPixel = std::abs(localMouseY - el.y) < proximity;
                     // 精确吸附时间或视觉像素接近任一成立即可展示齿轮。
                     return isNearTime || isNearPixel;
@@ -1020,7 +1029,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                                               isHovered,
                                               hasTimingInteractionFocus,
                                               true);
-            refreshTimelineInteractionDecoration(size);
+            m_snapshotDecorator->refresh(*this, size);
             // 交互状态先推进，再基于最终状态生成本帧临时几何。
             if ( editorSettings.professionalMode ) {
                 renderProfessionalTimelineOverlay(canvasPos, size);
@@ -1239,10 +1248,10 @@ void TimelineCanvas::requestFocus()
 void TimelineCanvas::setTimingPointsTableOpen(bool open)
 {
     // 外部显式设置打开状态时，打开需要恢复位置但不强制抢焦点。
-    m_auxiliaryWindowState.timingPointsTableOpen = open;
-    m_shouldRecoverTableWindow                   = open;
-    m_shouldFocusTableWindow                     = false;
-    m_isTableWindowFocusedAndReachable           = false;
+    m_table->m_auxiliaryWindowState.timingPointsTableOpen = open;
+    m_table->m_shouldRecoverTableWindow                   = open;
+    m_table->m_shouldFocusTableWindow                     = false;
+    m_table->m_isTableWindowFocusedAndReachable           = false;
 }
 
 /// @brief 激活时间点批量编辑表格；已聚焦可见时关闭，否则恢复并聚焦。
@@ -1250,14 +1259,14 @@ void TimelineCanvas::activateTimingPointsTable()
 {
     // 统一纯函数区分“当前可达则关闭”和“隐藏/脱离则恢复并聚焦”。
     const auto activation = resolveTimelineTableWindowActivation(
-        m_auxiliaryWindowState.timingPointsTableOpen,
-        m_isTableWindowFocusedAndReachable);
-    m_auxiliaryWindowState.timingPointsTableOpen = activation.open;
-    m_shouldFocusTableWindow                     = activation.requestFocus;
-    m_shouldRecoverTableWindow                   = activation.requestRecovery;
+        m_table->m_auxiliaryWindowState.timingPointsTableOpen,
+        m_table->m_isTableWindowFocusedAndReachable);
+    m_table->m_auxiliaryWindowState.timingPointsTableOpen = activation.open;
+    m_table->m_shouldFocusTableWindow   = activation.requestFocus;
+    m_table->m_shouldRecoverTableWindow = activation.requestRecovery;
     if ( !activation.open ) {
         // 关闭后清除可达性缓存，下一次激活按恢复路径处理。
-        m_isTableWindowFocusedAndReachable = false;
+        m_table->m_isTableWindowFocusedAndReachable = false;
     }
 }
 
@@ -1307,7 +1316,7 @@ bool TimelineCanvas::needsParallelUiPrepare(
            shouldPrepareTimelineSnapshot(Config::AppConfig::instance()
                                              .getEditorSettings()
                                              .showTimelineWindow,
-                                         m_auxiliaryWindowState);
+                                         m_table->m_auxiliaryWindowState);
 }
 
 /// @brief 在线程池中拉取并准备时间线快照。
@@ -1316,7 +1325,7 @@ void TimelineCanvas::prepareUiFrameData(const UI::UiFrameSnapshot& snapshot)
 {
     (void)snapshot;
     // 临时交互装饰写在上一份可写快照上，拉取新代际前必须先恢复。
-    resetTimelineInteractionDecoration();
+    m_snapshotDecorator->reset();
     // prepareCanvasSnapshot 在工作线程选择最新快照并计算视觉 Y 偏移。
     m_preparedSnapshot = prepareCanvasSnapshot(
         m_syncBuffer.get(), m_lastOffsetSnapshot, m_lastAppliedYOffset, false);
@@ -1366,7 +1375,7 @@ void TimelineCanvas::swapPreparedUiFrameData()
 /// @details 恢复被改写顶点颜色，并把顶点、索引、普通命令和 glow 命令
 /// 截断到装饰前记录的长度；该过程保证同一快照重复使用时不会累积预览几何。
 /// @warning UI 准备路径：准备新帧前调用；只修改当前 UI 专用快照副本。
-void TimelineCanvas::resetTimelineInteractionDecoration()
+void TimelineCanvas::TimelineSnapshotDecorator::reset()
 {
     if ( !m_decoratedTimelineSnapshot ) {
         // 没有装饰快照时仍清空残留恢复表，维持状态不变量。
@@ -1503,34 +1512,35 @@ void TimelineCanvas::resetTimelineInteractionDecoration()
 /// @warning UI 热路径：交互时间线每帧调用；只遍历可见 Timing target，
 /// 不访问 ECS、不加载纹理，也不提交 Vulkan 命令。
 /// @param size 当前 Timeline 画布尺寸。
-void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
+void TimelineCanvas::TimelineSnapshotDecorator::refresh(TimelineCanvas& canvas,
+                                                        const ImVec2&   size)
 {
-    resetTimelineInteractionDecoration();
+    reset();
     // 每次都从无装饰基线开始，防止同一快照连续帧重复追加几何。
-    if ( !m_currentSnapshot || !m_currentSnapshot->hasBeatmap ) {
+    if ( !canvas.m_currentSnapshot || !canvas.m_currentSnapshot->hasBeatmap ) {
         return;
     }
 
     // 无交互修饰时无需遍历并复制整张谱面的 Timing 目标；恢复已在入口完成。
     // 拖动和弹窗单独保留检查，即使当前没有悬停对象也不能丢掉预览状态。
     // 没有装饰时维持空指针，下一帧恢复路径便可跳过几何容器操作。
-    if ( m_selectedTimingEntities.empty() &&
-         m_hoveredTimingEntity == entt::null &&
-         m_timingEraseTargetEntities.empty() && !m_isPopupOpen &&
-         !m_isTimingDragging && !m_isTimingDrawPreviewing ) {
+    if ( canvas.m_selectedTimingEntities.empty() &&
+         canvas.m_hoveredTimingEntity == entt::null &&
+         canvas.m_timingEraseTargetEntities.empty() && !canvas.m_isPopupOpen &&
+         !canvas.m_isTimingDragging && !canvas.m_isTimingDrawPreviewing ) {
         return;
     }
 
-    m_decoratedTimelineSnapshot = m_currentSnapshot;
+    m_decoratedTimelineSnapshot = canvas.m_currentSnapshot;
     // 四类容器长度共同定义恢复基线，任何预览追加都位于其后。
-    m_decoratedTimelineVertexCount  = m_currentSnapshot->vertices.size();
-    m_decoratedTimelineIndexCount   = m_currentSnapshot->indices.size();
-    m_decoratedTimelineCmdCount     = m_currentSnapshot->cmds.size();
-    m_decoratedTimelineGlowCmdCount = m_currentSnapshot->glowCmds.size();
+    m_decoratedTimelineVertexCount  = canvas.m_currentSnapshot->vertices.size();
+    m_decoratedTimelineIndexCount   = canvas.m_currentSnapshot->indices.size();
+    m_decoratedTimelineCmdCount     = canvas.m_currentSnapshot->cmds.size();
+    m_decoratedTimelineGlowCmdCount = canvas.m_currentSnapshot->glowCmds.size();
 
-    bool                         hasDecoration = false;
-    std::unordered_set<uint64_t> glowMarkers;
-    std::unordered_set<uint64_t> dimMarkers;
+    bool hasDecoration = false;
+    m_glowMarkers.clear();
+    m_dimMarkers.clear();
     // 同一 marker 可能被 hover、选择和编辑多种状态命中，集合负责去重。
     const bool professionalMode =
         Config::AppConfig::instance().getEditorSettings().professionalMode;
@@ -1556,13 +1566,14 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
             const int       lane      = professionalTimingLane(effect);
             noteW                     = std::max(1.0f, laneWidth - 2.0f);
             noteX                     = laneWidth * static_cast<float>(lane) +
-                                        (laneWidth - noteW) * 0.5f;
+                    (laneWidth - noteW) * 0.5f;
         }
 
         float noteH = noteW * 0.36f;
-        if ( auto uvIt = m_currentSnapshot->uvMap.find(
+        if ( auto uvIt = canvas.m_currentSnapshot->uvMap.find(
                  static_cast<uint32_t>(Common::Render::TextureID::Note));
-             uvIt != m_currentSnapshot->uvMap.end() && uvIt->second.w > 0.0f ) {
+             uvIt != canvas.m_currentSnapshot->uvMap.end() &&
+             uvIt->second.w > 0.0f ) {
             // 纹理 UV 的宽高比例决定 marker 高度，避免皮肤资源被拉伸。
             noteH = noteW * (uvIt->second.w / uvIt->second.z);
         }
@@ -1571,7 +1582,7 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
 
     auto appendGlowRange =
         [&](uint32_t indexOffset, uint32_t indexCount, uint64_t key) {
-            if ( indexCount == 0U || !glowMarkers.insert(key).second ) {
+            if ( indexCount == 0U || !m_glowMarkers.insert(key).second ) {
                 // 空范围或已处理 marker 不追加重复 glow draw command。
                 return;
             }
@@ -1589,7 +1600,7 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
                 static_cast<uint32_t>(std::max(1.0f, std::ceil(size.y)))
             };
             // 发光层裁剪覆盖完整时间线物理逻辑区域，实际物理换算在录制阶段。
-            m_currentSnapshot->glowCmds.push_back(cmd);
+            canvas.m_currentSnapshot->glowCmds.push_back(cmd);
             hasDecoration = true;
         };
 
@@ -1598,9 +1609,9 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
                                    float               alpha) {
         const MarkerDrawRect rect = markerDrawRect(effect);
         const uint32_t       previewIndexOffset =
-            static_cast<uint32_t>(m_currentSnapshot->indices.size());
-        Logic::System::Batcher previewBatcher(m_currentSnapshot,
-                                              &m_currentSnapshot->cmds);
+            static_cast<uint32_t>(canvas.m_currentSnapshot->indices.size());
+        Logic::System::Batcher previewBatcher(canvas.m_currentSnapshot,
+                                              &canvas.m_currentSnapshot->cmds);
         // 临时 Batcher 直接追加到快照尾部，基线计数保证下一帧可截断。
         // 拖动和创建预览复用正式标记的对齐规则，原始 y 继续用于时间换算。
         const auto& visual = Config::AppConfig::instance().getVisualConfig();
@@ -1616,7 +1627,7 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
         previewBatcher.flush();
 
         const uint32_t previewIndexCount =
-            static_cast<uint32_t>(m_currentSnapshot->indices.size()) -
+            static_cast<uint32_t>(canvas.m_currentSnapshot->indices.size()) -
             previewIndexOffset;
         const uint64_t previewKey =
             timelineMarkerKey(previewIndexOffset, previewIndexCount);
@@ -1632,17 +1643,19 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
             const std::optional<Graphic::Vertex::Color>& overrideColor) {
             const uint32_t endVertex = vertexOffset + vertexCount;
             for ( uint32_t i = vertexOffset;
-                  i < endVertex && i < m_currentSnapshot->vertices.size();
+                  i < endVertex &&
+                  i < canvas.m_currentSnapshot->vertices.size();
                   ++i ) {
-                // 每个顶点改写前保存原色，同一 marker 由 dimMarkers
+                // 每个顶点改写前保存原色，同一 marker 由 m_dimMarkers
                 // 保证只处理一次。
                 m_timelineColorRestore.push_back(
-                    { i, m_currentSnapshot->vertices[i].color });
+                    { i, canvas.m_currentSnapshot->vertices[i].color });
                 if ( overrideColor ) {
                     // 擦除预览先覆盖红色，再统一乘透明度强调待删除状态。
-                    m_currentSnapshot->vertices[i].color = *overrideColor;
+                    canvas.m_currentSnapshot->vertices[i].color =
+                        *overrideColor;
                 }
-                m_currentSnapshot->vertices[i].color.a *= multiplier;
+                canvas.m_currentSnapshot->vertices[i].color.a *= multiplier;
                 hasDecoration = true;
             }
         };
@@ -1657,16 +1670,18 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
         appendGlowRange(target.markerIndexOffset, target.markerIndexCount, key);
     };
 
-    for ( const auto& target : collectVisibleTimingTargets() ) {
+    for ( const auto& target : canvas.collectVisibleTimingTargets() ) {
         // 所有状态都以实体 ID 与当前本地交互集合比较，不查询 registry。
-        const bool selected = m_selectedTimingEntities.find(target.entity) !=
-                              m_selectedTimingEntities.end();
-        const bool hovered  = target.entity == m_hoveredTimingEntity;
-        const bool erasing  = m_timingEraseTargetEntities.find(target.entity) !=
-                              m_timingEraseTargetEntities.end();
-        const bool dragging = m_isTimingDragging && selected;
+        const bool selected =
+            canvas.m_selectedTimingEntities.find(target.entity) !=
+            canvas.m_selectedTimingEntities.end();
+        const bool hovered = target.entity == canvas.m_hoveredTimingEntity;
+        const bool erasing =
+            canvas.m_timingEraseTargetEntities.find(target.entity) !=
+            canvas.m_timingEraseTargetEntities.end();
+        const bool dragging = canvas.m_isTimingDragging && selected;
         const bool popupEditing =
-            m_isPopupOpen && target.entity == m_editingEntity;
+            canvas.m_isPopupOpen && target.entity == canvas.m_editingEntity;
         const bool editing = dragging || popupEditing || erasing;
 
         if ( hovered || (selected && !dragging) || popupEditing || erasing ) {
@@ -1677,7 +1692,7 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
             // 正在编辑的原 marker 半透明，明确区分原位置与候选位置。
             const uint64_t key = timelineMarkerKey(target.markerIndexOffset,
                                                    target.markerIndexCount);
-            if ( dimMarkers.insert(key).second ) {
+            if ( m_dimMarkers.insert(key).second ) {
                 std::optional<Graphic::Vertex::Color> overrideColor;
                 if ( erasing ) {
                     overrideColor =
@@ -1692,9 +1707,9 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
         if ( dragging ) {
             // 所有选中 Timing 使用相同时间增量，保持多选相对间距。
             const double previewTime =
-                std::max(0.0, target.time + m_timingDragPreviewDelta);
+                std::max(0.0, target.time + canvas.m_timingDragPreviewDelta);
             const float previewY =
-                static_cast<float>(canvasYAtTime(size, previewTime));
+                static_cast<float>(canvas.canvasYAtTime(size, previewTime));
             const MarkerDrawRect rect = markerDrawRect(target.effect);
             if ( previewY >= -rect.h && previewY <= size.y + rect.h ) {
                 // 给 marker 高度留缓冲，边缘部分可见时仍绘制完整候选。
@@ -1703,12 +1718,13 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
         }
     }
 
-    if ( m_isTimingDrawPreviewing && size.x > 1.0f && size.y > 1.0f ) {
+    if ( canvas.m_isTimingDrawPreviewing && size.x > 1.0f && size.y > 1.0f ) {
         // 创建预览类型来自当前弹窗/工具状态，时间已经由交互层吸附。
-        const auto  previewEffect = timelineEffectFromCreateType(m_createType);
-        const float previewY =
-            static_cast<float>(canvasYAtTime(size, m_timingDrawPreviewTime));
-        m_timingDrawPreviewY = previewY;
+        const auto previewEffect =
+            timelineEffectFromCreateType(canvas.m_createType);
+        const float previewY = static_cast<float>(
+            canvas.canvasYAtTime(size, canvas.m_timingDrawPreviewTime));
+        canvas.m_timingDrawPreviewY = previewY;
         appendPreviewMarker(previewY, previewEffect, 0.42f);
     }
 
