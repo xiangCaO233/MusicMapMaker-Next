@@ -48,7 +48,6 @@
 #include "runtime/AppThreadPool.h"
 #include <algorithm>
 #include <atomic>
-#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -794,13 +793,10 @@ void normalizeBeatmapMetadataPathsForProject(BeatMap&       beatMap,
     // 不能使用进程当前工作目录替代尚未确定的谱面位置。
     if ( meta.map_path.empty() ) return;
 
-    auto absoluteMapPath = resolveProjectPath(project, meta.map_path);
-    auto mapDirectory    = absoluteMapPath.parent_path();
-    auto mapExtension    = Config::pathToUtf8(absoluteMapPath.extension());
-    std::transform(mapExtension.begin(),
-                   mapExtension.end(),
-                   mapExtension.begin(),
-                   ::tolower);
+    auto       absoluteMapPath = resolveProjectPath(project, meta.map_path);
+    auto       mapDirectory    = absoluteMapPath.parent_path();
+    const auto mapExtension =
+        Config::lowercaseAscii(Config::pathToUtf8(absoluteMapPath.extension()));
     // MMM 以项目相对路径为首选，其他格式优先采用谱面目录。
     // 扩展名先统一为小写，避免大小写形式改变同一种文件的解析规则。
     bool preferProjectRoot = (mapExtension == ".mmm");

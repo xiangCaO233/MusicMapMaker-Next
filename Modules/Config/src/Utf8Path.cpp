@@ -38,4 +38,17 @@ std::filesystem::path utf8ToPath(const std::string& s)
     return std::filesystem::path(s);
 #endif
 }
+
+/// @brief 使用固定的 ASCII 字节范围规范化扩展名。
+/// @note 不对 UTF-8 多字节字符做大小写映射，非 ASCII 文件名比较语义不变。
+std::string lowercaseAscii(std::string value)
+{
+    for ( auto& ch : value ) {
+        // 先按无符号字节解释，平台的 char 符号性不会影响范围边界。
+        // 只重写 ASCII 大写；UTF-8 前导和续接字节都不会进入计算。
+        const auto byte = static_cast<unsigned char>(ch);
+        if ( byte >= 0x41 && byte <= 0x5a ) ch = static_cast<char>(byte + 0x20);
+    }
+    return value;
+}
 }  // namespace MMM::Config
