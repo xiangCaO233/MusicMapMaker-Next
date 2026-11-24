@@ -11,10 +11,8 @@
 #include "event/ui/menu/AudioImportTriggerEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "log/colorful-log.h"
-#include "logic/BeatmapSession.h"
+#include "logic/BeatmapExportPresentation.h"
 #include "logic/EditorEngine.h"
-#include "logic/session/context/SessionContext.h"
-#include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/interaction/EditorInteraction.h"
@@ -26,9 +24,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <charconv>
 #include <fmt/format.h>
-#include <mutex>
 #include <nfd.h>
 #include <optional>
 #include <string_view>
@@ -40,80 +36,6 @@ namespace MMM::UI
 {
 namespace
 {
-/// @brief 去除 ASCII 空白，用于解析 Malody mode 元数据。
-/// @param text 原始字符串视图。
-/// @return 去除首尾空白后的字符串视图。
-/// @note 只处理谱面元数据允许出现的四种 ASCII 空白，不进行 Unicode 归一化。
-std::string_view trimAsciiWhitespace(std::string_view text)
-{
-    // remove_prefix 只移动视图起点，不复制底层字符串。
-    while ( !text.empty() && (text.front() == ' ' || text.front() == '\t' ||
-                              text.front() == '\n' || text.front() == '\r') ) {
-        text.remove_prefix(1);
-    }
-    // 尾部同样在视图上收缩，返回值仍引用调用方存储。
-    while ( !text.empty() && (text.back() == ' ' || text.back() == '\t' ||
-                              text.back() == '\n' || text.back() == '\r') ) {
-        text.remove_suffix(1);
-    }
-    return text;
-}
-
-/// @brief 无异常解析整数字符串。
-/// @param text 待解析文本。
-/// @return 成功时返回整数，否则返回空。
-/// @note 使用 from_chars 避免区域设置和异常，并要求完整文本都被消费。
-std::optional<int> parseAsciiInteger(std::string_view text)
-{
-    // 元数据允许首尾 ASCII 空白，解析前统一裁掉。
-    text = trimAsciiWhitespace(text);
-    // 空白元数据不是有效 mode。
-    if ( text.empty() ) return std::nullopt;
-
-    int value = 0;
-    // from_chars 不分配内存，也不会抛出异常。
-    auto result =
-        std::from_chars(text.data(), text.data() + text.size(), value);
-    if ( result.ec != std::errc{} || result.ptr != text.data() + text.size() ) {
-        // 范围错误或残留非数字字符均视为解析失败。
-        return std::nullopt;
-    }
-    return value;
-}
-
-/// @brief 获取谱面当前 Malody mode 元数据，缺省时按导出器默认 slide(7) 处理。
-/// @param beatMap 当前谱面。
-/// @return mode 元数据有效时返回 mode；无法解析时返回空。
-/// @note 缺少 MALODY 或 mode 字段时沿用导出器的 Slide 模式默认值 7。
-std::optional<int> resolveMalodyModeForCompatibilityWarning(
-    const BeatMap& beatMap)
-{
-    // 7 与 Malody Slide 模式协议值一致。
-    int mode = 7;
-    if ( auto it =
-             beatMap.m_metadata.map_properties.find(MapMetadataType::MALODY);
-         it != beatMap.m_metadata.map_properties.end() ) {
-        if ( it->second.contains("mode") ) {
-            // 显式 mode 必须完整解析，非法值不能静默回退以免漏警告。
-            auto parsedMode = parseAsciiInteger(it->second.at("mode"));
-            if ( !parsedMode ) return std::nullopt;
-            mode = *parsedMode;
-        }
-    }
-    // 返回协议整数，调用方再映射为支持的导出模式。
-    return mode;
-}
-
-/// @brief 判断谱面是否包含需要上架皮肤 mode_ext 的 Malody 元素。
-/// @param beatMap 当前谱面。
-/// @return 含 Flick 或折线时返回 true。
-/// @note 普通 Note 与 Hold 无需 mode_ext，避免显示无效上架选项。
-bool hasMalodyStoreModeExtEligibleElements(const BeatMap& beatMap)
-{
-    return !beatMap.m_noteData.flicks.empty() ||
-           !beatMap.m_noteData.polylines.empty();
-}
-
 /// @brief 从文件选择器过滤器文本中解析扩展名。
 /// @param filterText 统一文件选择器当前过滤器文本。
 /// @return 匹配到的扩展名；无法识别时返回空。
@@ -211,65 +133,6 @@ std::string sanitizeImdPackagePrefix(std::string value)
     return value.empty() ? "map" : value;
 }
 
-/// @brief 判断谱面是否包含 RM/IMD 无法保存的基础元数据。
-/// @param meta 基础谱面元数据。
-/// @return 存在不支持字段时返回 true。
-/// @note 只要任一非 RM 基础字段携带有效数据就需要兼容性提醒。
-bool hasUnsupportedImdBaseMetadata(const BaseMapMeta& meta)
-{
-    return !meta.title.empty() || !meta.title_unicode.empty() ||
-           !meta.artist.empty() || !meta.artist_unicode.empty() ||
-           !meta.album.empty() || !meta.author.empty() ||
-           !meta.song_file_hint.empty() || !meta.main_audio_path.empty() ||
-           !meta.main_cover_path.empty() || !meta.cover_path.empty() ||
-           meta.video_starttime != 0 || meta.bgxoffset != 0 ||
-           meta.bgyoffset != 0;
-}
-
-/// @brief 判断谱面是否包含 RM/IMD 无法保存的谱面扩展元数据。
-/// @param metadata 谱面扩展元数据。
-/// @return 存在不支持字段时返回 true。
-/// @note RM 仅允许 mapLength 与 tabRows，其余来源或键都会在导出中丢失。
-bool hasUnsupportedImdMapMetadata(const MapMetadata& metadata)
-{
-    // map_properties 按来源分组，空属性组不构成数据丢失。
-    for ( const auto& [source, properties] : metadata.map_properties ) {
-        if ( properties.empty() ) continue;
-        // 非 RM 来源没有对应 IMD 字段，必须发出警告。
-        if ( source != MapMetadataType::RM ) return true;
-        for ( const auto& [key, value] : properties ) {
-            (void)value;
-            // RM 白名单只包含格式原生维护的两个字段。
-            if ( key != "mapLength" && key != "tabRows" ) return true;
-        }
-    }
-    return false;
-}
-
-/// @brief 判断谱面物件是否包含 RM/IMD 无法保存的额外物件元数据。
-/// @param beatMap 当前谱面。
-/// @return 存在不支持字段时返回 true。
-/// @warning 低频导出确认路径：遍历完整物件及其元数据，不得用于逐帧 UI。
-bool hasUnsupportedImdNoteMetadata(const BeatMap& beatMap)
-{
-    // m_allNotes 提供所有音符类型的统一引用视图。
-    for ( const auto& noteRef : beatMap.m_allNotes ) {
-        const auto& note = noteRef.get();
-        for ( const auto& [source, properties] :
-              note.m_metadata.note_properties ) {
-            // 空属性组不会产生导出损失。
-            if ( properties.empty() ) continue;
-            // 非 RM 来源的物件元数据无法写入 IMD。
-            if ( source != NoteMetadataType::RM ) return true;
-            for ( const auto& [key, value] : properties ) {
-                (void)value;
-                // RM 物件只原生支持 Parameter 字段。
-                if ( key != "Parameter" ) return true;
-            }
-        }
-    }
-    return false;
-}
 }  // namespace
 
 /// @brief 发布逻辑命令事件。
@@ -411,8 +274,8 @@ void MenuUtil::openAudioImportPicker()
     fdConfig.countSelectionMax = 1;
     fdConfig.fileName          = "";
     fdConfig.flags             = ImGuiFileDialogFlags_Modal |
-                                 ImGuiFileDialogFlags_HideColumnType |
-                                 ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                     ImGuiFileDialogFlags_HideColumnType |
+                     ImGuiFileDialogFlags_ReadOnlyFileNameField;
     // 记录已有打开状态，防止重复入口产生多次声音反馈。
     const bool wasOpen =
         ImGuiFileDialog::Instance()->IsOpened("AudioImportPicker");
@@ -483,17 +346,12 @@ std::string MenuUtil::lowerExtension(const std::string& path)
 /// @param extension 目标扩展名。
 /// @param currentFileName 当前文件名；非空时保留用户输入的主文件名。
 /// @return 推荐文件名。
-/// @warning 低频文件选择路径：锁定活动 Session 并读取谱面元数据。
+/// @warning 低频文件选择路径：捕获活动谱面命名信息。
 std::string MenuUtil::makeExportFileNameForExtension(
     const std::string& extension, const std::string& currentFileName)
 {
-    // Session 锁保证读取当前谱面元数据期间不会切换活动会话。
-    auto& engine = Logic::EditorEngine::instance();
-    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
-    auto                                  session = engine.getActiveSession();
-    const BeatMap* beatMap = (session && session->getContext().currentBeatmap)
-                                 ? session->getContext().currentBeatmap.get()
-                                 : nullptr;
+    // Logic 返回拥有型命名字段，文件名清理和路径构造不持有会话锁。
+    const auto naming = Logic::captureBeatmapExportNaming();
 
     // 缺少扩展名时默认导出项目原生 MMM 格式。
     const std::string normalizedExt =
@@ -504,14 +362,10 @@ std::string MenuUtil::makeExportFileNameForExtension(
         std::string title    = "map";
         int32_t     keyCount = 0;
         std::string version  = "default";
-        if ( beatMap ) {
-            // 标题优先 Unicode，其次普通标题，最后内部名称。
-            const auto& meta = beatMap->m_baseMapMetadata;
-            title    = !meta.title_unicode.empty()
-                           ? meta.title_unicode
-                           : (!meta.title.empty() ? meta.title : meta.name);
-            keyCount = meta.track_count;
-            version  = meta.version.empty() ? "default" : meta.version;
+        if ( naming ) {
+            title    = naming->preferredTitle;
+            keyCount = naming->trackCount;
+            version  = naming->version.empty() ? "default" : naming->version;
         }
         // 各自由用户输入的字段分别清理路径分隔符。
         return fmt::format("{}_{}k_{}.imd",
@@ -522,18 +376,8 @@ std::string MenuUtil::makeExportFileNameForExtension(
 
     if ( normalizedExt == ".zip" ) {
         // ZIP 表示 IMD 资源包，主体名称必须同时适配内部关联资源。
-        std::string title = "map";
-        if ( beatMap ) {
-            const auto& meta = beatMap->m_baseMapMetadata;
-            // 沿用与单文件导出一致的标题优先级。
-            if ( !meta.title_unicode.empty() ) {
-                title = meta.title_unicode;
-            } else if ( !meta.title.empty() ) {
-                title = meta.title;
-            } else {
-                title = meta.name;
-            }
-        }
+        // 与单文件 IMD 共用 Unicode 优先的标题。
+        std::string title = naming ? naming->preferredTitle : "map";
         // 包前缀使用更严格清理规则，避免下划线截断首段。
         return sanitizeImdPackagePrefix(std::move(title)) + ".zip";
     }
@@ -543,8 +387,8 @@ std::string MenuUtil::makeExportFileNameForExtension(
     if ( fileName.empty() ) {
         // 对话框没有文件名时从谱面内部名称生成兜底主体。
         std::string baseName = "map";
-        if ( beatMap && !beatMap->m_baseMapMetadata.name.empty() ) {
-            baseName = beatMap->m_baseMapMetadata.name;
+        if ( naming && !naming->name.empty() ) {
+            baseName = naming->name;
         }
         // 先清理再转换为原生路径，避免标题中的分隔符改变目录层级。
         fileName = Config::utf8ToPath(sanitizeExportFileNamePart(baseName));
@@ -600,7 +444,7 @@ std::string MenuUtil::getSaveAsPickerDefaultPath()
 /// @param path 目标导出路径。
 /// @param malodyExportMode MC 导出时显式选择的模式；为空则读取谱面元数据。
 /// @return 需要展示的警告消息列表。
-/// @warning 低频导出确认路径：锁定 Session 并遍历完整 timing 与部分元数据。
+/// @warning 低频导出确认路径：按目标格式取得一次兼容性读模型。
 std::vector<std::string> MenuUtil::collectExportCompatibilityWarnings(
     const std::string& path, std::optional<MMM::MalodyMode> malodyExportMode)
 {
@@ -613,14 +457,14 @@ std::vector<std::string> MenuUtil::collectExportCompatibilityWarnings(
     if ( ext != ".osu" && ext != ".imd" && ext != ".mc" && !isBms )
         return warnings;
 
-    // 锁住活动 Session，保证整个兼容性快照来自同一谱面版本。
-    auto& engine = Logic::EditorEngine::instance();
-    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
-    auto                                  session = engine.getActiveSession();
-    if ( !session || !session->getContext().currentBeatmap ) return warnings;
-
-    // 谱面引用只在当前锁区间内使用。
-    const BeatMap& beatMap = *session->getContext().currentBeatmap;
+    using Logic::BeatmapExportFormat;
+    const auto format = isBms           ? BeatmapExportFormat::Bms
+                        : ext == ".osu" ? BeatmapExportFormat::Osu
+                        : ext == ".imd" ? BeatmapExportFormat::Imd
+                                        : BeatmapExportFormat::Malody;
+    // 读模型只含本次的目标格式字段。下面分配、拼接文案时已释放会话锁。
+    const auto facts = Logic::captureBeatmapExportCompatibility(format);
+    if ( !facts ) return warnings;
 
     // BMS 在选择路径后、实际写盘前展示转换摘要。
     // 警告仅描述目标差异，不改变当前会话或项目配置。
@@ -642,7 +486,7 @@ std::vector<std::string> MenuUtil::collectExportCompatibilityWarnings(
         // 原生来源保留自己的键数；只有输出文件按目标协议解释首轨。
         // 用户再次导入时仍可能看到六轨或八轨的标准布局，不隐式承诺私有模式。
         // 警告只读模型，不能因为用户取消导出而改变原谱面的布局。
-        const int tracks = beatMap.m_baseMapMetadata.track_count;
+        const int tracks = facts->trackCount;
         if ( ext != ".pms" && tracks >= 4 && tracks <= 8 ) {
             constexpr std::array<std::string_view, 8> channels{
                 "16", "11", "12", "13", "14", "15", "18", "19"
@@ -680,115 +524,59 @@ std::vector<std::string> MenuUtil::collectExportCompatibilityWarnings(
             // PMS 九键没有转盘，不能套用六轨或八轨的首轨解释。
             warnings.push_back(
                 "按 PMS 九键导出：当前第 1～9 轨依次对应键 1～9，没有转盘。");
-        if ( std::any_of(beatMap.m_timings.begin(),
-                         beatMap.m_timings.end(),
-                         [](const auto& timing) {
-                             return timing.m_timingEffect !=
-                                        TimingEffect::BPM &&
-                                    timing.m_timingEffect != TimingEffect::STOP;
-                         }) )
+        if ( facts->hasBmsTimingDifferences )
             warnings.push_back(
                 "标准 BMS 保留 BPM 和 STOP。MyO2 兼容模式还保留 Scroll。"
                 "Jump 和 HS 暂无对应的基础 BMS 字段。");
-        // 自动采样和玩家绑定分别检查；只要存在差异便在同一个确认流程告知。
-        bool hasVolume = std::any_of(
-            beatMap.m_audioSamples.begin(),
-            beatMap.m_audioSamples.end(),
-            [](const auto& sample) { return sample.m_volume != 1.0F; });
-        // 两个玩家物件容器使用相同契约，避免只检查普通音符漏掉长条。
-        // 折线仍属于不支持的物件，单独在下方提示用户先转换。
-        const auto containsVolume = [](const auto& notes) {
-            return std::any_of(
-                notes.begin(), notes.end(), [](const auto& note) {
-                    return note.m_sampleBinding &&
-                           note.m_sampleBinding->m_volume != 1.0F;
-                });
-        };
-        hasVolume = hasVolume || containsVolume(beatMap.m_noteData.notes) ||
-                    containsVolume(beatMap.m_noteData.holds);
         // 每类差异只生成一条文案，不按每颗音符重复填充确认窗口。
         // 资源文件本身不重编码，这里的音量变化只发生在目标谱面的事件上。
-        if ( hasVolume )
+        if ( facts->hasNonDefaultSampleVolume )
             warnings.push_back(
                 "标准 BMS 不保存逐物件采样音量，导出后均恢复为 "
                 "100；原项目音量保持不变。");
-        if ( !beatMap.m_noteData.flicks.empty() ||
-             !beatMap.m_noteData.polylines.empty() )
+        if ( facts->hasFlick || facts->hasPolyline )
             warnings.push_back(
                 "当前 BMS 导出暂不支持 Flick "
                 "或折线，请先转换这些物件，否则无法保存。");
         return warnings;
     }
 
-    // 先收集跨格式共用的特性标志，后续按目标格式生成文案。
-    bool hasJumpOrHsTiming        = false;
-    bool hasNegativeScrollTiming  = false;
-    bool hasAnyNonBpmTimingForImd = false;
-    bool hasFlick                 = !beatMap.m_noteData.flicks.empty();
-    bool hasPolyline              = !beatMap.m_noteData.polylines.empty();
-    bool hasUnsupportedBaseMeta   = false;
-    bool hasUnsupportedMapMeta    = false;
-    bool hasUnsupportedNoteMeta   = false;
-
-    // Timing 只遍历一次，同时满足 osu 与 IMD 的能力判断。
-    for ( const auto& timing : beatMap.m_timings ) {
-        if ( timing.m_timingEffect == TimingEffect::JUMP ||
-             timing.m_timingEffect == TimingEffect::HS ) {
-            hasJumpOrHsTiming = true;
-            // IMD 除 BPM 外不保存任何 timing 效果。
-            hasAnyNonBpmTimingForImd = true;
-        } else if ( timing.m_timingEffect == TimingEffect::SCROLL ) {
-            hasAnyNonBpmTimingForImd = true;
-            if ( timing.m_timingEffectParameter < 0.0 ) {
-                // osu 只需单独警告负 Scroll，正值可由导出器处理。
-                hasNegativeScrollTiming = true;
-            }
-        }
-    }
-
     if ( ext == ".osu" ) {
         // osu 警告分别覆盖 timing 与物件降级，便于用户逐项判断。
-        if ( hasJumpOrHsTiming ) {
+        if ( facts->hasJumpOrHs ) {
             warnings.push_back(
                 "osu! 文件不支持保存 Jump/HS timing；导出时这些 timing "
                 "会被忽略。");
         }
-        if ( hasNegativeScrollTiming ) {
+        if ( facts->hasNegativeScroll ) {
             warnings.push_back(
                 "osu! 文件不支持负数 Scroll 倍率；导出时这些 Scroll timing "
                 "会被跳过。");
         }
-        if ( hasFlick ) {
+        if ( facts->hasFlick ) {
             warnings.push_back(
                 "Flick 物件会在 osu! 导出中自动转换为普通 Note。");
         }
-        if ( hasPolyline ) {
+        if ( facts->hasPolyline ) {
             // 折线展开会同时忽略子 Flick 并保留子 Hold，需明确说明。
             warnings.push_back(
                 "Polyline 物件会在 osu! 导出中展开：其中 Flick "
                 "子物件会被忽略，只导出其中所有 Hold。");
         }
     } else if ( ext == ".imd" ) {
-        // IMD 元数据检查按基础、谱面扩展和物件扩展三个层级执行。
-        hasUnsupportedBaseMeta =
-            hasUnsupportedImdBaseMetadata(beatMap.m_baseMapMetadata);
-        hasUnsupportedMapMeta =
-            hasUnsupportedImdMapMetadata(beatMap.m_metadata);
-        hasUnsupportedNoteMeta = hasUnsupportedImdNoteMetadata(beatMap);
-
-        if ( hasAnyNonBpmTimingForImd ) {
+        if ( facts->hasImdTimingDifferences ) {
             warnings.push_back(
                 "RM 谱面格式不支持保存 Jump/HS/Scroll timing；导出时只会保留 "
                 "BPM timing。");
         }
-        if ( hasUnsupportedBaseMeta || hasUnsupportedMapMeta ) {
+        if ( facts->hasImdMapMetadataDifferences ) {
             // 基础和谱面扩展共同使用一条格式能力摘要，避免重复警告。
             warnings.push_back(
                 "RM 谱面格式不支持保存 "
                 "title、artist、音频、封面等扩展元数据；仅保留 Version、key "
                 "数、谱面时长、BPM timing 和物件数量/总数。");
         }
-        if ( hasUnsupportedNoteMeta ) {
+        if ( facts->hasImdNoteMetadataDifferences ) {
             warnings.push_back(
                 "RM "
                 "谱面格式不支持保存物件额外元数据；导出时只保留物件类型、时间、"
@@ -799,8 +587,8 @@ std::vector<std::string> MenuUtil::collectExportCompatibilityWarnings(
         const auto mode =
             malodyExportMode
                 ? std::optional<int>(malodyModeValue(*malodyExportMode))
-                : resolveMalodyModeForCompatibilityWarning(beatMap);
-        if ( mode && *mode == 0 && (hasFlick || hasPolyline) ) {
+                : facts->malodyMode;
+        if ( mode && *mode == 0 && (facts->hasFlick || facts->hasPolyline) ) {
             // Key 模式不能原样表达扩展物件，必须在覆盖目标前确认。
             warnings.push_back(
                 "Malody key(0) 模式无法存储 Flick/折线；继续保存会将 "
@@ -816,46 +604,31 @@ std::vector<std::string> MenuUtil::collectExportCompatibilityWarnings(
 
 /// @brief 获取当前谱面的 Malody 导出模式，缺省或无效时使用 Slide。
 /// @return 当前可用于导出选项的 Malody 模式。
-/// @warning 低频导出窗口路径：锁定活动 Session 读取元数据。
+/// @warning 低频导出窗口路径：只读取目标格式的必要数据。
 MMM::MalodyMode MenuUtil::currentMalodyExportMode()
 {
-    // 整个解析期间保持活动谱面稳定。
-    auto& engine = Logic::EditorEngine::instance();
-    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
-    auto                                  session = engine.getActiveSession();
-    if ( !session || !session->getContext().currentBeatmap ) {
-        // 没有谱面上下文时使用最能保留扩展物件的 Slide 模式。
-        return MalodyMode::Slide;
-    }
-
-    const auto mode = resolveMalodyModeForCompatibilityWarning(
-        *session->getContext().currentBeatmap);
-    if ( mode && *mode == malodyModeValue(MalodyMode::Key) ) {
-        // 只有明确协议值 0 映射为 Key，其余或非法值统一回退 Slide。
+    const auto facts = Logic::captureBeatmapExportCompatibility(
+        Logic::BeatmapExportFormat::Malody);
+    // 只有明确协议值 0 映射为 Key，缺失谱面和非法值沿用 Slide。
+    if ( facts && facts->malodyMode == malodyModeValue(MalodyMode::Key) )
         return MalodyMode::Key;
-    }
     return MalodyMode::Slide;
 }
 
 /// @brief 判断当前 MC 导出目标是否需要显示上架 mode_ext 选项。
 /// @param path 目标导出路径。
 /// @return 导出 MC 且当前谱面含 Flick/折线时返回 true。
-/// @warning 低频导出窗口路径：锁定活动 Session 读取物件集合。
+/// @warning 低频导出窗口路径：只读取活动谱面的扩展物件标记。
 bool MenuUtil::shouldOfferMalodyStoreModeExtForCurrentExport(
     const std::string& path)
 {
     // 非 MC 导出不展示 Malody 专用上架选项。
     if ( lowerExtension(path) != ".mc" ) return false;
 
-    // Session 锁保证元素集合判断期间活动谱面稳定。
-    auto& engine = Logic::EditorEngine::instance();
-    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
-    auto                                  session = engine.getActiveSession();
-    if ( !session || !session->getContext().currentBeatmap ) return false;
-
-    // 只有存在需要扩展模式表达的物件时提供选项。
-    return hasMalodyStoreModeExtEligibleElements(
-        *session->getContext().currentBeatmap);
+    const auto facts = Logic::captureBeatmapExportCompatibility(
+        Logic::BeatmapExportFormat::Malody);
+    // 仅在有需要扩展模式表达的物件时显示上架选项。
+    return facts && (facts->hasFlick || facts->hasPolyline);
 }
 
 /// @brief 将项目谱面路径规范化为候选比较键。
