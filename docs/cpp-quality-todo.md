@@ -597,7 +597,9 @@
 
 ### P2 · R15 · 设置页静置仍重建资源与路径快照
 
-- [ ] 可见页约每 150 ms 有机会再次请求；锁内遍历工程音频表，文件线程探测当前引用，对带历史目录前缀的主音频再做存在性检查。递归目录枚举已按需，剩余开销与资源数量有关。以资源修订和文件变更失效，大工程静置统计任务数及路径探测数。
+- [x] 可见页约每 150 ms 有机会再次请求；锁内遍历工程音频表，文件线程探测当前引用，对带历史目录前缀的主音频再做存在性检查。递归目录枚举已按需，剩余开销与资源数量有关。以资源修订和文件变更失效，大工程静置统计任务数及路径探测数。
+
+  已验证。Linux RelWithDebInfo 全量构建和 5 项相关 CTest 通过。包含 1,024 条主音频候选的工程连续模拟 32 次静置刷新，同步复用同一份结果，新增文件任务和路径探测均为 0。另验证工程清单修订与实际文件改名通知各自使结果失效。
 
 [Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapTab.cpp:212](../Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapTab.cpp#L212) [Modules/Game/Logic/src/logic/BeatmapSettingsSnapshot.cpp:183](../Modules/Game/Logic/src/logic/BeatmapSettingsSnapshot.cpp#L183) [Modules/Game/Logic/src/logic/BeatmapSettingsSnapshot.cpp:204](../Modules/Game/Logic/src/logic/BeatmapSettingsSnapshot.cpp#L204) [Modules/Game/Logic/src/logic/BeatmapSettingsSnapshot.cpp:225](../Modules/Game/Logic/src/logic/BeatmapSettingsSnapshot.cpp#L225)
 

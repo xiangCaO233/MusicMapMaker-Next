@@ -178,6 +178,8 @@ void SettingsView::drawBeatmapSettings()
     const auto now           = std::chrono::steady_clock::now();
     bool       refreshed     = false;
     bool       changedTarget = false;
+    // 只在观察到目录代次变化的这一帧触发打开的资源菜单重扫。
+    bool mediaInvalidated = false;
     // 只消费完成任务，关闭窗口不会等待慢盘；任务不捕获 SettingsView。
     if ( m_beatmapSettingsJob.valid() &&
          m_beatmapSettingsJob.wait_for(0s) == std::future_status::ready ) {
@@ -192,14 +194,18 @@ void SettingsView::drawBeatmapSettings()
                 m_beatmapSettings->beatmap.owner_before(next->beatmap);
             if ( changedTarget ||
                  (m_beatmapSettingsMedia &&
-                  next->projectRoot != m_beatmapSettingsMedia->projectRoot) ) {
+                  (next->projectRoot != m_beatmapSettingsMedia->projectRoot ||
+                   next->directoryRevision !=
+                       m_beatmapSettingsMedia->directoryRevision)) ) {
+                mediaInvalidated = m_beatmapSettingsMedia && !next->scanned;
                 m_beatmapSettingsMedia.reset();
             }
             // 普通刷新不含候选，不覆盖原来的目录结果。扫描返回空列表时
             // 仍需要替换旧缓存，防止已删除的文件继续显示。
             if ( next->scanned ) m_beatmapSettingsMedia = next;
+            // 相同对象由逻辑线程直接返回，避免空闲时重新应用表单草稿。
+            refreshed         = next != m_beatmapSettings;
             m_beatmapSettings = std::move(next);
-            refreshed         = true;
         } else if ( !next ) {
             // 任务运行时可能已关掉会话。清掉旧表单和工程候选，
             // 后续新谱面按自己的身份请求数据。
@@ -215,7 +221,8 @@ void SettingsView::drawBeatmapSettings()
         const bool scan = std::exchange(m_beatmapSettingsScanRequested, false);
         // 只有普通刷新受读周期限制。打开资源下拉后优先在下一次可用时提交。
         // 无需为了合并请求等待固定时长，字段编辑仍为当帧入队。
-        m_beatmapSettingsJob      = Logic::requestBeatmapSettings(scan);
+        m_beatmapSettingsJob =
+            Logic::requestBeatmapSettings(scan, m_beatmapSettings);
         m_nextBeatmapSettingsRead = now + 150ms;
     }
 
@@ -1003,7 +1010,8 @@ void SettingsView::drawBeatmapSettings()
                     // IsWindowAppearing 只在候选 popup 打开的首帧产生边沿。
                     // 保持下拉打开时借用已扫描结果，无需周期性重扫整个工程。
                     m_beatmapSettingsScanRequested =
-                        (project && ImGui::IsWindowAppearing()) ||
+                        (project &&
+                         (ImGui::IsWindowAppearing() || mediaInvalidated)) ||
                         m_beatmapSettingsScanRequested;
                     // 文件线程还没交付时只显示引用操作，仍可以取消或清除。
                     // 已有候选属于当前工程时继续可选，避免刷新期间强制关闭弹窗。
@@ -1079,7 +1087,8 @@ void SettingsView::drawBeatmapSettings()
                     // IsWindowAppearing 只在候选 popup 打开的首帧产生边沿。
                     // 保持下拉打开时借用已扫描结果，无需周期性重扫整个工程。
                     m_beatmapSettingsScanRequested =
-                        (project && ImGui::IsWindowAppearing()) ||
+                        (project &&
+                         (ImGui::IsWindowAppearing() || mediaInvalidated)) ||
                         m_beatmapSettingsScanRequested;
                     if ( project && mediaReady ) {
                         const auto& backgroundResources =

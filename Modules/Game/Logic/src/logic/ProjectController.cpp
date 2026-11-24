@@ -2382,7 +2382,16 @@ void ProjectController::stopDirectoryWatcher()
 /// 消费只取得本次待处理状态，不代表目录已扫描或资源列表已更新。
 bool ProjectController::consumeDirectoryChangePending()
 {
-    return m_projectDirectoryWatcher.consumeChangePending();
+    if ( !m_projectDirectoryWatcher.consumeChangePending() ) return false;
+    // 路径状态即使在资源表没有增删时也需要失效，例如外部替换背景。
+    ++m_directoryRevision;
+    return true;
+}
+
+/// @brief 读取逻辑线程已接收的目录通知代次，无需等待目录扫描。
+std::uint64_t ProjectController::directoryRevision() const
+{
+    return m_directoryRevision;
 }
 
 /// @brief 创建谱面文件并登记到当前项目。

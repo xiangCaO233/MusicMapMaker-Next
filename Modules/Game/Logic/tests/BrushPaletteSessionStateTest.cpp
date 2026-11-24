@@ -1423,6 +1423,9 @@ bool testBeatmapExportPresentation()
 /// 文件夹位于 CTest 传入的输出目录，完成后撤销借用状态并删除夹具目录。
 /// 轨道与标题两个过期写入都要被拦下，便于覆盖各自独立的队列分支。
 /// 已扫描列表和普通快照分开断言，识别文件扫描误入定期刷新路径。
+/// 保留旧结果直到模拟界面消费完毕，覆盖同一版本共享及失效后的独立所有权。
+/// 工程内文件检查使用真正的后台池；仅在接收到通知后检查状态是否变化。
+/// 回归将工程清单发布与目录通知分开触发，避免两种失效来源互相覆盖。
 /// 等待文件结果前先撤掉测试锁，避免因夹具锁而掩盖文件阶段的正常进度。
 /// 只读模式下修改实际可写的字段，保证断言确实来自项目门禁。
 bool testBeatmapSettingsSnapshot(const std::filesystem::path& outputRoot)
@@ -1452,7 +1455,22 @@ bool testBeatmapSettingsSnapshot(const std::filesystem::path& outputRoot)
     // 由真实控制器装载工程上下文，显式推进逻辑循环可隔离外部渲染节拍。
     // 文件池仍正常运行，确保回归确实跨越逻辑捕获和后台计算两段。
     const auto opened = project.openProject(root);
-    auto&      pool   = Runtime::AppThreadPool::instance();
+    // 使用带历史目录前缀的主音频，使旧实现对每项至少尝试一次存在性检查。
+    // 不创建大量波形文件。候选需要保留无效引用，让原实现的探测路径仍可达。
+    constexpr int resourceCount = 1024;
+    bool          published     = false;
+    if ( auto* liveProject = project.currentProject() ) {
+        for ( int i = 0; i < resourceCount; ++i ) {
+            const auto id = "audio-" + std::to_string(i);
+            liveProject->m_audioResources.push_back({
+                .m_id     = id,
+                .m_path   = Config::pathToUtf8(root.filename() / (id + ".wav")),
+                .m_config = {},
+            });
+        }
+        published = project.saveProject();
+    }
+    auto& pool = Runtime::AppThreadPool::instance();
     // 此用例只初始化文件阶段依赖的池，无需启动主线程或渲染器。
     // 测试套件运行本用例之前没有主应用的启动逻辑，因此显式初始化共享文件池。
     pool.init();
@@ -1497,6 +1515,62 @@ bool testBeatmapSettingsSnapshot(const std::filesystem::path& outputRoot)
         Config::utf8ToPath(scanned->videos.front()) ==
             std::filesystem::path("nested") / "bg.MP4" &&
         !normal->scanned && normal->images.empty() && normal->videos.empty();
+
+    // 输入未变化时处理请求后必须立即就绪并返回原对象。这条分支在取文件池
+    // 之前退出，因此同时验证 32 次静置刷新中没有新文件任务和路径探测。
+    bool idleReused =
+        published && normal && normal->audio.size() == resourceCount;
+    // 不消耗墙钟时间等待 150 ms；直接推进逻辑处理，等价于界面的连续采样。
+    // 同一对象身份也排除后台很快返回一个内容相同但重新计算的结果。
+    for ( int i = 0; i < 32 && idleReused; ++i ) {
+        auto idle = Logic::requestBeatmapSettings(false, normal);
+        Logic::processBeatmapSettingsRequest();
+        idleReused = idle.wait_for(0s) == std::future_status::ready &&
+                     idle.get() == normal;
+    }
+
+    // 正常发布资源更新，即使活动谱面和目录代次相同，旧音频候选也必须失效。
+    bool resourceInvalidation = false;
+    std::shared_ptr<const Logic::BeatmapSettingsSnapshot> latest;
+    if ( auto* liveProject = project.currentProject();
+         liveProject && !liveProject->m_audioResources.empty() ) {
+        // 定向减少一个音频条目，使输出数量直接区分新旧读模型。
+        liveProject->m_audioResources.pop_back();
+        const bool saved = project.saveProject();
+        // 请求仍携带保存前的结果，模拟 UI 尚未见到资源列表改变。
+        auto changed = Logic::requestBeatmapSettings(false, normal);
+        Logic::processBeatmapSettingsRequest();
+        latest               = changed.get();
+        resourceInvalidation = saved && latest && latest != normal &&
+                               latest->audio.size() == resourceCount - 1;
+    }
+
+    // 同步清单已经发布，移走封面后仅消费真实目录通知。快照必须在
+    // 工程资源读模型仍相同的情况下更新存在性，不能依赖后续清单持久化。
+    bool directoryInvalidation = false;
+    if ( latest ) {
+        // 只改动实际文件名，故活动谱面的引用仍指向原位置。
+        // 监听既可通过系统通知交付，也可通过 POSIX 后台轮询交付。
+        std::filesystem::rename(root / "cover.PNG", root / "moved.PNG", error);
+        const auto until = std::chrono::steady_clock::now() + 4s;
+        while ( !error && !directoryInvalidation &&
+                std::chrono::steady_clock::now() < until ) {
+            // 用生产逻辑的消费入口递增修订；测试不直接写计数或篡改快照。
+            if ( project.consumeDirectoryChangePending() ) {
+                auto changed = Logic::requestBeatmapSettings(false, latest);
+                Logic::processBeatmapSettingsRequest();
+                // 仅等待已经由逻辑接走的文件任务，文件线程无需测试线程再次推进。
+                const auto after = changed.get();
+                directoryInvalidation =
+                    after && after != latest &&
+                    after->directoryRevision != latest->directoryRevision &&
+                    !after->paths[2].exists;
+            } else {
+                // 仅测试线程等待系统通知，不阻塞会话、绘制或文件工作者。
+                std::this_thread::sleep_for(10ms);
+            }
+        }
+    }
 
     bool editsPreserved   = false;
     bool staleEditIgnored = false;
@@ -1576,7 +1650,8 @@ bool testBeatmapSettingsSnapshot(const std::filesystem::path& outputRoot)
     engine.closeSession(index, false);
     // 关闭项目同时停止目录监视，避免清理夹具文件时产生无关刷新。
     project.closeProject();
-    // 此时从两个 future 都取得了结果。退出文件池用于还原进程共享状态。
+    // 正常分支已收取各次请求的结果。即使静置断言失败，关闭文件池也会
+    // 清空已经接收的任务，再删除文件夹，避免夹具清理和后台访问竞争。
     pool.shutdown();
     // 只删除当前测试创建的根，路径不来自输入文件或项目配置。
     std::filesystem::remove_all(root, error);
@@ -1584,18 +1659,23 @@ bool testBeatmapSettingsSnapshot(const std::filesystem::path& outputRoot)
     // 短路条件保护最后一项快照读取；文件阶段失败时 scanned 可能为空。
     const bool valid = opened.m_opened && enqueuedWithoutSessionLock &&
                        fileResults && editsPreserved && staleEditIgnored &&
-                       readOnlyRejected &&
+                       readOnlyRejected && idleReused && resourceInvalidation &&
+                       directoryInvalidation &&
                        scanned->metadata.title == "original";
     // 失败日志区分文件枚举、写入合并、身份、只读和请求锁五个独立故障点。
     if ( !valid )
         XERROR(
             "Beatmap settings snapshot mismatch: files={}, edits={}, stale={}, "
-            "unlocked={}, readOnly={}",
+            "unlocked={}, readOnly={}, idleReused={}, resourceInvalidation={}, "
+            "directoryInvalidation={}",
             fileResults,
             editsPreserved,
             staleEditIgnored,
             enqueuedWithoutSessionLock,
-            readOnlyRejected);
+            readOnlyRejected,
+            idleReused,
+            resourceInvalidation,
+            directoryInvalidation);
     return valid;
 }
 

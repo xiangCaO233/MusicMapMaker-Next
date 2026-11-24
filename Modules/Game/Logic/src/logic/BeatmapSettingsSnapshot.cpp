@@ -5,6 +5,8 @@
 #include "config/Utf8Path.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectController.h"
+#include "logic/ProjectUiState.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
@@ -16,6 +18,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <mutex>
 #include <optional>
 #include <string_view>
@@ -154,6 +157,8 @@ using SnapshotResult = std::shared_ptr<const BeatmapSettingsSnapshot>;
 struct SettingsRequest {
     /// @brief 请求是否包含递归资源枚举。
     bool scanResources;
+    /// @brief UI 当前使用的结果，只在逻辑线程判断是否可以复用。
+    SnapshotResult previous;
     /// @brief UI 持有 future，任务结束时不访问设置窗口对象。
     std::shared_ptr<std::promise<SnapshotResult>> completion;
 };
@@ -174,45 +179,71 @@ struct SettingsRequestSlot {
 /// @note 文件任务不回读此槽，慢盘不会阻塞新请求提交。
 SettingsRequestSlot requestSlot;
 
-/// @brief 在逻辑线程复制当前项目和活动谱面所需字段。
+/// @brief 在逻辑线程比较活动谱面和现有结果，仅捕获失效的快照。
+/// @param request 当前请求及 UI 已显示的版本。
+/// @param project 已发布的工程版本，和文件线程共享期间保持不可变。
+/// @param directoryRevision 已处理的文件通知版本，与项目存储版本独立。
+/// @param unchanged 为 true 时调用方直接交付旧版本，不访问文件池。
+/// @return 新快照的待补全数据；无谱面或可复用旧结果时为空。
 /// @return 没有完成加载的活动谱面时返回空，调用方无需排文件任务。
 /// @warning 低频请求路径；项目切换在同一逻辑线程，不能挪到文件线程。
-std::shared_ptr<BeatmapSettingsSnapshot> captureSettingsValues()
+std::shared_ptr<BeatmapSettingsSnapshot> captureSettingsValues(
+    const SettingsRequest&                       request,
+    const std::shared_ptr<const ProjectUiState>& project,
+    std::uint64_t directoryRevision, bool& unchanged)
 {
     auto&                 engine = EditorEngine::instance();
     const std::lock_guard lock(engine.getSessionMutex());
     // 会话也可能从其它入口切换；在同一锁内读取代次和谱面控制块。
     const auto session = engine.getActiveSession();
     if ( !session || !session->getContext().currentBeatmap ) return {};
+    const auto& current    = session->getContext().currentBeatmap;
+    const auto  generation = engine.activePlaybackState().generation;
+    const auto& previous   = request.previous;
+    // 先检查轻量身份与字段。未变化时既不分配快照，也不遍历工程资源。
+    // 无工程时两个空控制块同样可匹配；旧版本的弱引用不会保留工程资源数组。
+    // 先验版本不同便不比较元数据，避免对刚换下的大段 UTF-8 字段做无谓比较。
+    unchanged =
+        !request.scanResources && previous &&
+        previous->generation == generation &&
+        !previous->beatmap.owner_before(current) &&
+        !current.owner_before(previous->beatmap) &&
+        !previous->projectRevision.owner_before(project) &&
+        !project.owner_before(previous->projectRevision) &&
+        previous->directoryRevision == directoryRevision &&
+        std::chrono::steady_clock::now() < previous->externalPathExpiry &&
+        previous->metadata == current->m_baseMapMetadata;
+    if ( unchanged ) return {};
+    // 目录通知和工程发布是不同信号：删除封面不一定改动清单，
+    // 编辑清单内的引用也不一定导致媒体文件变动。任一变更都重新取值。
+    // 显式扫描从上面绕过缓存，允许关闭后再次打开弹层时刷新候选。
     // 快照需要保留所见的数据，但不应为已经关闭的会话延长整个 ECS 生命周期。
     // 只把对象身份作为弱引用写入快照，再将可见字段复制成真正的值。
-    const auto& context = session->getContext();
-    auto        result  = std::make_shared<BeatmapSettingsSnapshot>();
-    result->session     = session;
-    result->beatmap     = context.currentBeatmap;
+    auto result     = std::make_shared<BeatmapSettingsSnapshot>();
+    result->session = session;
+    result->beatmap = current;
     // 代次隔离活动标签，谱面控制块另外隔离同一标签内发生的重载。
-    result->generation = engine.activePlaybackState().generation;
-    result->metadata   = context.currentBeatmap->m_baseMapMetadata;
-    if ( const auto* project = engine.getCurrentProject() ) {
+    result->generation        = generation;
+    result->metadata          = current->m_baseMapMetadata;
+    result->projectRevision   = project;
+    result->directoryRevision = directoryRevision;
+    if ( project ) {
         // 独立谱面也有设置页。项目是否存在与资源是否可写分别表示，
         // 让临时工程显示资源而保持导入和重命名禁用。
         result->hasProject  = true;
         result->projectRoot = project->m_projectRoot;
         result->readOnly    = project->m_isTemporaryProject;
-        // 项目模型会在关闭时销毁，只交接筛选后的 ID 和路径值。
-        // Effect 资源由音符引用，不混入可选的谱面主音频。
-        for ( const auto& entry : project->m_audioResources ) {
-            if ( entry.m_type == AudioTrackType::Main )
-                result->audio.push_back({ entry.m_id, entry.m_path, {} });
-        }
     }
     return result;
 }
 
 /// @brief 在文件线程补全显示路径与可选资源。
 /// @param result 逻辑线程已移交的独占快照，完成后才向 UI 发布。
+/// @param project 与 result 的项目版本一致；独立谱面允许为空。
+/// @note 文件阶段不能回读当前工程，任务排队时可能已切到另一个根目录。
 /// @param scanResources 关闭资源下拉时仅检查现有引用。
-void completeSettingsFiles(BeatmapSettingsSnapshot& result, bool scanResources)
+void completeSettingsFiles(BeatmapSettingsSnapshot& result,
+                           const ProjectUiState* project, bool scanResources)
 {
     // 慢盘、链接解析和目录遍历与逻辑线程不共享锁。
     const auto& meta = result.metadata;
@@ -226,6 +257,13 @@ void completeSettingsFiles(BeatmapSettingsSnapshot& result, bool scanResources)
                      describePath(root, audio),
                      describePath(root, meta.cover_path),
                      describePath(root, meta.main_cover_path) };
+    if ( project ) {
+        // 发布模型已经过滤 Effect；仅在失效后于文件线程复制主音频候选。
+        // 预留精确容量，避免大工程的路径字符串在构造期间反复随数组搬移。
+        result.audio.reserve(project->m_audioResources.size());
+        for ( const auto& entry : project->m_audioResources )
+            result.audio.push_back({ entry.m_id, entry.m_path, {} });
+    }
     for ( auto& entry : result.audio ) {
         // 只有剥前缀后目标确实存在时才写入兼容路径；未知文件保留原引用。
         auto       path     = Config::utf8ToPath(entry.path);
@@ -234,7 +272,22 @@ void completeSettingsFiles(BeatmapSettingsSnapshot& result, bool scanResources)
                                   ? stripped
                                   : path.lexically_normal();
     }
-    // 普通刷新仍检查现有引用，只有打开候选下拉才需要递归枚举。
+    // 独立谱面和工程目录之外的引用收不到工程监听通知。仅对此类引用
+    // 保留低频兜底刷新，工程内的普通静置页始终以通知为准。
+    for ( const auto& path : result.paths ) {
+        if ( path.source.empty() ) continue;
+        // 用路径分量判断词法归属，避免磁盘访问，也避免同名前缀误判为子目录。
+        // 跨卷路径没有相对形式，也沿用低频检查。
+        const auto relative = path.source.is_absolute()
+                                  ? path.source.lexically_relative(root)
+                                  : path.source.lexically_normal();
+        if ( root.empty() || relative.empty() || *relative.begin() == ".." ) {
+            result.externalPathExpiry =
+                std::chrono::steady_clock::now() + std::chrono::seconds(3);
+            break;
+        }
+    }
+    // 只有打开候选下拉才需要递归枚举。
     if ( scanResources ) scanProjectMedia(result);
 }
 
@@ -250,8 +303,10 @@ std::optional<ActiveBeatmapSettingsState> activeBeatmapSettingsState()
 
 /// @brief 将请求放到逻辑线程，UI 自身无需接触会话互斥量。
 /// @param scanResources 源自候选打开边沿；普通字段刷新不走递归枚举。
+/// @param previous 由渲染侧保存旧快照，关闭和重载后可以直接丢弃。
 /// @return 有效 future 在后台阶段完成；空结果用于撤回已有表单。
-std::future<SnapshotResult> requestBeatmapSettings(bool scanResources)
+std::future<SnapshotResult> requestBeatmapSettings(bool           scanResources,
+                                                   SnapshotResult previous)
 {
     // 完成权先交给逻辑线程，再交给文件线程。窗口可随时销毁自己的 future，
     // 两阶段都不借用窗口对象，也不在窗口关闭时 join 文件任务。
@@ -262,7 +317,9 @@ std::future<SnapshotResult> requestBeatmapSettings(bool scanResources)
         // 多个来源重复请求时为旧 future 明确返回空，避免破损 promise。
         if ( requestSlot.request )
             requestSlot.request->completion->set_value({});
-        requestSlot.request = { scanResources, std::move(completion) };
+        requestSlot.request = { scanResources,
+                                std::move(previous),
+                                std::move(completion) };
         // 写槽和置位共用临界区，逻辑线程处理旧任务时不能抹掉新唤醒。
         requestSlot.pending.store(true, std::memory_order_relaxed);
     }
@@ -285,8 +342,17 @@ void processBeatmapSettingsRequest()
         requestSlot.request.reset();
         requestSlot.pending.store(false, std::memory_order_relaxed);
     }
-    auto  snapshot = captureSettingsValues();
-    auto* worker   = Runtime::AppThreadPool::instance().getFileThreadPool();
+    // 发布模型只借用不可变版本，不需要在会话锁内复制整个音频表。
+    auto& controller = ProjectController::instance();
+    auto  project    = controller.uiSnapshot();
+    bool  unchanged  = false;
+    auto  snapshot   = captureSettingsValues(
+        request, project, controller.directoryRevision(), unchanged);
+    if ( unchanged ) {
+        request.completion->set_value(std::move(request.previous));
+        return;
+    }
+    auto* worker = Runtime::AppThreadPool::instance().getFileThreadPool();
     // 无可用谱面或线程池已停止时，UI 仍能消费正常的空结果。
     if ( !snapshot || !worker ) {
         request.completion->set_value({});
@@ -294,11 +360,13 @@ void processBeatmapSettingsRequest()
     }
     // 进入文件池时会话锁已经释放。未接收任务时闭包不会运行，
     // 因此仍由提交侧完成空结果，不能让 UI 访问失效的 future。
-    const auto submitted =
-        worker->enqueue([snapshot = std::move(snapshot), request] {
-            completeSettingsFiles(*snapshot, request.scanResources);
-            request.completion->set_value(snapshot);
-        });
+    const auto submitted = worker->enqueue([snapshot   = std::move(snapshot),
+                                            project    = std::move(project),
+                                            scan       = request.scanResources,
+                                            completion = request.completion] {
+        completeSettingsFiles(*snapshot, project.get(), scan);
+        completion->set_value(snapshot);
+    });
     // 结果要么由已接收的任务提交，要么在此明确返回空；二者不会同时执行。
     if ( !submitted.valid() ) request.completion->set_value({});
 }
