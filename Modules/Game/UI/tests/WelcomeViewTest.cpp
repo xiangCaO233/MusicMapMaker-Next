@@ -5,7 +5,7 @@
 #include "log/colorful-log.h"
 #include "mmm/project/ProjectSettings.h"
 #include "ui/UIManager.h"
-#include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/imgui/DockNodeIds.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/walkthrough/WalkthroughModel.h"
 #include "ui/walkthrough/WalkthroughPage.h"
@@ -78,7 +78,7 @@
 /// - 测试配置根由 CTest 环境设置，不使用个人 AppConfig；
 /// - 临时修改 aesthetics.windowPadding 后立即恢复；
 /// - 深浅主题循环结束后恢复完整 ImGuiStyle；
-/// - MainDockSpaceUI 的中心 ID 在结束前清零；
+/// - 停靠节点状态的中心 ID 在结束前清零；
 /// - ImGui 上下文只在本测试进程存在；
 /// - 不创建渲染后端、窗口系统或 GPU 纹理；
 /// - 字体图集只用于生成可检查的文本顶点。
@@ -570,7 +570,7 @@ bool testPages()
     // 后续场景启用 Dock，并提供第一个项目布局中心节点。
     ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     dockId = ImHashStr("WelcomeDockBeforeProject");
-    MMM::UI::MainDockSpaceUI::setCenterDockId(dockId);
+    MMM::UI::DockNodeIds::setCenterDockId(dockId);
     for ( int i = 0; i < 4; ++i ) frame(960);
     auto* window = ImGui::FindWindowByName("###WelcomePage");
     if ( !window || window->DockId != dockId ) {
@@ -595,7 +595,7 @@ bool testPages()
     // 删除旧树并发布新的中心 ID，模拟打开项目后的布局恢复。
     ImGui::DockBuilderRemoveNode(dockId);
     dockId = ImHashStr("WelcomeDockAfterProject");
-    MMM::UI::MainDockSpaceUI::setCenterDockId(dockId);
+    MMM::UI::DockNodeIds::setCenterDockId(dockId);
     for ( int i = 0; i < 4; ++i ) frame(960);
     if ( window->DockId != dockId || welcome.showingHome() ||
          !service.progress().completed(topic, step) ) {
@@ -629,7 +629,7 @@ bool testPages()
     welcome.prepareForDockLayoutChange();
     ImGui::DockBuilderRemoveNode(dockId);
     for ( int i = 0; i < 4; ++i ) frame(960);
-    MMM::UI::MainDockSpaceUI::setCenterDockId(0);
+    MMM::UI::DockNodeIds::setCenterDockId(0);
     // 清空共享中心 ID，并以窗口保持浮动作为最终断言。
     return window->DockId == 0 && testSettingsGuideScroll(manager);
 }

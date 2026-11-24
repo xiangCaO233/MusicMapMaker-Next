@@ -11,7 +11,7 @@
 #include "ui/ICanvasView.h"
 #include "ui/ICanvasWorkspaceService.h"
 #include "ui/UIManager.h"
-#include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/imgui/DockNodeIds.h"
 #include "ui/imgui/WorkspaceDockRestore.h"
 #include "ui/walkthrough/WelcomeView.h"
 #include "ui/workspace/IWorkspacePresentation.h"
@@ -101,9 +101,7 @@ void CanvasTabManager::reconcileProjectWorkspaceDocks(
         }
 
         if ( reconcileSavedWorkspaceWindowDock(
-                 it->cameraId,
-                 it->dockId,
-                 MainDockSpaceUI::getCenterDockId()) ) {
+                 it->cameraId, it->dockId, DockNodeIds::getCenterDockId()) ) {
             // 已在原叶节点即可停止核对，允许后续正常拖动布局。
             it = m_pendingWorkspaceDocks.erase(it);
             continue;
@@ -453,7 +451,7 @@ void CanvasTabManager::update(UIManager* sourceManager)
             m_initializedCanvases.insert(entry.cameraId);
 
             // DockBuilder 只能在中央节点已经由 MainDockSpaceUI 创建后调用。
-            ImGuiID centerDockId = MainDockSpaceUI::getCenterDockId();
+            ImGuiID centerDockId = DockNodeIds::getCenterDockId();
             if ( centerDockId != 0 && useDefaultDock ) {
                 // 仅默认布局使用中心节点，工作区恢复由 ini/DockBuilder
                 // 状态负责。

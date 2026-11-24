@@ -5,7 +5,7 @@
 #include "config/skin/translation/Translation.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
-#include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/imgui/DockNodeIds.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughModel.h"
 #include "ui/walkthrough/WalkthroughService.h"
@@ -361,7 +361,7 @@ void WelcomeView::update(UIManager* manager)
         ImGuiCond_FirstUseEver);
     if ( m_dockToCenter ) {
         // 主 Dock 节点可能在早期帧尚未创建，保留请求直到取得有效 ID。
-        const auto dock = MainDockSpaceUI::getCenterDockId();
+        const auto dock = DockNodeIds::getCenterDockId();
         if ( dock != 0 ) {
             ImGui::SetNextWindowDockID(dock, ImGuiCond_Always);
             // 成功设置后只消费一次，不覆盖用户后续拖动布局。
