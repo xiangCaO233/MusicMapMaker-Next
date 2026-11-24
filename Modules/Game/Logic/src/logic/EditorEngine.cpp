@@ -48,8 +48,13 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "runtime/AppThreadPool.h"
 #if defined(__linux__)
+#    include <sys/prctl.h>
 #    include <sys/syscall.h>
 #    include <unistd.h>
+#endif
+#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || \
+    defined(_M_X64)
+#    include <immintrin.h>
 #endif
 #include <algorithm>
 #include <atomic>
@@ -107,8 +112,15 @@ namespace
 /// @brief 逻辑循环限频等待使用的时钟类型，要求单调递增避免系统时间跳变影响。
 using FrameLimitClock = std::chrono::steady_clock;
 
-/// @brief 限频粗睡眠预留量，给操作系统调度精度留出少量余量。
-constexpr auto FRAME_LIMIT_SLEEP_MARGIN = std::chrono::microseconds(250);
+/// @brief 逻辑轮次的最小起点间隔，对应全局 10000 UPS 上限。
+constexpr auto MIN_LOGIC_UPDATE_INTERVAL =
+    std::chrono::microseconds(EditorEngine::LOGIC_UPDATE_BUDGET_US);
+
+/// @brief 提前结束系统休眠，余下的短时间在会话锁外对齐周期。
+constexpr auto LOGIC_DEADLINE_SPIN_WINDOW = std::chrono::microseconds(20);
+
+/// @brief 单次调度延迟最多保留十个已经到期的周期，避免长时间暂停后大量追赶。
+constexpr auto MAX_LOGIC_SCHEDULE_LAG = MIN_LOGIC_UPDATE_INTERVAL * 10;
 
 /// @brief 后台非活跃谱面画布的最高快照更新频率下限。
 constexpr int BACKGROUND_SESSION_MIN_UPS = 60;
@@ -295,29 +307,6 @@ void updateFollowerHitEffects(SessionContext& ctx, double previousAnimateTime,
 
     ctx.hitFXSystem.update(
         ctx.animateTime, triggeredEvents, ctx.trackCount, config);
-}
-
-/// @brief 等待到目标逻辑更新时间点，避免用 yield 反复忙等。
-/// @warning 逻辑热路径等待：UPS 提前到达目标间隔时执行；只能包含 sleep
-/// 和时间查询，禁止加入锁、分配或业务逻辑。
-void sleepUntilFrameDeadline(FrameLimitClock::time_point deadline)
-{
-    while ( true ) {
-        auto now = FrameLimitClock::now();
-        if ( now >= deadline ) {
-            return;
-        }
-
-        // 限频等待属于用户帧率设置的节拍控制，不用于等待业务状态同步。
-        // 先粗睡眠再睡到剩余截止点，避免用 yield 在最后阶段忙等。
-        auto remaining = deadline - now;
-        if ( remaining > FRAME_LIMIT_SLEEP_MARGIN ) {
-            std::this_thread::sleep_for(remaining - FRAME_LIMIT_SLEEP_MARGIN);
-        } else {
-            std::this_thread::sleep_until(deadline);
-            return;
-        }
-    }
 }
 
 /// @brief 根据设备刷新率计算后台谱面画布的快照更新间隔。
@@ -1178,8 +1167,6 @@ EditorEngine::EditorEngine() : m_impl(std::make_unique<Impl>())
         impl().m_editorConfig = initialConfig;
         impl().m_editorConfigRevision.fetch_add(1, std::memory_order_release);
     }
-    impl().m_frameLimitPreference.store(initialConfig.settings.frameLimit,
-                                        std::memory_order_relaxed);
 
     // 提前实例化项目控制器，确保其事件订阅先于后续 UI 产生打开请求建立。
     (void)ProjectController::instance();
@@ -2232,8 +2219,6 @@ void EditorEngine::start()
         impl().m_editorConfig = initialConfig;
         impl().m_editorConfigRevision.fetch_add(1, std::memory_order_release);
     }
-    impl().m_frameLimitPreference.store(initialConfig.settings.frameLimit,
-                                        std::memory_order_relaxed);
 
     impl().m_running.store(true, std::memory_order_release);
 
@@ -4621,9 +4606,6 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
                 impl().m_currentTool.load(std::memory_order_relaxed), false),
             std::memory_order_relaxed);
     }
-    // 限频偏好单独发布给逻辑循环的快速路径；完整配置仍通过修订快照传播。
-    impl().m_frameLimitPreference.store(updatedConfig.settings.frameLimit,
-                                        std::memory_order_relaxed);
     if ( auto* project = ProjectController::instance().currentProject() ) {
         // 当前项目立即记录本次工具栏状态，后续项目切换可恢复独立偏好。
         // 这里只修改内存设置，实际项目文件保存仍由保存或关闭入口负责。
@@ -4763,28 +4745,34 @@ bool EditorEngine::saveDirtyBeatmapsForPackaging()
 
 /// @brief 逻辑线程的主循环。
 /// @details
-/// 循环首先执行用户配置的 UPS 限频并累计真实 dt，然后在 Session 锁外消费
-/// 项目切换。会话更新使用已发布快照稳定对象生命周期，按活动、可见实时需求、
-/// 待命令和自动保存到期状态决定是否更新后台会话。Unlimited 模式通过空闲门控
-/// 合并无工作轮次，但命令、播放和保存维护会立即唤醒。所有会话更新完成后，
-/// 再统一传播同主音轨状态和光标视觉参数，最后处理非阻塞目录变更去抖。
-/// @warning 逻辑热路径：按配置 UPS 频率执行；每个实际 Session update 会持有
-/// SessionRegistry 递归锁，以与 UI 的低频 SessionContext/ECS 读取串行化；锁内
-/// 普通路径禁止等待、文件系统操作、额外完整 entt 遍历、完整排序、try/catch
-/// 和可避免的 shared_ptr 拷贝。Unlimited 无播放命令的视觉维护轮次必须在锁
-/// 外合并，播放时钟和待处理命令不得受门控限制。自动保存、自动备份与元数据
-/// 尾随保存仅允许在既有低频到期或事件分支阻塞。
+/// 固定时间轴每 100 微秒允许一个逻辑轮次；短暂超时只能消费已到期的额度。
+/// 长时间停顿后丢弃过旧的周期，业务 dt 始终使用实际起点间隔。
+/// 项目切换在会话锁外消费；会话更新使用已发布快照稳定对象生命周期。
+/// 活动、可见实时需求、待命令和保存截止时间决定是否更新后台会话。
+/// 空闲门控只合并维护轮次，命令与播放仍在最早可运行的轮次消费。
+/// 各会话完成后统一传播同主音轨状态及光标参数，再处理目录扫描与去抖。
+/// @warning 逻辑热路径：固定 UPS 截止点只在取得会话锁之前等待。
+/// 末段轮询限于提前量，不等待音频、渲染或会话状态。
+/// 常态锁区禁止等待、文件系统操作、额外完整遍历及可避免的共享所有权复制。
+/// 自动保存、自动备份与元数据尾随保存只允许在既有低频到期或事件分支执行。
 void EditorEngine::loop()
 {
-    // deadline 独立于上一轮实际结束时刻推进，稳定固定 UPS 的长期节拍；
-    // lastTime 只用于计算传给会话的真实经过时间。
+#if defined(__linux__) && !defined(__ANDROID__)
+    // 仅在专用逻辑线程缩小 Linux 的定时器合并余量。
+    (void)::prctl(PR_SET_TIMERSLACK, 1UL, 0UL, 0UL, 0UL);
+#endif
+    // 调度截止点与业务时间各走自己的时钟边界，避免短时抖动破坏长期频率。
     auto                    lastTime     = FrameLimitClock::now();
-    auto                    nextDeadline = lastTime;
-    double                  lastTargetDt = 0.0;
+    auto                    nextDeadline = lastTime + MIN_LOGIC_UPDATE_INTERVAL;
     UnlimitedIdleUpdateGate unlimitedIdleUpdateGate;
     impl().m_lastUpsTime      = lastTime;
     impl().m_logicUpdateCount = 0;
     m_logicUps.store(0.0f, std::memory_order_relaxed);
+    m_logicTpuUs.store(0.0f, std::memory_order_relaxed);
+    // 只累计完成的业务迭代。等待时长属于 UPS 的墙钟分母，不计入 TPU。
+    FrameLimitClock::duration updateWorkTime{};
+    // 等待单独累计，用已有的前后时间点验证诊断数据中的计时边界。
+    FrameLimitClock::duration pacingWaitTime{};
     /// @brief 项目控制器单例引用，用于低频消费项目切换和目录监听状态。
     auto& projectController = ProjectController::instance();
     /// @brief 逻辑线程独占的编辑器配置快照，配置修订变化时才刷新。
@@ -4815,90 +4803,37 @@ void EditorEngine::loop()
     bool pendingDirectoryChange = false;
 
     while ( impl().m_running.load(std::memory_order_acquire) ) {
-        // 限频偏好允许 UI 即时修改；设备刷新率参与 VSync 倍率到 UPS 的换算。
-        // 本轮读取值固定使用到下个循环，避免同轮截止时间采用两套目标。
-        Config::FrameLimitPreference frameLimit =
-            impl().m_frameLimitPreference.load(std::memory_order_relaxed);
-        const int refreshRate =
-            Config::AppConfig::instance().getDeviceRefreshRate();
-        const double targetDt =
-            Config::frameLimitTargetInterval(frameLimit, refreshRate);
-
-        // currentTime 在等待前后各采样一次；后续 dt 使用等待完成后的真实时刻。
-        auto currentTime = FrameLimitClock::now();
-
-        if ( targetDt > 0.0 ) {
-            // duration 转换到 steady_clock 原生精度，避免用整数毫秒截断高 UPS。
-            const auto targetDuration =
-                std::chrono::duration_cast<FrameLimitClock::duration>(
-                    std::chrono::duration<double>(targetDt));
-
-            if ( targetDt != lastTargetDt ) {
-                // 配置变化时从当前时刻重新建截止线，不追赶旧频率遗留的相位。
-                nextDeadline = currentTime + targetDuration;
-                lastTargetDt = targetDt;
-            }
-
-            if ( currentTime < nextDeadline ) {
-                // 仅帧率限制允许等待；业务状态、命令和同步均不得使用此机制。
-                sleepUntilFrameDeadline(nextDeadline);
-                currentTime = FrameLimitClock::now();
-            }
-
-            if ( currentTime - nextDeadline > targetDuration ) {
-                // 落后超过一个完整周期时丢弃欠下的节拍，避免连续零间隔追帧。
-                nextDeadline = currentTime + targetDuration;
-            } else {
-                // 正常轻微超时时仍沿原时间线推进，减少调度抖动造成的漂移。
-                nextDeadline += targetDuration;
-            }
-        } else {
-            // Unlimited 不设未来截止线，由空闲门控决定无工作时的最低维护频率。
-            nextDeadline = currentTime;
-            lastTargetDt = targetDt;
+        // 每轮只消费一个到期周期；即使提前结束业务也不会借用未来的周期。
+        const auto beforeWait    = FrameLimitClock::now();
+        const auto sleepDeadline = nextDeadline - LOGIC_DEADLINE_SPIN_WINDOW;
+        auto       currentTime   = beforeWait;
+        if ( currentTime < sleepDeadline ) {
+            std::this_thread::sleep_until(sleepDeadline);
+            currentTime = FrameLimitClock::now();
         }
+        while ( currentTime < nextDeadline ) {
+#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || \
+    defined(_M_X64)
+            _mm_pause();
+#endif
+            currentTime = FrameLimitClock::now();
+        }
+        pacingWaitTime += currentTime - beforeWait;
+        // 只保留短期调度欠额，避免系统挂起或资源加载后连跑过多轮。
+        // 追赶轮只使用已到期的周期；不会提高固定时间轴的令牌生成速率。
+        // 小幅迟到时沿原时间轴前进，避免每次慢快照都永久推迟后续截止点。
+        // 超过追赶窗口时向前重置，已经丢弃的轮次不会再次进入逻辑队列。
+        nextDeadline =
+            std::max(nextDeadline, currentTime - MAX_LOGIC_SCHEDULE_LAG) +
+            MIN_LOGIC_UPDATE_INTERVAL;
 
+        // currentTime 是等待后的业务起点。休眠和末段轮询都在 TPU 边界之前。
         std::chrono::duration<double> passed = currentTime - lastTime;
         // steady_clock 保证非负单调间隔；不使用系统墙钟，时间校准不会跳动画。
         lastTime  = currentTime;
         double dt = passed.count();
         // 门控期间累计真实时间，下一次实际 poll 一次性消费，时间轴不会变慢。
         unlimitedIdleUpdateGate.accumulateElapsedSeconds(dt);
-
-        // 半秒窗口平衡统计响应速度与抖动，结果仅供快照预算回压和性能展示。
-        impl().m_logicUpdateCount++;
-        std::chrono::duration<double> upsElapsed =
-            currentTime - impl().m_lastUpsTime;
-        if ( upsElapsed.count() >= 0.5 ) {
-            // relaxed 原子只传播近似统计值，不作为任何会话状态的发布屏障。
-            m_logicUps.store(static_cast<float>(impl().m_logicUpdateCount /
-                                                upsElapsed.count()),
-                             std::memory_order_relaxed);
-            // loops 含空闲门控跳过的轮次，updates 只计入真正执行的会话调用。
-            // 多画布时一次迭代可能推进多个会话，因此不能拿循环数当调用数。
-            // sample_ns 仅累计被抽中的会话调用，除以 samples 得到抽样均值。
-            // 这个耗时包括调用期间被抢占的时间，与内核记录的线程 CPU 时间互补。
-            // 此处复用现有 UPS 边界，不为未启用诊断的用户增加时钟查询。
-            if ( editorConfigSnapshot.settings.renderProfileLogging ) {
-                XINFO(
-                    "LogicProfile tid={} seconds={:.6f} loops={} updates={} "
-                    "samples={} sample_ns={}",
-                    profileThreadId,
-                    upsElapsed.count(),
-                    impl().m_logicUpdateCount,
-                    sessionUpdates,
-                    timedUpdates,
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(
-                        sampledUpdateTime)
-                        .count());
-            }
-            // 在诊断关闭时也清理窗口，避免下次开启继承历史样本。
-            // 模式切换所在窗口可能只有部分样本，外部采集应选择稳定区间。
-            sessionUpdates = timedUpdates = 0;
-            sampledUpdateTime             = {};
-            impl().m_logicUpdateCount     = 0;
-            impl().m_lastUpsTime          = currentTime;
-        }
 
         if ( projectController.hasPendingUiSettingsEdit() ) {
             // 已经排队的设置先应用于仍然打开的工程，确保同轮关闭能保存它们。
@@ -4960,20 +4895,18 @@ void EditorEngine::loop()
         const auto& sessionUpdateSnapshot =
             publishedSessionUpdateSnapshot->sessions;
 
-        if ( !sessionUpdateSnapshot.empty() ) {
-            // 命令存在时 Unlimited
-            // 门控必须立刻放行；检查只读取各队列的轻量提示， 实际命令仍由对应
-            // Session::update 在注册表锁内消费。
+        const bool hasSessions = !sessionUpdateSnapshot.empty();
+        if ( hasSessions ) {
+            // 命令存在时空闲门控必须立刻放行；只读取各队列的轻量提示。
+            // 实际命令仍由对应 Session::update 在注册表锁内消费。
             const bool hasPendingSessionCommands = std::any_of(
                 sessionUpdateSnapshot.begin(),
                 sessionUpdateSnapshot.end(),
                 [](const SessionSnapshotEntry& entry) {
                     return entry.session && entry.session->hasPendingCommands();
                 });
-            const bool shouldPollSessions =
-                frameLimit != Config::FrameLimitPreference::Unlimited ||
-                unlimitedIdleUpdateGate.shouldPoll(currentTime,
-                                                   hasPendingSessionCommands);
+            const bool shouldPollSessions = unlimitedIdleUpdateGate.shouldPoll(
+                currentTime, hasPendingSessionCommands);
 
             if ( shouldPollSessions ) {
                 // 从上次实际 poll 起累计的时间只消费一次，跳过的空闲轮次不丢
@@ -4996,8 +4929,8 @@ void EditorEngine::loop()
                         static_cast<size_t>(maxSessionIndex) + 1);
                 }
 
-                const auto backgroundInterval =
-                    backgroundSessionUpdateInterval(refreshRate);
+                const auto backgroundInterval = backgroundSessionUpdateInterval(
+                    Config::AppConfig::instance().getDeviceRefreshRate());
                 // 后台间隔只节流隐藏或无实时需求会话，不限制活动和可见动画。
                 /// @brief 本轮由指令驱动发生时间变化的
                 /// Session，用于同主音轨同步。
@@ -5199,8 +5132,6 @@ void EditorEngine::loop()
             unlimitedIdleUpdateGate.requestPoll();
             unlimitedIdleUpdateGate.discardElapsedSeconds();
             m_cursorSmokeLifeOverride.store(-1.0f, std::memory_order_relaxed);
-            // 空会话是唯一固定短睡路径，只降低空转 CPU，不等待任何业务状态。
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         // 项目和活动会话状态已更新，只交接设置所需的小份值，文件探测由后台执行。
         processBeatmapSettingsRequest();
@@ -5228,6 +5159,65 @@ void EditorEngine::loop()
                 pendingDirectoryChange =
                     !projectController.startDirectoryScan();
             }
+        }
+        // 用限频结束与业务结束两个单调时间点衡量同一轮，计入业务锁等待与抢占。
+        // 空转轮次也保留在 TPU，播放中的多画布则共享本轮完整的处理预算。
+        // 采样边界位于统计发布之前，诊断日志本身不计入业务耗时。
+        // UPS 仍使用整个窗口的墙钟长度，反映调度后实际吞吐。
+        // 快照生成和同步仍按原有节奏推进；它们消耗的时间计入逻辑预算。
+        const auto updateEnd = FrameLimitClock::now();
+        updateWorkTime += updateEnd - currentTime;
+        // 半秒窗口平衡统计响应速度与抖动，结果仅供快照预算回压和性能展示。
+        impl().m_logicUpdateCount++;
+        std::chrono::duration<double> upsElapsed =
+            updateEnd - impl().m_lastUpsTime;
+        if ( upsElapsed.count() >= 0.5 ) {
+            // relaxed 原子只传播近似统计值，不作为任何会话状态的发布屏障。
+            m_logicUps.store(static_cast<float>(impl().m_logicUpdateCount /
+                                                upsElapsed.count()),
+                             std::memory_order_relaxed);
+            const double tpuUs =
+                std::chrono::duration<double, std::micro>(updateWorkTime)
+                    .count() /
+                impl().m_logicUpdateCount;
+            m_logicTpuUs.store(static_cast<float>(tpuUs),
+                               std::memory_order_relaxed);
+            // loops 含空闲门控跳过的轮次，updates 只计入真正执行的会话调用。
+            // 多画布时一次迭代可能推进多个会话，因此不能拿循环数当调用数。
+            // sample_ns 仅累计被抽中的会话调用，除以 samples 得到抽样均值。
+            // 这个耗时包括调用期间被抢占的时间，与内核记录的线程 CPU 时间互补。
+            // 此处复用现有 UPS 边界，不为未启用诊断的用户增加时钟查询。
+            if ( editorConfigSnapshot.settings.renderProfileLogging ) {
+                XINFO(
+                    "LogicProfile tid={} seconds={:.6f} loops={} updates={} "
+                    "samples={} sample_ns={} tpu_us={:.3f} "
+                    "pacing_wait_us={:.3f}",
+                    profileThreadId,
+                    upsElapsed.count(),
+                    impl().m_logicUpdateCount,
+                    sessionUpdates,
+                    timedUpdates,
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        sampledUpdateTime)
+                        .count(),
+                    tpuUs,
+                    std::chrono::duration<double, std::micro>(pacingWaitTime)
+                            .count() /
+                        impl().m_logicUpdateCount);
+            }
+            // 在诊断关闭时也清理窗口，避免下次开启继承历史样本。
+            // 模式切换所在窗口可能只有部分样本，外部采集应选择稳定区间。
+            sessionUpdates = timedUpdates = 0;
+            sampledUpdateTime             = {};
+            impl().m_logicUpdateCount     = 0;
+            impl().m_lastUpsTime          = updateEnd;
+            updateWorkTime                = {};
+            pacingWaitTime                = {};
+        }
+        if ( !hasSessions ) {
+            // 无会话主动休眠时释放剩余额度，启动首个会话无需追赶空闲周期。
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            nextDeadline = FrameLimitClock::now();
         }
     }
 }

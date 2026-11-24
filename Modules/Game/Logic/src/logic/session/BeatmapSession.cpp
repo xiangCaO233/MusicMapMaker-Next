@@ -1318,9 +1318,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                   // 配置采纳轮次必须完成倍率覆盖清除及必要的积分缓存重建。
                   navigationConfigReady || hasPendingCommands();
 
-    if ( effectiveConfig.settings.frameLimit !=
-             Config::FrameLimitPreference::VSync &&
-         !isBusy && !processed ) {
+    // 空闲会话维护与显示器同步模式无关。命令或实时状态发生变化时立即推进。
+    if ( !isBusy && !processed ) {
         // 空闲节流发生在命令和资源状态处理之后，不能延迟输入的本地反馈。
         if ( currentSysTime - m_ctx->lastSnapshotTime <
              IDLE_UPDATE_MIN_INTERVAL_SECONDS ) {

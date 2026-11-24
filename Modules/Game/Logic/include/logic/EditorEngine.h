@@ -518,6 +518,17 @@ public:
         return m_logicUps.load(std::memory_order_relaxed);
     }
 
+    /// @brief 全局逻辑更新预算，单位为微秒，对应最高 10000 UPS。
+    static constexpr int LOGIC_UPDATE_BUDGET_US = 100;
+
+    /// @brief 获取半秒窗口内每次逻辑迭代的平均业务耗时，单位为微秒。
+    /// @warning UI 热路径：逻辑线程低频写入，渲染线程每帧 relaxed 读取。
+    /// 此值只供展示，无需与其他逻辑状态同步，也不应为此读取会话锁。
+    float getLogicTpuUs() const noexcept
+    {
+        return m_logicTpuUs.load(std::memory_order_relaxed);
+    }
+
     /// @brief 发布主渲染线程实时帧率。
     /// @param fps ImGui 或渲染循环统计出的当前 FPS。
     /// @warning UI/逻辑热路径原子：UI 线程每帧写入，逻辑线程每 update
@@ -754,6 +765,11 @@ private:
     /// @warning 逻辑/UI 热路径/原子：逻辑线程低频写入、UI
     /// 可每帧读取；仅用于展示，使用 relaxed。
     std::atomic<float> m_logicUps{ 0.0f };
+
+    /// @brief 逻辑线程发布的平均单轮业务耗时，单位为微秒。
+    /// @warning 逻辑线程每个统计窗口写入，UI 每帧读取；relaxed 只传播展示值。
+    /// 零表示线程尚未完成统计窗口。
+    std::atomic<float> m_logicTpuUs{ 0.0f };
 
     /// @brief 主渲染线程实时刷新率 (FPS)。
     /// @warning UI/逻辑热路径/原子：UI 线程每帧写入、逻辑线程每 update
