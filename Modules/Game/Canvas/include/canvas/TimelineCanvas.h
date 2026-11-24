@@ -3,7 +3,6 @@
 #include "ui/interaction/EditorInteraction.h"
 
 #include "canvas/CanvasSnapshotPrepare.h"
-#include "canvas/TimelineAuxiliaryWindowState.h"
 #include "canvas/TimelineFormatSupport.h"
 #include "canvas/TimingFunctionEditorState.h"
 #include "canvas/TimingInterpolationPreview.h"
@@ -110,16 +109,13 @@ public:
         const std::string& shader_name) override;
     std::string getShaderName(const std::string& shader_module_name) override;
     bool        needReload() override;
-    void reloadTextures(vk::PhysicalDevice& physicalDevice,
-                        vk::Device& logicalDevice, vk::CommandPool& cmdPool,
-                        vk::Queue& queue) override;
+    void        reloadTextures(vk::PhysicalDevice& physicalDevice,
+                               vk::Device& logicalDevice, vk::CommandPool& cmdPool,
+                               vk::Queue& queue) override;
 
     /// @brief 获取时间点批量编辑表格窗口是否打开。
     /// @return 表格窗口当前是否打开。
-    bool isTimingPointsTableOpen() const override
-    {
-        return m_auxiliaryWindowState.timingPointsTableOpen;
-    }
+    bool isTimingPointsTableOpen() const override;
 
     /// @brief 设置时间点批量编辑表格窗口打开状态。
     /// @param open 是否打开表格窗口。
@@ -338,13 +334,6 @@ private:
     void renderProfessionalTimelineOverlay(const ImVec2& canvasPos,
                                            const ImVec2& size);
 
-    /// @brief 清除上一帧追加到 Timeline 快照中的交互修饰。
-    void resetTimelineInteractionDecoration();
-
-    /// @brief 根据当前 Timeline 交互状态刷新快照半透明与发光命令。
-    /// @param size 当前 Timeline 画布尺寸。
-    void refreshTimelineInteractionDecoration(const ImVec2& size);
-
     /// @brief 清理选中集中已经不存在于当前快照的 Timing 实体。
     void pruneInvalidTimingSelection();
 
@@ -446,15 +435,6 @@ private:
 
         /// @brief Timing 原始参数值。
         double value{ 0.0 };
-    };
-
-    /// @brief Timeline 顶点颜色恢复记录。
-    struct TimelineVertexColorRestore {
-        /// @brief 顶点索引。
-        uint32_t vertexIndex{ 0 };
-
-        /// @brief 修饰前完整颜色。
-        Graphic::Vertex::Color color;
     };
 
     /// @brief 收集当前快照中可交互的 Timing 目标。
@@ -579,6 +559,13 @@ private:
     /// @brief 分拍合法性或红线映射错误，取消窗口仍允许退出。
     bool m_interpolationAxisValid{ true };
 
+    struct TimingTableController;
+    struct TimelineSnapshotDecorator;
+
+    /// @brief 表格窗口的行交互与查询状态，仅在构造时分配。
+    std::unique_ptr<TimingTableController> m_table;
+    /// @brief 临时图元的恢复记录，仅在构造时分配并跨帧复用。
+    std::unique_ptr<TimelineSnapshotDecorator> m_snapshotDecorator;
     /// @brief 生命周期随画布，仅在构造时分配的平台输入解释器。
     std::unique_ptr<TimelineInteractionPresentation> m_timingPresentation;
     bool m_pointerTapOnly{ false };  ///< 触控轻点只选中，不建立零位移拖动。
@@ -588,18 +575,10 @@ private:
     std::string                                           m_canvasName;
     bool                                                  m_needReload{ true };
     std::shared_ptr<Common::Render::RenderSnapshotBuffer> m_syncBuffer;
-    /// @brief 仅属于 Timeline 时间点表格的窗口状态。
-    TimelineAuxiliaryWindowState    m_auxiliaryWindowState;
     Common::Render::RenderSnapshot* m_currentSnapshot{ nullptr };
 
     // 弹窗状态
     bool m_isPopupOpen{ false };
-    /// @brief 下一次绘制时是否检查并恢复时间点表格窗口位置。
-    bool m_shouldRecoverTableWindow{ false };
-    /// @brief 下一次绘制时是否聚焦时间点表格窗口。
-    bool m_shouldFocusTableWindow{ false };
-    /// @brief 时间点表格上一帧是否同时聚焦且可从显示器工作区访问。
-    bool m_isTableWindowFocusedAndReachable{ false };
     /// @brief 下一帧是否调用 ImGui::SetNextWindowFocus 聚焦时间线窗口。
     bool m_shouldFocusNextFrame{ false };
     /// @brief 在创建时间线窗口前消费延迟聚焦请求，弹窗拥有焦点时不抢占。
@@ -618,34 +597,7 @@ private:
     /// @brief 总时间进度条最近一次连续 seek 的音频目标时间。
     double m_audioTimeSliderScrubTarget{ 0.0 };
     /// @brief 当前时间线窗口最近一次更新时所在的 ImGui Dock 节点。
-    ImGuiID m_lastDockId{ 0 };
-    /// @brief 时间点批量编辑窗口绑定的谱面快照键。
-    std::string m_tableBeatmapKey;
-    /// @brief 下一帧表格是否需要滚动到当前判定线时间附近。
-    bool m_tableScrollToCurrentTimePending{ false };
-    /// @brief 表格待滚动定位的目标时间，单位秒。
-    double m_tableScrollTargetTime{ 0.0 };
-    /// @brief 时间点表格 Shift 连续选择使用的锚点实体。
-    entt::entity m_tableSelectionAnchorEntity{ entt::null };
-    /// @brief 是否正在通过时间点表格序号列拖动选择连续行。
-    bool m_isTableRowDragSelecting{ false };
-    /// @brief 时间点表格序号列拖选的起始实体。
-    entt::entity m_tableRowDragAnchorEntity{ entt::null };
-    /// @brief 时间点表格序号列拖选开始前保留的追加选择。
-    std::unordered_set<entt::entity> m_tableRowDragBaseSelection;
-    /// @brief 表格本次手势的集合模式；空值保持经典 Ctrl/Shift 规则。
-    /// @details 起笔锁存，后续外部模式变化不能重解释当前拖选。
-    std::optional<Logic::SelectionOperation> m_tableRowSelectionOperation;
-    /// @brief 当前序号列拖选是否已经越过起始行。
-    bool m_hasTableRowDragSelectionMoved{ false };
-    /// @brief 时间点表格是否只显示 BPM 行。
-    bool m_tableOnlyShowBpm{ false };
-    /// @brief 时间点表格搜索启用的 BPM、SV、Jump 与 HS 属性。
-    std::array<bool, 5> m_tableSearchEffectFilters{};
-    /// @brief 时间点表格精确数值搜索文本。
-    std::array<char, 64> m_tableSearchValueBuffer{};
-    /// @brief 时间点表格搜索结果的批量替换值。
-    double       m_tableSearchReplacementValue{ 0.0 };
+    ImGuiID      m_lastDockId{ 0 };
     entt::entity m_editingEntity{ entt::null };
     double       m_editTime{ 0.0 };
     double       m_editValue{ 1.0 };
@@ -665,13 +617,6 @@ private:
     int  m_createPosType{ 0 };  // 0: Click, 1: Current
     bool m_isTimeSnapped{ false };
     bool m_keepSpeedOnBpmChange{ false };
-
-    /// @brief 最近一次新建 Timing 的目标时间（秒），用于表格高亮定位
-    double m_lastCreatedTimingTime{ -1.0 };
-    /// @brief 最近一次新建 Timing 的类型
-    ::MMM::TimingEffect m_lastCreatedTimingEffect{ ::MMM::TimingEffect::BPM };
-    /// @brief 最近一次新建 Timing 的高亮截止时间（ImGui 时间）
-    double m_lastCreatedTimingHighlightUntil{ 0.0 };
 
     /// @brief “保持画布速度”临时联动是否正在等待 BPM 编辑结束。
     bool m_keepSpeedBindingActive{ false };
@@ -758,24 +703,6 @@ private:
 
     /// @brief 画笔工具预览 Timing 在画布中的 Y 坐标。
     float m_timingDrawPreviewY{ 0.0f };
-
-    /// @brief 当前被 UI 侧交互修饰过的 Timeline 快照。
-    Common::Render::RenderSnapshot* m_decoratedTimelineSnapshot{ nullptr };
-
-    /// @brief 修饰前快照顶点数量。
-    size_t m_decoratedTimelineVertexCount{ 0 };
-
-    /// @brief 修饰前快照索引数量。
-    size_t m_decoratedTimelineIndexCount{ 0 };
-
-    /// @brief 修饰前普通绘制命令数量。
-    size_t m_decoratedTimelineCmdCount{ 0 };
-
-    /// @brief 修饰前发光绘制命令数量。
-    size_t m_decoratedTimelineGlowCmdCount{ 0 };
-
-    /// @brief 修饰前顶点颜色恢复列表。
-    std::vector<TimelineVertexColorRestore> m_timelineColorRestore;
 
     // 缓存 Shader 源码
     std::unordered_map<std::string, std::vector<std::string>>

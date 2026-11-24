@@ -1,4 +1,5 @@
 #include "TimelineInteractionPresentation.h"
+#include "../TimelineCanvas_Private.h"
 #include "canvas/TimingInterpolationControls.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
@@ -92,7 +93,7 @@ bool TimelineCanvas::hasActivePointerGesture() const
     return m_timingPresentation->hasGesture() || m_isTimingDragging ||
            m_isTimingErasing || m_isTimingMarqueeSelecting ||
            m_isTimingDrawPreviewing || m_isInterpolationDragging ||
-           m_isTableRowDragSelecting || m_isAudioTimeSliderScrubbing;
+           m_table->m_isTableRowDragSelecting || m_isAudioTimeSliderScrubbing;
 }
 /// @brief 桌面默认路径保持原参数和物理边沿，不使用触控门槛。
 /// @warning 每帧转发；原控制器继续负责输入域和播放权限。

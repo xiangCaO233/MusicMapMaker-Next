@@ -54,11 +54,13 @@
 
   已验证。后台分析、手势历史和标记 I/O 由三个私有组件管理。快速切换只保留新请求，析构前等待旧任务，频谱资源仍在 UI 线程交付。Linux RelWithDebInfo 全量构建与 8 项 CTest 通过。Ninja 中私有域头仅 7 个消费者，BpmAutoDetector 从 16 降到 8，AudioMarkerService 从 24 降到 17。
 
-- [ ] **R68 · P0 · TimelineCanvas 混合表格交互、时间点手势和快照装饰**
+- [x] **R68 · P0 · TimelineCanvas 混合表格交互、时间点手势和快照装饰**
 
   15 个对象依赖；表格批选/搜索、时间点拖拽、顶点颜色恢复与贴图状态进入同一头。按 Popups/Interaction 分 cpp 后布局仍耦合。 先拆 TimingTableController 拥有表格选择/拖拽，再拆快照装饰器拥有覆盖和恢复数组；固定画布寿命并复用缓冲。回归鼠标/触屏多选、切谱、取消拖拽、重复装饰同一快照后顶点恢复。
 
   [TimelineCanvas.h L371](../Modules/Game/Canvas/include/canvas/TimelineCanvas.h#L371)
+
+  已验证。时间点表格控制器负责筛选、选择和手势状态，快照装饰器保存顶点恢复和覆盖状态。增加 CPU 侧重复装饰与颜色恢复回归。Linux RelWithDebInfo 全量构建与 20 项相关 CTest 通过。Ninja 活动对象依赖数为 TimelineCanvas.h 15,TimelineAuxiliaryWindowState.h 5,TimelineCanvas_Private.h 4。
 
 - [ ] **R69 · P0 · ToolbarView 的音效编辑缓存与调色板不必公开**
 

@@ -13,6 +13,7 @@
 #endif
 
 // 时间线弹窗修改设置字段，类型定义留在实际编辑设置的实现中。
+#include "TimelineCanvas_Private.h"
 #include "canvas/TimelineCanvas.h"
 #include "presentation/TimelineInteractionPresentation.h"
 #include "ui/Icons.h"
@@ -1872,9 +1873,9 @@ void TimelineCanvas::renderEventCreationPopup()
                 Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
                     m_createTimeManual, type, finalValue }));
             // 最近创建标识只用于 UI 高亮，不作为实体身份或命令结果。
-            m_lastCreatedTimingTime   = m_createTimeManual;
-            m_lastCreatedTimingEffect = type;
-            m_lastCreatedTimingHighlightUntil =
+            m_table->m_lastCreatedTimingTime   = m_createTimeManual;
+            m_table->m_lastCreatedTimingEffect = type;
+            m_table->m_lastCreatedTimingHighlightUntil =
                 ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
 
             if ( type == ::MMM::TimingEffect::BPM && m_keepSpeedOnBpmChange ) {
@@ -2245,10 +2246,21 @@ void TimelineCanvas::renderEventCreationPopup()
 /// - UI 帧内创建的局部向量在函数返回后释放。
 /// - 成员 scratch 容器只保存需要跨帧的交互状态。
 /// @warning UI 热路径：打开时每帧执行；快照尚未就绪时只绘制同步提示。
+/// @brief 表格使用单独的 UI 控制器，和画布主体显示状态独立。
 void TimelineCanvas::renderTimingPointsTableWindow()
 {
+    m_table->render(*this);
+}
+
+/// @details 控制器拥有跨帧窗口状态，画布提供会话命令和共用选区。
+/// 表格关闭只清理本表的拖动、焦点和窗口意图。
+/// 画布切换谱面后，表格必须检查已发布快照的实例标识。
+/// 指针命中与选择都在当前 ImGui 帧完成，渲染器不会访问这些字段。
+void TimelineCanvas::TimingTableController::render(TimelineCanvas& canvas)
+{
+    // 关闭的表不读取逻辑侧快照；未完成的触摸也不能延续到下次打开。
     if ( !m_auxiliaryWindowState.timingPointsTableOpen ) {
-        m_timingPresentation->resetTableInput();
+        canvas.m_timingPresentation->resetTableInput();
         // 关闭状态主动清空所有窗口局部锁存，下一次打开从干净状态开始。
         m_shouldRecoverTableWindow         = false;
         m_shouldFocusTableWindow           = false;
@@ -2260,12 +2272,13 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         m_tableRowDragBaseSelection.clear();
         m_tableRowSelectionOperation.reset();
         m_hasTableRowDragSelectionMoved = false;
-        finishKeepSpeedBinding();
+        canvas.finishKeepSpeedBinding();
         return;
     }
 
-    auto closeTableWindow = [this]() {
-        m_timingPresentation->resetTableInput();
+    // 窗口关闭回调只用于本次绘制，借用画布和控制器仍在同一帧。
+    auto closeTableWindow = [this, &canvas]() {
+        canvas.m_timingPresentation->resetTableInput();
         // 所有异常归属和用户关闭路径复用同一完整清理序列。
         m_auxiliaryWindowState.timingPointsTableOpen = false;
         m_shouldRecoverTableWindow                   = false;
@@ -2279,7 +2292,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         m_tableRowDragBaseSelection.clear();
         m_tableRowSelectionOperation.reset();
         m_hasTableRowDragSelectionMoved = false;
-        finishKeepSpeedBinding();
+        canvas.finishKeepSpeedBinding();
     };
 
     auto&      engine      = Logic::EditorEngine::instance();
@@ -2296,14 +2309,16 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     // 前者结束会话归属，后者必须维持菜单刚提交的打开意图。
     const auto& table = *activeTable;
     const auto  snapshotStatus =
-        table
-             ? resolveTimelineTableSnapshotStatus(
-                  table->beatmapInstanceId != 0,
-                  table->beatmapInstanceId,
-                  m_currentSnapshot != nullptr,
-                  m_currentSnapshot && m_currentSnapshot->hasBeatmap,
-                  m_currentSnapshot ? m_currentSnapshot->beatmapInstanceId : 0)
-             : TimelineTableSnapshotStatus::AwaitingSnapshot;
+        table ? resolveTimelineTableSnapshotStatus(
+                    table->beatmapInstanceId != 0,
+                    table->beatmapInstanceId,
+                    canvas.m_currentSnapshot != nullptr,
+                    canvas.m_currentSnapshot &&
+                        canvas.m_currentSnapshot->hasBeatmap,
+                    canvas.m_currentSnapshot
+                         ? canvas.m_currentSnapshot->beatmapInstanceId
+                         : 0)
+               : TimelineTableSnapshotStatus::AwaitingSnapshot;
     if ( snapshotStatus == TimelineTableSnapshotStatus::Close ) {
         closeTableWindow();
         return;
@@ -2311,7 +2326,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     if ( snapshotStatus == TimelineTableSnapshotStatus::AwaitingSnapshot ) {
         // 主窗口隐藏启动时也允许先显示占位窗口，等待独立准备快照到达。
         bool& windowOpen = m_auxiliaryWindowState.timingPointsTableOpen;
-        renderTimingTableSyncingWindow(*m_timingPresentation,
+        renderTimingTableSyncingWindow(*canvas.m_timingPresentation,
                                        windowOpen,
                                        m_shouldRecoverTableWindow,
                                        m_shouldFocusTableWindow,
@@ -2319,7 +2334,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         return;
     }
     const std::string_view currentBeatmapKey =
-        getTimingPointsTableBeatmapKey(*m_currentSnapshot);
+        getTimingPointsTableBeatmapKey(*canvas.m_currentSnapshot);
     if ( currentBeatmapKey.empty() ) {
         closeTableWindow();
         return;
@@ -2360,7 +2375,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
 
     ImGui::SetNextWindowSize(ImVec2(820, 450), ImGuiCond_FirstUseEver);
     // 平台只覆盖触屏初次打开的几何，经典表格保留保存的位置与大小。
-    m_timingPresentation->prepareTableWindow();
+    canvas.m_timingPresentation->prepareTableWindow();
     if ( m_shouldFocusTableWindow ) {
         ImGui::SetNextWindowFocus();
     }
@@ -2393,17 +2408,17 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     m_shouldRecoverTableWindow = false;
     m_shouldFocusTableWindow   = false;
     if ( opened ) {
-        const bool touchTable      = m_timingPresentation->touchTable();
-        const bool editingDisabled = m_currentSnapshot->isPlaying;
+        const bool touchTable      = canvas.m_timingPresentation->touchTable();
+        const bool editingDisabled = canvas.m_currentSnapshot->isPlaying;
         if ( editingDisabled ) {
-            m_timingPresentation->resetTableInput();
+            canvas.m_timingPresentation->resetTableInput();
             // 播放开始会终止无法继续的拖选与临时 BPM/Scroll 联动。
             m_isTableRowDragSelecting       = false;
             m_tableRowDragAnchorEntity      = entt::null;
             m_hasTableRowDragSelectionMoved = false;
             m_tableRowDragBaseSelection.clear();
             m_tableRowSelectionOperation.reset();
-            finishKeepSpeedBinding();
+            canvas.finishKeepSpeedBinding();
             ImGui::BeginDisabled();
         }
 
@@ -2413,63 +2428,65 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         // 表格元素来自完整列表，不受当前时间线可见范围裁剪。
         // 因此视口之外的点也可以打开属性，不重新从 hover 或选区推断目标。
         // 本地编辑草稿与多选集合独立，单个属性窗不会批量覆盖其它选中行。
-        const auto editTableElement = [this](const auto& el) {
+        // 编辑目标由本代行实体确定，不能依赖表格排序或鼠标位置。
+        const auto editTableElement = [this, &canvas](const auto& el) {
             const auto entity = getElementEntity(el);
             const auto effect = getElementEffect(el);
             if ( el.interpolation ) {
-                openInterpolationEditor({ entity,
-                                          el.time,
-                                          getElementRawValue(el),
-                                          effect,
-                                          *el.interpolation });
+                canvas.openInterpolationEditor({ entity,
+                                                 el.time,
+                                                 getElementRawValue(el),
+                                                 effect,
+                                                 *el.interpolation });
             } else {
                 // 只准备副本；普通点与段落均在原确认按钮处提交一次命令。
-                m_editingEntity = entity;
+                canvas.m_editingEntity = entity;
                 // 秒单位保持不变，显示与存储数值的换算沿用原参数编辑器。
                 // 特别是 STOP 使用秒，不能误套 BPM 或拍位单位。
                 // 打开副本不修改任何 FormatMetadata，最终确认仍由原命令处理。
-                m_editTime = el.time;
-                m_editValue =
+                canvas.m_editTime = el.time;
+                canvas.m_editValue =
                     getDisplayValue(effect, getElementRawValue(el), entity);
                 switch ( effect ) {
-                case TimingEffect::BPM: m_editType = "BPM"; break;
-                case TimingEffect::SCROLL: m_editType = "Scroll"; break;
-                case TimingEffect::JUMP: m_editType = "Jump"; break;
-                case TimingEffect::HS: m_editType = "HS"; break;
-                case TimingEffect::STOP: m_editType = "STOP"; break;
+                case TimingEffect::BPM: canvas.m_editType = "BPM"; break;
+                case TimingEffect::SCROLL: canvas.m_editType = "Scroll"; break;
+                case TimingEffect::JUMP: canvas.m_editType = "Jump"; break;
+                case TimingEffect::HS: canvas.m_editType = "HS"; break;
+                case TimingEffect::STOP: canvas.m_editType = "STOP"; break;
                 }
-                m_keepSpeedOnBpmEdit   = false;
-                m_isPopupOpen          = true;
-                m_isCreatePopupOpen    = false;
-                m_shouldFocusNextFrame = false;
+                canvas.m_keepSpeedOnBpmEdit   = false;
+                canvas.m_isPopupOpen          = true;
+                canvas.m_isCreatePopupOpen    = false;
+                canvas.m_shouldFocusNextFrame = false;
             }
         };
         // 拍号换算继续使用同一谱面的渲染快照，避免切换时混用上一谱面的锚点。
         const auto beatTimeline =
-            buildTimingTableBeatTimeline(*m_currentSnapshot);
+            buildTimingTableBeatTimeline(*canvas.m_currentSnapshot);
         const double tableFallbackBpm =
-            timingTableFallbackBpm(*m_currentSnapshot);
+            timingTableFallbackBpm(*canvas.m_currentSnapshot);
         if ( m_tableSelectionAnchorEntity != entt::null &&
-             !m_selectedTimingEntities.contains(
+             !canvas.m_selectedTimingEntities.contains(
                  m_tableSelectionAnchorEntity) ) {
             m_tableSelectionAnchorEntity =
-                m_selectedTimingEntities.size() == 1
-                    ? *m_selectedTimingEntities.begin()
+                canvas.m_selectedTimingEntities.size() == 1
+                    ? *canvas.m_selectedTimingEntities.begin()
                     : entt::null;
         }
-        refreshKeepSpeedBinding(elements);
+        canvas.refreshKeepSpeedBinding(elements);
         const double tableCurrentTime =
-            getActiveSessionTimelineTime(m_currentSnapshot->currentTime);
+            getActiveSessionTimelineTime(canvas.m_currentSnapshot->currentTime);
         const auto copyTableSelection = [&](bool cut) {
             // 只有成功写入剪贴板后才执行 cut 删除，失败不破坏原选择。
-            if ( !copyTimingTableSelectionToClipboard(elements,
-                                                      m_selectedTimingEntities,
-                                                      beatTimeline,
-                                                      tableFallbackBpm) ) {
+            if ( !copyTimingTableSelectionToClipboard(
+                     elements,
+                     canvas.m_selectedTimingEntities,
+                     beatTimeline,
+                     tableFallbackBpm) ) {
                 return;
             }
             if ( cut ) {
-                deleteSelectedTimingEvents();
+                canvas.deleteSelectedTimingEvents();
                 m_tableSelectionAnchorEntity = entt::null;
             }
         };
@@ -2485,7 +2502,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             }
             const auto selected = std::find_if(
                 elements.begin(), elements.end(), [&](const auto& element) {
-                    return m_selectedTimingEntities.contains(
+                    return canvas.m_selectedTimingEntities.contains(
                         getElementEntity(element));
                 });
             return selected != elements.end() ? selected->time
@@ -2494,7 +2511,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         const auto pasteTableSelection = [&]() {
             // 先同步系统剪贴板到编辑器级格式，再按解析出的锚点批量粘贴。
             ::MMM::UI::ClipboardBridge::importEditorClipboardFromSystem();
-            pasteTimingClipboard(std::max(0.0, resolveTablePasteAnchor()));
+            canvas.pasteTimingClipboard(
+                std::max(0.0, resolveTablePasteAnchor()));
             m_tableSelectionAnchorEntity = entt::null;
         };
 
@@ -2517,7 +2535,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             if ( ::MMM::UI::FeedbackButton("添加 BPM") ) {
                 // 工具栏快速新增使用活动 Session 时间，而非快照视觉偏移时间。
                 constexpr double DEFAULT_BPM_VALUE = 120.0;
-                publishTimelineCommand(Event::LogicCommandEvent(
+                canvas.publishTimelineCommand(Event::LogicCommandEvent(
                     Logic::CmdCreateTimelineEvent{ tableCurrentTime,
                                                    ::MMM::TimingEffect::BPM,
                                                    DEFAULT_BPM_VALUE }));
@@ -2526,21 +2544,21 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 m_lastCreatedTimingHighlightUntil =
                     ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
 
-                if ( m_keepSpeedOnBpmChange ) {
+                if ( canvas.m_keepSpeedOnBpmChange ) {
                     // 联动创建后按时间追踪异步回流的最新 BPM 与 Scroll 实体。
-                    publishTimelineCommand(
+                    canvas.publishTimelineCommand(
                         Event::LogicCommandEvent(makeKeepSpeedScrollEvent(
                             tableCurrentTime, DEFAULT_BPM_VALUE)));
-                    beginKeepSpeedBinding(tableCurrentTime);
+                    canvas.beginKeepSpeedBinding(tableCurrentTime);
                 }
             }
             ImGui::SameLine();
             ::MMM::UI::FeedbackCheckbox(
                 TR("ui.timeline.event_creator.keep_speed").data(),
-                &m_keepSpeedOnBpmChange);
+                &canvas.m_keepSpeedOnBpmChange);
             ImGui::SameLine();
             if ( ::MMM::UI::FeedbackButton("添加流速 (SV)") ) {
-                publishTimelineCommand(
+                canvas.publishTimelineCommand(
                     Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
                         tableCurrentTime, ::MMM::TimingEffect::SCROLL, 1.0 }));
                 m_lastCreatedTimingTime   = tableCurrentTime;
@@ -2550,7 +2568,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             }
             ImGui::SameLine();
             if ( ::MMM::UI::FeedbackButton("添加 Jump") ) {
-                publishTimelineCommand(
+                canvas.publishTimelineCommand(
                     Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
                         tableCurrentTime, ::MMM::TimingEffect::JUMP, 1000.0 }));
                 m_lastCreatedTimingTime   = tableCurrentTime;
@@ -2567,7 +2585,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             // 播放时是否冻结由音频调度处理，UI 不使用 sleep 模拟暂停。
             // 对不支持的保存格式仍使用能力提示，不改变用户当前编辑权限。
             if ( ::MMM::UI::FeedbackButton("添加 STOP") ) {
-                publishTimelineCommand(
+                canvas.publishTimelineCommand(
                     Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
                         tableCurrentTime, ::MMM::TimingEffect::STOP, 0.5 }));
                 m_lastCreatedTimingTime   = tableCurrentTime;
@@ -2577,7 +2595,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             }
             ImGui::SameLine();
             if ( ::MMM::UI::FeedbackButton("添加 HS") ) {
-                publishTimelineCommand(
+                canvas.publishTimelineCommand(
                     Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
                         tableCurrentTime, ::MMM::TimingEffect::HS, 1.0 }));
                 m_lastCreatedTimingTime   = tableCurrentTime;
@@ -2604,16 +2622,17 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             // 混合选择中的非红线由命令端忽略，不改变选择集合。
             // 统一反馈按钮保持已有悬浮色与点击音效。
             // 禁用状态仍显示提示，说明补偿规则及插值限制。
-            ImGui::BeginDisabled(m_selectedTimingEntities.empty());
+            ImGui::BeginDisabled(canvas.m_selectedTimingEntities.empty());
             if ( ::MMM::UI::FeedbackButton(
                      TR("ui.timeline.timing_points_table.keep_original_speed")
                          .data()) ) {
                 Logic::CmdKeepSpeedForBpmEvents command;
-                command.bpmEntities.assign(m_selectedTimingEntities.begin(),
-                                           m_selectedTimingEntities.end());
+                command.bpmEntities.assign(
+                    canvas.m_selectedTimingEntities.begin(),
+                    canvas.m_selectedTimingEntities.end());
                 // 结束临时单点联动，防止其旧绑定在批量结果回流后重新覆盖绿线。
-                finishKeepSpeedBinding();
-                publishTimelineCommand(
+                canvas.finishKeepSpeedBinding();
+                canvas.publishTimelineCommand(
                     Event::LogicCommandEvent(std::move(command)));
             }
             if ( ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) ) {
@@ -2641,8 +2660,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 trimTimingTableAsciiWhitespace(m_tableSearchValueBuffer.data());
             hasSearchValueText = !searchValueText.empty();
             parsedSearchValue  = hasSearchValueText
-                                     ? parseTimingTableDouble(searchValueText)
-                                     : std::nullopt;
+                                                ? parseTimingTableDouble(searchValueText)
+                                                : std::nullopt;
             hasValidSearchValue =
                 parsedSearchValue && std::isfinite(*parsedSearchValue);
             const bool hasEffectSearchFilter =
@@ -2822,7 +2841,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                           getStoredValue(
                               effect, m_tableSearchReplacementValue, entity) });
                 }
-                publishTimelineCommand(
+                canvas.publishTimelineCommand(
                     Event::LogicCommandEvent(std::move(command)));
             }
             if ( !canReplaceSearchResults ) {
@@ -2838,9 +2857,10 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             }
 
             // 表格选择与基础 Excel 式剪贴板操作
-            const bool hasTableSelection = !m_selectedTimingEntities.empty();
+            const bool hasTableSelection =
+                !canvas.m_selectedTimingEntities.empty();
             ImGui::AlignTextToFramePadding();
-            ImGui::Text("已选择: %zu", m_selectedTimingEntities.size());
+            ImGui::Text("已选择: %zu", canvas.m_selectedTimingEntities.size());
             ImGui::SameLine();
             if ( !hasTableSelection ) {
                 ImGui::BeginDisabled();
@@ -2864,7 +2884,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 ImGui::BeginDisabled();
             }
             if ( ::MMM::UI::FeedbackButton("删除##TimingTableDelete") ) {
-                deleteSelectedTimingEvents();
+                canvas.deleteSelectedTimingEvents();
                 m_tableSelectionAnchorEntity = entt::null;
             }
             if ( !hasTableSelection ) {
@@ -2925,7 +2945,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     }
                     // 无匹配项时不入队，避免空动作干扰已有撤销栈。
                     if ( !command.events.empty() )
-                        publishTimelineCommand(
+                        canvas.publishTimelineCommand(
                             Event::LogicCommandEvent(std::move(command)));
                     bulkOffsetValue = 0.0;
                 }
@@ -2963,7 +2983,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     }
                     // 没有绿线时不生成历史，重复倍率仍由命令层过滤无变化项。
                     if ( !command.events.empty() )
-                        publishTimelineCommand(
+                        canvas.publishTimelineCommand(
                             Event::LogicCommandEvent(std::move(command)));
                     bulkScaleValue = 1.0;
                 }
@@ -3006,19 +3026,19 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             if ( touchTable ) ImGui::SameLine();
             ImGui::BeginDisabled(visibleElementIndices.empty());
             if ( UI::FeedbackButton(TR("ui.selection.all_results").data()) ) {
-                m_selectedTimingEntities.clear();
+                canvas.m_selectedTimingEntities.clear();
                 for ( const auto index : visibleElementIndices )
-                    m_selectedTimingEntities.insert(
+                    canvas.m_selectedTimingEntities.insert(
                         getElementEntity(elements[index]));
                 m_tableSelectionAnchorEntity =
                     getElementEntity(elements[visibleElementIndices.front()]);
             }
             ImGui::EndDisabled();
             ImGui::SameLine();
-            ImGui::BeginDisabled(m_selectedTimingEntities.empty());
+            ImGui::BeginDisabled(canvas.m_selectedTimingEntities.empty());
             if ( UI::FeedbackButton(TR("ui.selection.clear").data()) ) {
                 // 显式清空可移除筛选隐藏的旧选择，空白点击则继续遵守集合模式。
-                m_selectedTimingEntities.clear();
+                canvas.m_selectedTimingEntities.clear();
                 m_tableSelectionAnchorEntity = entt::null;
             }
             ImGui::EndDisabled();
@@ -3034,7 +3054,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         // 每个按钮只在激活边沿操作，空选择使用禁用状态而非发送空批次。
         if ( touchTable ) {
             ImGui::TextWrapped("%s", TR("ui.mobile.timing.table_hint").data());
-            ImGui::BeginDisabled(m_selectedTimingEntities.empty());
+            ImGui::BeginDisabled(canvas.m_selectedTimingEntities.empty());
             if ( UI::FeedbackButton(TR("ui.edit.copy").data()) )
                 copyTableSelection(false);
             ImGui::SameLine();
@@ -3042,7 +3062,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 copyTableSelection(true);
             ImGui::SameLine();
             if ( UI::FeedbackButton(TR("ui.common.delete").data()) )
-                deleteSelectedTimingEvents();
+                canvas.deleteSelectedTimingEvents();
             ImGui::EndDisabled();
             ImGui::SameLine();
             if ( UI::FeedbackButton(TR("ui.edit.paste").data()) )
@@ -3066,12 +3086,12 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             // 属性编辑要求唯一选择；多选删除与复制不会被属性窗隐式触发。
             // 查找使用完整元素表中的实体身份，不以屏幕行号解释剪贴板或历史。
             // 筛选隐藏的旧选择仍计入数量，避免用户以为只修改了当前可见行。
-            ImGui::BeginDisabled(m_selectedTimingEntities.size() != 1);
+            ImGui::BeginDisabled(canvas.m_selectedTimingEntities.size() != 1);
             if ( UI::FeedbackButton(
                      TR("ui.mobile.timing.edit_target").data()) ) {
                 const auto target = std::find_if(
                     elements.begin(), elements.end(), [&](const auto& el) {
-                        return m_selectedTimingEntities.contains(
+                        return canvas.m_selectedTimingEntities.contains(
                             getElementEntity(el));
                     });
                 if ( target != elements.end() ) editTableElement(*target);
@@ -3079,11 +3099,11 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             ImGui::EndDisabled();
             ImGui::SameLine();
             if ( UI::FeedbackButton(TR("ui.edit.undo").data()) )
-                publishTimelineCommand(
+                canvas.publishTimelineCommand(
                     Event::LogicCommandEvent(Logic::CmdUndo{}));
             ImGui::SameLine();
             if ( UI::FeedbackButton(TR("ui.edit.redo").data()) )
-                publishTimelineCommand(
+                canvas.publishTimelineCommand(
                     Event::LogicCommandEvent(Logic::CmdRedo{}));
         }
         // 表格返回到旧鼠标方案时不重建数据源，也不清空已有选择。
@@ -3120,9 +3140,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             const float tableFont = ImGui::GetFontSize();
             const std::array<float, TIMING_TABLE_COLUMN_COUNT>
                         touchColumnWidths{ tableFont * 3.5f, tableFont * 9,
-                                           tableFont * 3.5f, tableFont * 5,
-                                           tableFont * 6,    tableFont * 5,
-                                           tableFont * 9 };
+                                   tableFont * 3.5f, tableFont * 5,
+                                   tableFont * 6,    tableFont * 5,
+                                   tableFont * 9 };
             const auto& columnWidths =
                 touchTable ? touchColumnWidths : TIMING_TABLE_COLUMN_MIN_WIDTHS;
             const ImGuiTableColumnFlags initialColumnFlags =
@@ -3181,9 +3201,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     ::MMM::TimingEffect effect     = getElementEffect(el);
                     entt::entity        ent        = getElementEntity(el);
                     const bool          rowSelected =
-                        m_selectedTimingEntities.contains(ent);
+                        canvas.m_selectedTimingEntities.contains(ent);
                     const bool isKeepSpeedBindingRow =
-                        isKeepSpeedBindingEntity(ent);
+                        canvas.isKeepSpeedBindingEntity(ent);
                     bool isRecentlyCreated =
                         (ImGui::GetTime() <=
                          m_lastCreatedTimingHighlightUntil) &&
@@ -3231,10 +3251,10 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     // 合成鼠标可能由页面滚动器延后，不能把它当作第二次行选择。
                     // 静止长按只准备当前行参数，快速轻点则在释放后更新集合。
                     // 移动结果是离散值，平台对象不持有当前元素引用或选区所有权。
-                    const int rowIntent =
-                        m_timingPresentation->tableRow(ImGui::GetItemID(),
-                                                       ImGui::GetItemRectMin(),
-                                                       ImGui::GetItemRectMax());
+                    const int rowIntent = canvas.m_timingPresentation->tableRow(
+                        ImGui::GetItemID(),
+                        ImGui::GetItemRectMin(),
+                        ImGui::GetItemRectMax());
                     if ( touchTable && rowIntent ) {
                         // 模式描述集合操作，不伪造
                         // Ctrl；长按的编辑目标独立于多选集合。
@@ -3252,12 +3272,12 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                     Logic::SelectionOperation::Replace);
                             if ( operation ==
                                  Logic::SelectionOperation::Replace )
-                                m_selectedTimingEntities.clear();
+                                canvas.m_selectedTimingEntities.clear();
                             if ( operation ==
                                  Logic::SelectionOperation::Subtract )
-                                m_selectedTimingEntities.erase(ent);
+                                canvas.m_selectedTimingEntities.erase(ent);
                             else
-                                m_selectedTimingEntities.insert(ent);
+                                canvas.m_selectedTimingEntities.insert(ent);
                             m_tableSelectionAnchorEntity = ent;
                         }
                     }
@@ -3283,13 +3303,13 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                 // 选中集由本视图拥有，不通过 ECS
                                 // 标签或后台线程重新推断。
                                 // 替换的基线已在按下时清空，追加与减选则保留之前各笔的结果。
-                                m_selectedTimingEntities =
+                                canvas.m_selectedTimingEntities =
                                     m_tableRowDragBaseSelection;
                                 if ( *m_tableRowSelectionOperation ==
                                      Logic::SelectionOperation::Subtract )
-                                    m_selectedTimingEntities.erase(ent);
+                                    canvas.m_selectedTimingEntities.erase(ent);
                                 else
-                                    m_selectedTimingEntities.insert(ent);
+                                    canvas.m_selectedTimingEntities.insert(ent);
                                 m_tableSelectionAnchorEntity = ent;
                             } else if ( UI::Interaction::modifier(
                                             UI::Interaction::Modifier::Shift) &&
@@ -3297,7 +3317,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                             visibleElementIndices.end() ) {
                                 if ( !UI::Interaction::modifier(
                                          UI::Interaction::Modifier::Control) ) {
-                                    m_selectedTimingEntities.clear();
+                                    canvas.m_selectedTimingEntities.clear();
                                 }
                                 const int anchorIndex =
                                     static_cast<int>(std::distance(
@@ -3317,7 +3337,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                 for ( int selectedIndex = first;
                                       selectedIndex <= last;
                                       ++selectedIndex ) {
-                                    m_selectedTimingEntities.insert(
+                                    canvas.m_selectedTimingEntities.insert(
                                         getElementEntity(
                                             elements
                                                 [visibleElementIndices
@@ -3328,14 +3348,14 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                             UI::Interaction::Modifier::
                                                 Control) ) {
                                 if ( rowSelected ) {
-                                    m_selectedTimingEntities.erase(ent);
+                                    canvas.m_selectedTimingEntities.erase(ent);
                                 } else {
-                                    m_selectedTimingEntities.insert(ent);
+                                    canvas.m_selectedTimingEntities.insert(ent);
                                 }
                                 m_tableSelectionAnchorEntity = ent;
                             } else {
-                                m_selectedTimingEntities.clear();
-                                m_selectedTimingEntities.insert(ent);
+                                canvas.m_selectedTimingEntities.clear();
+                                canvas.m_selectedTimingEntities.insert(ent);
                                 m_tableSelectionAnchorEntity = ent;
                             }
                         }
@@ -3379,7 +3399,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                        Logic::SelectionOperation::Replace
                                  : UI::Interaction::modifier(
                                        UI::Interaction::Modifier::Control))
-                                ? m_selectedTimingEntities
+                                ? canvas.m_selectedTimingEntities
                                 : std::unordered_set<entt::entity>{};
                     }
                     const float mouseY = ImGui::GetIO().MousePos.y;
@@ -3407,7 +3427,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                             });
                         if ( dragAnchor != visibleElementIndices.end() ) {
                             m_hasTableRowDragSelectionMoved = true;
-                            m_selectedTimingEntities =
+                            canvas.m_selectedTimingEntities =
                                 m_tableRowDragBaseSelection;
                             const int anchorIndex =
                                 static_cast<int>(std::distance(
@@ -3428,9 +3448,11 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                 // 基线不写回为当前预览，避免缩框后无法恢复此前暂时减去的行。
                                 if ( m_tableRowSelectionOperation ==
                                      Logic::SelectionOperation::Subtract )
-                                    m_selectedTimingEntities.erase(target);
+                                    canvas.m_selectedTimingEntities.erase(
+                                        target);
                                 else
-                                    m_selectedTimingEntities.insert(target);
+                                    canvas.m_selectedTimingEntities.insert(
+                                        target);
                             }
                         }
                     }
@@ -3459,13 +3481,15 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         double tVal = el.time;
                         ImGui::SetNextItemWidth(-FLT_MIN);
                         std::string tId = fmt::format("##T_{}", displayIdx);
-                        if ( drawTimeEditor(
-                                 tId.c_str(), tVal, m_currentSnapshot) ) {
+                        if ( drawTimeEditor(tId.c_str(),
+                                            tVal,
+                                            canvas.m_currentSnapshot) ) {
                             entt::entity ent    = getElementEntity(el);
                             double       rawVal = getElementRawValue(el);
-                            publishTimelineCommand(Event::LogicCommandEvent(
-                                Logic::CmdUpdateTimelineEvent{
-                                    ent, tVal, rawVal }));
+                            canvas.publishTimelineCommand(
+                                Event::LogicCommandEvent(
+                                    Logic::CmdUpdateTimelineEvent{
+                                        ent, tVal, rawVal }));
                         }
 
                         const double continuousBeat = timingTableTimeToBeat(
@@ -3493,8 +3517,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                      getElementRawValue(el),
                                      beatTimeline,
                                      tableFallbackBpm) ) {
-                                publishTimelineCommand(Event::LogicCommandEvent(
-                                    std::move(*command)));
+                                canvas.publishTimelineCommand(
+                                    Event::LogicCommandEvent(
+                                        std::move(*command)));
                             }
                         }
 
@@ -3524,8 +3549,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                      getElementRawValue(el),
                                      beatTimeline,
                                      tableFallbackBpm) ) {
-                                publishTimelineCommand(Event::LogicCommandEvent(
-                                    std::move(*command)));
+                                canvas.publishTimelineCommand(
+                                    Event::LogicCommandEvent(
+                                        std::move(*command)));
                             }
                         }
                         if ( hasFractionWarning ) {
@@ -3578,16 +3604,16 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         ImGui::SetNextItemWidth(-FLT_MIN);
                         std::string vId = fmt::format("##V_{}", displayIdx);
                         const bool  isBoundBpm =
-                            m_keepSpeedBindingActive &&
-                            ent == m_keepSpeedBindingBpmEntity &&
+                            canvas.m_keepSpeedBindingActive &&
+                            ent == canvas.m_keepSpeedBindingBpmEntity &&
                             effect == ::MMM::TimingEffect::BPM;
                         const bool isBoundScroll =
-                            m_keepSpeedBindingActive &&
-                            ent == m_keepSpeedBindingScrollEntity &&
+                            canvas.m_keepSpeedBindingActive &&
+                            ent == canvas.m_keepSpeedBindingScrollEntity &&
                             effect == ::MMM::TimingEffect::SCROLL;
-                        if ( isBoundBpm && m_keepSpeedBindingFocusBpm ) {
+                        if ( isBoundBpm && canvas.m_keepSpeedBindingFocusBpm ) {
                             ImGui::SetKeyboardFocusHere();
-                            m_keepSpeedBindingFocusBpm = false;
+                            canvas.m_keepSpeedBindingFocusBpm = false;
                         }
                         if ( isBoundScroll ) {
                             ImGui::BeginDisabled();
@@ -3616,15 +3642,16 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                              displayValueValid ) {
                             double finalValue =
                                 getStoredValue(effect, vVal, ent);
-                            publishTimelineCommand(Event::LogicCommandEvent(
-                                Logic::CmdUpdateTimelineEvent{
-                                    ent, el.time, finalValue }));
+                            canvas.publishTimelineCommand(
+                                Event::LogicCommandEvent(
+                                    Logic::CmdUpdateTimelineEvent{
+                                        ent, el.time, finalValue }));
                             if ( isBoundBpm ) {
-                                updateKeepSpeedBindingScroll(vVal);
+                                canvas.updateKeepSpeedBindingScroll(vVal);
                             }
                         }
                         if ( isBoundBpm && ImGui::IsItemDeactivated() ) {
-                            finishKeepSpeedBinding();
+                            canvas.finishKeepSpeedBinding();
                         }
                     }
 
@@ -3634,11 +3661,12 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         if ( UI::FeedbackButton(
                                  fmt::format("编辑段落##{}", displayIdx)
                                      .c_str()) )
-                            openInterpolationEditor({ ent,
-                                                      el.time,
-                                                      getElementRawValue(el),
-                                                      effect,
-                                                      *el.interpolation });
+                            canvas.openInterpolationEditor(
+                                { ent,
+                                  el.time,
+                                  getElementRawValue(el),
+                                  effect,
+                                  *el.interpolation });
                         ImGui::SameLine();
                     }
                     std::string seekId =
@@ -3647,16 +3675,16 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         float visualOffset = Config::AppConfig::instance()
                                                  .getVisualConfig()
                                                  .getEffectiveVisualOffset();
-                        publishTimelineCommand(Event::LogicCommandEvent(
+                        canvas.publishTimelineCommand(Event::LogicCommandEvent(
                             Logic::CmdSeek{ el.time - visualOffset }));
                     }
                     ImGui::SameLine();
                     std::string delId = fmt::format("删除##Del_{}", displayIdx);
                     if ( ::MMM::UI::FeedbackButton(delId.c_str()) ) {
                         entt::entity ent = getElementEntity(el);
-                        publishTimelineCommand(Event::LogicCommandEvent(
+                        canvas.publishTimelineCommand(Event::LogicCommandEvent(
                             Logic::CmdDeleteTimelineEvent{ ent }));
-                        m_selectedTimingEntities.erase(ent);
+                        canvas.m_selectedTimingEntities.erase(ent);
                         m_tableSelectionAnchorEntity = entt::null;
                     }
                     if ( const ImGuiTable* table = ImGui::GetCurrentTable() ) {
@@ -3714,7 +3742,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                  Logic::SelectionOperation::Replace ) {
             // 追加和减选的空白点击不应破坏此前集合；经典缺省仍然清空。
             // 显式清空按钮不受此规则限制，筛选隐藏的成员也能由用户一次清除。
-            m_selectedTimingEntities.clear();
+            canvas.m_selectedTimingEntities.clear();
             m_tableSelectionAnchorEntity = entt::null;
         }
 
@@ -3725,9 +3753,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
              !ImGui::IsAnyItemActive() && !io.WantTextInput ) {
             if ( UI::ShortcutUtils::isActionShortcutPressed(
                      "selectAll", false, 0) ) {
-                m_selectedTimingEntities.clear();
+                canvas.m_selectedTimingEntities.clear();
                 for ( std::size_t elementIndex : visibleElementIndices ) {
-                    m_selectedTimingEntities.insert(
+                    canvas.m_selectedTimingEntities.insert(
                         getElementEntity(elements[elementIndex]));
                 }
                 m_tableSelectionAnchorEntity =
@@ -3748,11 +3776,11 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                              "deleteSelected", false, 0) ||
                          UI::ShortcutUtils::isActionShortcutPressed(
                              "deleteAlternative", false, 0)) ) {
-                deleteSelectedTimingEvents();
+                canvas.deleteSelectedTimingEvents();
                 m_tableSelectionAnchorEntity = entt::null;
             } else if ( UI::ShortcutUtils::isActionShortcutPressed(
                             "cancelInteraction", false) ) {
-                m_selectedTimingEntities.clear();
+                canvas.m_selectedTimingEntities.clear();
                 m_tableSelectionAnchorEntity = entt::null;
             }
         }
