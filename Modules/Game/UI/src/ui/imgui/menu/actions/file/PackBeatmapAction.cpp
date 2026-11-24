@@ -19,6 +19,7 @@
 #include "mmm/project/PackageFileTypes.h"
 #include "mmm/project/PackagePathFilter.h"
 #include "mmm/project/Project.h"
+#include "runtime/AppThreadPool.h"
 #include "ui/imgui/menu/package/BmsExportTouch.h"
 #include "ui/imgui/menu/package/PackageDefaultSelection.h"
 #include "ui/imgui/menu/package/PackageDialogState.h"
@@ -31,12 +32,17 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <future>
+#include <ice/thread/ThreadPool.hpp>
 #include <imgui.h>
+#include <memory>
 #include <nfd.h>
 #include <optional>
 #include <set>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -920,6 +926,194 @@ PackageBeatmapInfo collectPackageBeatmapInfo(
     // 返回数据不保留 Project 或 BeatMap 内部引用。
     return result;
 }
+/// @brief 工作线程的候选列表及目录错误，UI 决定何时显示。
+struct PackageCandidateScan {
+    std::vector<PackageCandidateFile> files;  ///< 已排序并匹配依赖的候选。
+    bool failed{ false };                     ///< 目录读取未全部成功。
+};
+
+/// @brief 按冻结工程与格式扫描文件，保持原有候选和默认选择规则。
+/// @warning 只在文件池运行。项目切换时保留投影至当前 IO 返回，不访问 UI。
+PackageCandidateScan scanPackageCandidates(
+    std::shared_ptr<const Project> project, PackageFileType fileType,
+    std::vector<PackageOpenBeatmapState> openBeatmaps, std::stop_token stop)
+{
+    // 空结果兼作取消返回。取消的 future 由 UI 主动释放，不被误作空工程。
+    PackageCandidateScan result;
+    // 目标格式规则决定可读取谱面源和可直接打包的资源扩展名。
+    const auto& types = getPackageSupportedFileTypes(fileType);
+    // 路径和引用表属于同一不可变工程版本；逻辑线程可以继续换项目。
+    const auto& projectRoot = project->m_projectRoot;
+
+    // 根目录检查使用 error_code，保持项目禁异常约束。
+    std::error_code filesystemError;
+    if ( !std::filesystem::exists(projectRoot, filesystemError) ||
+         filesystemError ||
+         !std::filesystem::is_directory(projectRoot, filesystemError) ||
+         filesystemError ) {
+        result.failed = true;
+        // 不构造部分候选，窗口随后展示空列表。
+        return result;
+    }
+
+    // 权限不足的子目录跳过，其他迭代错误仍通过状态栏报告。
+    constexpr auto directoryOptions =
+        std::filesystem::directory_options::skip_permission_denied;
+    std::filesystem::recursive_directory_iterator iterator(
+        projectRoot, directoryOptions, filesystemError);
+    const std::filesystem::recursive_directory_iterator endIterator;
+    if ( filesystemError ) {
+        result.failed = true;
+        return result;
+    }
+
+    // 逐项检查取消，不在 UI 线程等待目录迭代。
+    while ( iterator != endIterator ) {
+        // 每个磁盘条目之间响应取消。当前系统调用可能仍需完成，主线程不等待。
+        if ( stop.stop_requested() ) return {};
+        const auto& entry = *iterator;
+        // 自动备份属于内部历史，不是可供用户发布的难度或素材。
+        // 进入目录之前就停止递归，避免逐个解析大量历史 MMM 文件。
+        if ( isInternalPackagePath(
+                 entry.path().lexically_relative(projectRoot)) ) {
+            iterator.disable_recursion_pending();
+            iterator.increment(filesystemError);
+            if ( filesystemError ) break;
+            continue;
+        }
+        if ( entry.is_regular_file(filesystemError) && !filesystemError ) {
+            // 只处理普通文件，目录和特殊节点不进入包候选。
+            const auto path = entry.path();
+            const auto extension =
+                toLowerAscii(Config::pathToUtf8(path.extension()));
+            // 标签和枚举分别服务 UI 展示与后续依赖逻辑。
+            const auto typeLabel =
+                getPackageCandidateTypeLabel(types, extension);
+            const auto resourceType =
+                getPackageCandidateResourceType(types, extension);
+            // 候选必须能转换为项目相对路径，包内不写绝对路径。
+            std::error_code relativeError;
+            const auto      relativePath =
+                std::filesystem::relative(path, projectRoot, relativeError);
+            if ( !typeLabel.empty() && resourceType &&
+                 !isPackageArchiveExtension(extension) && !relativeError ) {
+                // 初始不选择，稍后根据打开会话推导谱面默认状态。
+                result.files.push_back(PackageCandidateFile{
+                    .relativePath = Config::pathToUtf8Generic(relativePath),
+                    .typeLabel    = typeLabel,
+                    .resourceType = *resourceType,
+                    .selected     = false,
+                });
+            }
+        }
+        // 单项类型查询错误不污染迭代器 increment 的独立错误判断。
+        filesystemError.clear();
+
+        iterator.increment(filesystemError);
+        if ( filesystemError ) {
+            // 保留已扫描候选供诊断，但明确提示结果可能不完整。
+            result.failed = true;
+            break;
+        }
+    }
+
+    // 结果在排序完成前只属于任务，不在界面帧里观察中间状态。
+    // 先按类型再按路径排序，使候选窗口分组稳定且便于查找。
+    std::sort(
+        result.files.begin(),
+        result.files.end(),
+        [](const PackageCandidateFile& lhs, const PackageCandidateFile& rhs) {
+            if ( lhs.typeLabel != rhs.typeLabel ) {
+                // 类型标签排序将谱面、音频、视频、图片形成连续组。
+                return lhs.typeLabel < rhs.typeLabel;
+            }
+            return lhs.relativePath < rhs.relativePath;
+        });
+
+    // 路径索引供谱面依赖存在性检查使用，避免对候选反复线性扫描。
+    std::unordered_map<std::string, std::size_t> candidateIndexByPath;
+    candidateIndexByPath.reserve(result.files.size());
+    for ( std::size_t index = 0; index < result.files.size(); ++index ) {
+        // 规范化为 UTF-8 通用分隔符，统一来自 filesystem 的平台差异。
+        result.files[index].relativePath =
+            normalizePackageRelativeUtf8(result.files[index].relativePath);
+        candidateIndexByPath[result.files[index].relativePath] = index;
+    }
+
+    // 普通 ZIP 产物不能作为打包输入；这里只追加已被谱面声明的 KEY 音包。
+    // KEY 音包由解析出的引用决定，扫描目录时看到的普通 ZIP 仍留在候选之外。
+    std::set<std::string> keySoundCandidates;
+    // 只有谱面需要解析内部资源引用和格式兼容性。
+    for ( auto& file : result.files ) {
+        // 单份谱面解析可以阻塞文件池，但不能阻挡打包弹窗关闭。
+        if ( stop.stop_requested() ) return {};
+        if ( file.resourceType != PackageResourceType::Beatmap ) continue;
+
+        // 每张谱面只读取一次，扫描结果移动到候选缓存。
+        auto beatmapInfo = collectPackageBeatmapInfo(
+            *project, file.relativePath, fileType == PackageFileType::BmsZip);
+        file.dependencyRelativePaths =
+            std::move(beatmapInfo.dependencyRelativePaths);
+        file.hasStoreModeExtEligibleElements =
+            beatmapInfo.hasStoreModeExtEligibleElements;
+        file.hasNonOggMainAudio = beatmapInfo.hasNonOggMainAudio;
+        file.missingDependencyRelativePaths =
+            std::move(beatmapInfo.unresolvedAudioReferences);
+        if ( beatmapInfo.loadFailed ) {
+            // 读取失败作为缺失依赖处理，阻止用户生成不可验证的包。
+            file.missingDependencyRelativePaths.push_back(
+                "谱面文件读取失败，无法检查依赖");
+        }
+        if ( !beatmapInfo.myO2KeyBankPath.empty() ) {
+            const auto relative =
+                Config::utf8ToPath(beatmapInfo.myO2KeyBankPath);
+            std::error_code error;
+            if ( !isInternalPackagePath(relative) &&
+                 packageExtensionEquals(
+                     Config::pathToUtf8(relative.extension()), ".zip") &&
+                 std::filesystem::is_regular_file(projectRoot / relative,
+                                                  error) )
+                keySoundCandidates.insert(beatmapInfo.myO2KeyBankPath);
+        }
+        // 已解析路径若不在当前格式候选中，仍视为不支持或缺失。
+        for ( const auto& dependencyPath : file.dependencyRelativePaths ) {
+            if ( candidateIndexByPath.find(dependencyPath) ==
+                     candidateIndexByPath.end() &&
+                 !keySoundCandidates.contains(dependencyPath) ) {
+                appendUniquePackageDependency(
+                    file.missingDependencyRelativePaths, dependencyPath);
+            }
+        }
+    }
+
+    // 在遍历引用结束后再追加，避免使当前谱面候选的迭代器失效。
+    for ( const auto& path : keySoundCandidates )
+        result.files.push_back(PackageCandidateFile{
+            .relativePath = path,
+            .typeLabel    = "KEY 音包",
+            .resourceType = PackageResourceType::Audio,
+        });
+
+    // 非谱面资源起初不选，由已选谱面的依赖同步自动锁定。
+    for ( auto& file : result.files ) {
+        if ( stop.stop_requested() ) return {};
+        if ( file.resourceType != PackageResourceType::Beatmap ) {
+            file.selected = false;
+            continue;
+        }
+        // 绝对候选路径通过编辑器统一规则生成会话比较键。
+        const auto candidatePath =
+            projectRoot / Config::utf8ToPath(file.relativePath);
+        // 与会话条目共用键计算；worker 只使用传入的工程，不访问当前工程指针。
+        const std::string candidatePathKey =
+            Logic::EditorEngine::makeBeatmapPathKeyForPath(*project,
+                                                           candidatePath);
+        file.selected =
+            shouldDefaultSelectPackageBeatmap(candidatePathKey, openBeatmaps);
+    }
+
+    return result;
+}
 }  // namespace
 
 /// @brief 打开谱面打包流程动作，拥有打包候选、格式选择和元数据补充状态。
@@ -930,6 +1124,9 @@ PackageBeatmapInfo collectPackageBeatmapInfo(
 class PackBeatmapAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 退出时仅发送取消，后台读取持有自己的工程快照。
+    ~PackBeatmapAction() override { cancelCandidateScan(); }
+
     /// @brief 跨菜单和操作方案复用的稳定动作身份。
     /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
     std::string_view operationId() const override
@@ -1019,6 +1216,12 @@ private:
     /// @warning 用户选择格式后的低频路径：递归扫描项目并解析每张谱面。
     void rebuildPackageCandidateFiles();
 
+    /// @brief 停止采集旧候选；不等待当前文件操作结束。
+    void cancelCandidateScan();
+
+    /// @brief 向 UI 移交完整扫描结果；只访问已就绪的 future。
+    void consumeCandidateScan();
+
     /// @brief 设置候选文件选中状态，并同步谱面绑定资源。
     /// @param index 候选文件索引。
     /// @param selected 是否选中。
@@ -1090,9 +1293,14 @@ private:
     /// @brief 当前帧状态消息接收接口，非拥有且仅在延迟渲染调用栈内有效。
     /// @warning renderDeferred 返回前必须复位为空，禁止跨帧保留。
     IStatusMessageSink* m_statusMessageSink = nullptr;
+    /// @brief 候选由文件池计算，结果在 UI 帧中按当前工程代次接收。
+    std::future<PackageCandidateScan> m_candidateScan;
+    /// @brief 取消令牌只允许工作者在文件之间提前退出，不暂停 UI。
+    std::stop_source m_candidateScanStop;
+
     /// @brief 打包流程的格式、候选文件和临时弹窗状态。
-    /// @note 该值对象集中维护跨多个延迟窗口延续的状态机。
-    /// @warning 其候选缓存仅在用户选择格式时重建，渲染时不得扫描文件系统。
+    /// @note 该值对象维护跨多个延迟窗口延续的状态机。
+    /// @warning 每帧只访问已经交付的候选，渲染不执行磁盘扫描。
     PackageDialogState m_package;
     /// @brief 移动 BMS 正文页签，不进入格式参数或项目序列化。
     /// @details 新一轮流程回到选项页，页签切换不扫描工程、不清空已选文件。
@@ -1414,8 +1622,17 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
         m_package.openFileSelectionWindow = false;
     }
 
-    // 候选窗口关闭时不遍历候选缓存。
-    if ( !m_package.showFileSelectionWindow ) return;
+    // 候选窗口关闭时不消费旧结果；释放 future 不会阻塞文件工作者。
+    if ( !m_package.showFileSelectionWindow ) {
+        if ( m_candidateScan.valid() ) cancelCandidateScan();
+        return;
+    }
+    const auto project = Logic::ProjectController::instance().uiSnapshot();
+    // 读到空快照或不同的打开代次都表示当前弹窗失效，包括同目录重开。
+    const bool stale =
+        !project || project->m_generation != m_package.projectGeneration;
+    // 报告过期后直接走关闭分支，不从已经就绪的旧 future 接管候选。
+    if ( !stale ) consumeCandidateScan();
 
     // 后续阶段请求延迟到弹窗完整结束之后执行。
     // BMS 的长选项需要独立正文；其它格式继续采用原有文件列表与兼容流程。
@@ -1435,6 +1652,22 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
             // 内容样式只活到当前模态结束，不能泄漏给工作台和后续系统选择器。
             // 成功 Begin 后才压栈，折叠或已经关闭的窗口没有需要恢复的内容层。
             touchLayout.beginContent();
+            // 等待期间不渲染候选和确认按钮，只有状态与取消入口需要处理。
+            if ( stale || m_candidateScan.valid() ) {
+                // 预扫描期间的模态仍处理输入，慢盘或工程切换不能锁死窗口。
+                if ( !stale ) ImGui::TextUnformatted("正在扫描打包文件…");
+                // Esc 与按钮都先请求取消，下一次选择可使用独立请求状态。
+                if ( stale || FeedbackButton(TR("ui.common.cancel").data()) ||
+                     ImGui::IsKeyPressed(ImGuiKey_Escape, false) ) {
+                    // 不读取旧任务结果即可退出，避免等待尚未完成的文件读取。
+                    cancelCandidateScan();
+                    m_package.showFileSelectionWindow = false;
+                    ImGui::CloseCurrentPopup();
+                }
+                touchLayout.endContent();
+                ImGui::EndPopup();
+                return;
+            }
             // 换行只改变按钮高度，不把字体缩小成难以阅读的单行。
             // 测量使用当前正文样式，避免标题字号与移动端正文倍率混用。
             const auto& style = ImGui::GetStyle();
@@ -2308,182 +2541,26 @@ void PackBeatmapAction::renderPackageBeatmapMetadataWindow(float dpiScale)
     }
 }
 
-/// @brief 按当前目标打包格式重建候选文件列表。
-/// @warning 低频 UI
-/// 路径：打开打包选择窗口或切换格式时执行；会扫描项目目录并读取谱面元数据。
-/// @note 候选排序、路径规范化和依赖分析全部在窗口打开前一次完成。
-/// @details 首轮目录扫描建立目标格式允许的文件集合，第二轮解析谱面依赖，
-/// 第三轮根据打开会话推导默认选择，最后统一锁定被选谱面引用的资源。
+/// @brief 将目录枚举和谱面依赖检查排入独立文件池。
+/// @warning 仅格式选择时调用，不执行路径规范化或磁盘读取。
 void PackBeatmapAction::rebuildPackageCandidateFiles()
 {
-    // 先丢弃旧格式候选，扫描失败时不会误显示过期文件。
+    cancelCandidateScan();
     m_package.candidateFiles.clear();
-
-    // 当前候选清空后才验证；失效操作不能继续展示上一项目的残留条目。
-    // 即使目录名称相同，打开代次改变也要求重新发起整个打包流程。
-    // 通过 const 投影取得文件路径后，不再向控制器借用可变工程。
-    // 格式选择后项目可能已关闭，扫描前重新验证根目录。
-    // 出错时保留空候选，生成路径也不能隐式切换到当时的活动谱面。
     const auto snapshot = Logic::ProjectController::instance().uiSnapshot();
-    if ( !snapshot || snapshot->m_generation != m_package.projectGeneration )
+    if ( !snapshot || snapshot->m_generation != m_package.projectGeneration ||
+         !snapshot->m_details || snapshot->m_projectRoot.empty() )
         return;
-    const auto* project = snapshot->m_details.get();
-    if ( !project || project->m_projectRoot.empty() ) return;
-
-    // 目标格式规则决定可读取谱面源和可直接打包的资源扩展名。
-    const auto& types =
-        getPackageSupportedFileTypes(m_package.selectedFileType);
-    const auto& projectRoot = project->m_projectRoot;
-
-    // 根目录检查使用 error_code，保持项目禁异常约束。
-    std::error_code filesystemError;
-    if ( !std::filesystem::exists(projectRoot, filesystemError) ||
-         filesystemError ||
-         !std::filesystem::is_directory(projectRoot, filesystemError) ||
-         filesystemError ) {
-        showStatusMessage("扫描项目文件失败");
-        // 不构造部分候选，窗口随后展示空列表。
-        return;
-    }
-
-    // 权限不足的子目录跳过，其他迭代错误仍通过状态栏报告。
-    constexpr auto directoryOptions =
-        std::filesystem::directory_options::skip_permission_denied;
-    std::filesystem::recursive_directory_iterator iterator(
-        projectRoot, directoryOptions, filesystemError);
-    const std::filesystem::recursive_directory_iterator endIterator;
-    if ( filesystemError ) {
+    // 文件工作与 UI 使用的通用后台池隔离，不会挡住布局取值和渲染提交。
+    auto* files = Runtime::AppThreadPool::instance().getFileThreadPool();
+    if ( !files ) {
         showStatusMessage("扫描项目文件失败");
         return;
     }
-
-    // 目录只在此低频阶段完整遍历，UI 每帧仅使用缓存。
-    while ( iterator != endIterator ) {
-        const auto& entry = *iterator;
-        // 自动备份属于内部历史，不是可供用户发布的难度或素材。
-        // 进入目录之前就停止递归，避免逐个解析大量历史 MMM 文件。
-        if ( isInternalPackagePath(
-                 entry.path().lexically_relative(projectRoot)) ) {
-            iterator.disable_recursion_pending();
-            iterator.increment(filesystemError);
-            if ( filesystemError ) break;
-            continue;
-        }
-        if ( entry.is_regular_file(filesystemError) && !filesystemError ) {
-            // 只处理普通文件，目录和特殊节点不进入包候选。
-            const auto path = entry.path();
-            const auto extension =
-                toLowerAscii(Config::pathToUtf8(path.extension()));
-            // 标签和枚举分别服务 UI 展示与后续依赖逻辑。
-            const auto typeLabel =
-                getPackageCandidateTypeLabel(types, extension);
-            const auto resourceType =
-                getPackageCandidateResourceType(types, extension);
-            // 候选必须能转换为项目相对路径，包内不写绝对路径。
-            std::error_code relativeError;
-            const auto      relativePath =
-                std::filesystem::relative(path, projectRoot, relativeError);
-            if ( !typeLabel.empty() && resourceType &&
-                 !isPackageArchiveExtension(extension) && !relativeError ) {
-                // 初始不选择，稍后根据打开会话推导谱面默认状态。
-                m_package.candidateFiles.push_back(PackageCandidateFile{
-                    .relativePath = Config::pathToUtf8Generic(relativePath),
-                    .typeLabel    = typeLabel,
-                    .resourceType = *resourceType,
-                    .selected     = false,
-                });
-            }
-        }
-        // 单项类型查询错误不污染迭代器 increment 的独立错误判断。
-        filesystemError.clear();
-
-        iterator.increment(filesystemError);
-        if ( filesystemError ) {
-            // 保留已扫描候选供诊断，但明确提示结果可能不完整。
-            showStatusMessage("扫描项目文件失败");
-            break;
-        }
-    }
-
-    // 先按类型再按路径排序，使候选窗口分组稳定且便于查找。
-    std::sort(
-        m_package.candidateFiles.begin(),
-        m_package.candidateFiles.end(),
-        [](const PackageCandidateFile& lhs, const PackageCandidateFile& rhs) {
-            if ( lhs.typeLabel != rhs.typeLabel ) {
-                // 类型标签排序将谱面、音频、视频、图片形成连续组。
-                return lhs.typeLabel < rhs.typeLabel;
-            }
-            return lhs.relativePath < rhs.relativePath;
-        });
-
-    // 路径索引供谱面依赖存在性检查使用，避免对候选反复线性扫描。
-    std::unordered_map<std::string, std::size_t> candidateIndexByPath;
-    candidateIndexByPath.reserve(m_package.candidateFiles.size());
-    for ( std::size_t index = 0; index < m_package.candidateFiles.size();
-          ++index ) {
-        // 规范化为 UTF-8 通用分隔符，统一来自 filesystem 的平台差异。
-        m_package.candidateFiles[index].relativePath =
-            normalizePackageRelativeUtf8(
-                m_package.candidateFiles[index].relativePath);
-        candidateIndexByPath[m_package.candidateFiles[index].relativePath] =
-            index;
-    }
-
-    // 普通 ZIP 产物不能作为打包输入；这里只追加已被谱面声明的 KEY 音包。
-    std::set<std::string> keySoundCandidates;
-    // 只有谱面需要解析内部资源引用和格式兼容性。
-    for ( auto& file : m_package.candidateFiles ) {
-        if ( file.resourceType != PackageResourceType::Beatmap ) continue;
-
-        // 每张谱面只读取一次，扫描结果移动到候选缓存。
-        auto beatmapInfo = collectPackageBeatmapInfo(
-            *project,
-            file.relativePath,
-            m_package.selectedFileType == PackageFileType::BmsZip);
-        file.dependencyRelativePaths =
-            std::move(beatmapInfo.dependencyRelativePaths);
-        file.hasStoreModeExtEligibleElements =
-            beatmapInfo.hasStoreModeExtEligibleElements;
-        file.hasNonOggMainAudio = beatmapInfo.hasNonOggMainAudio;
-        file.missingDependencyRelativePaths =
-            std::move(beatmapInfo.unresolvedAudioReferences);
-        if ( beatmapInfo.loadFailed ) {
-            // 读取失败作为缺失依赖处理，阻止用户生成不可验证的包。
-            file.missingDependencyRelativePaths.push_back(
-                "谱面文件读取失败，无法检查依赖");
-        }
-        if ( !beatmapInfo.myO2KeyBankPath.empty() ) {
-            const auto relative =
-                Config::utf8ToPath(beatmapInfo.myO2KeyBankPath);
-            std::error_code error;
-            if ( !isInternalPackagePath(relative) &&
-                 packageExtensionEquals(
-                     Config::pathToUtf8(relative.extension()), ".zip") &&
-                 std::filesystem::is_regular_file(projectRoot / relative,
-                                                  error) )
-                keySoundCandidates.insert(beatmapInfo.myO2KeyBankPath);
-        }
-        // 已解析路径若不在当前格式候选中，仍视为不支持或缺失。
-        for ( const auto& dependencyPath : file.dependencyRelativePaths ) {
-            if ( candidateIndexByPath.find(dependencyPath) ==
-                     candidateIndexByPath.end() &&
-                 !keySoundCandidates.contains(dependencyPath) ) {
-                appendUniquePackageDependency(
-                    file.missingDependencyRelativePaths, dependencyPath);
-            }
-        }
-    }
-
-    // 在遍历引用结束后再追加，避免使当前谱面候选的迭代器失效。
-    for ( const auto& path : keySoundCandidates )
-        m_package.candidateFiles.push_back(PackageCandidateFile{
-            .relativePath = path,
-            .typeLabel    = "KEY 音包",
-            .resourceType = PackageResourceType::Audio,
-        });
 
     // 当前打开且可见的谱面决定默认勾选状态。
+    // 默认选中项依赖打开的画布。只在提交时捕获当前会话信息，避免 worker
+    // 读可变状态。
     auto&         engine             = Logic::EditorEngine::instance();
     auto          sessionEntries     = engine.getSessionEntries();
     const int32_t activeSessionIndex = engine.getActiveSessionIndex();
@@ -2491,6 +2568,7 @@ void PackBeatmapAction::rebuildPackageCandidateFiles()
     // 转为轻量状态列表，避免默认选择策略依赖编辑器内部会话类型。
     openBeatmaps.reserve(sessionEntries.size());
     for ( std::size_t index = 0; index < sessionEntries.size(); ++index ) {
+        // 会话快照只在提交处用于提取比较键，任何会话对象都不传给任务。
         const auto& entry = sessionEntries[index];
         openBeatmaps.push_back(PackageOpenBeatmapState{
             .beatmapPathKey  = entry.beatmapPathKey,
@@ -2500,21 +2578,42 @@ void PackBeatmapAction::rebuildPackageCandidateFiles()
         });
     }
 
-    // 非谱面资源起初不选，由已选谱面的依赖同步自动锁定。
-    for ( auto& file : m_package.candidateFiles ) {
-        if ( file.resourceType != PackageResourceType::Beatmap ) {
-            file.selected = false;
-            continue;
-        }
-        // 绝对候选路径通过编辑器统一规则生成会话比较键。
-        const auto candidatePath =
-            projectRoot / Config::utf8ToPath(file.relativePath);
-        const std::string candidatePathKey =
-            engine.makeBeatmapPathKeyForPath(candidatePath);
-        file.selected =
-            shouldDefaultSelectPackageBeatmap(candidatePathKey, openBeatmaps);
-    }
+    // 工作线程只持有值和不可变工程投影，取消后可以安全完成当前读取。
+    // 每轮使用独立令牌。下一次开启不能影响当前已取消任务对令牌的观察。
+    m_candidateScanStop = std::stop_source{};
+    m_candidateScan     = files->enqueue(scanPackageCandidates,
+                                         snapshot->m_details,
+                                         m_package.selectedFileType,
+                                         std::move(openBeatmaps),
+                                         m_candidateScanStop.get_token());
+    // 文件池未接受提交时保留可关闭的空窗口，不等待不会完成的结果。
+    if ( !m_candidateScan.valid() ) showStatusMessage("扫描项目文件失败");
+}
 
+/// @brief 旧扫描结果只由旧 future 持有，取消后不能覆盖新的格式选择。
+void PackBeatmapAction::cancelCandidateScan()
+{
+    // worker 检查同一令牌，未来即使已排队也只接收旧的取消标记。
+    // packaged_task future 的释放不等待后台读取，此处可立即退出 UI 模态。
+    m_candidateScanStop.request_stop();
+    // 放弃当前句柄使取消不可逆，即使旧结果已经就绪也不能进入下一轮。
+    m_candidateScan = {};
+}
+
+/// @brief 成功取回后台结果时才接管候选并同步勾选依赖。
+/// @warning 候选模态每帧调用，只对就绪结果执行一次内存处理。
+/// @pre 当前弹窗所属工程代次仍有效。
+void PackBeatmapAction::consumeCandidateScan()
+{
+    if ( !m_candidateScan.valid() ||
+         m_candidateScan.wait_for(std::chrono::seconds(0)) !=
+             std::future_status::ready )
+        return;
+    // 只对 ready 状态调用 get。移动结果一次，随后依赖表仍由原有 UI 逻辑处理。
+    auto result = m_candidateScan.get();
+    if ( result.failed ) showStatusMessage("扫描项目文件失败");
+    // 先交付完整候选才能计算跨谱面的引用计数；等待帧不对部分数据做勾选。
+    m_package.candidateFiles = std::move(result.files);
     // 默认选中谱面确定后，一次同步所有资源依赖引用计数。
     syncPackageDependencySelection();
     if ( !hasSelectedPackageBeatmapSourceRequiringConversion(
@@ -2738,6 +2837,7 @@ void PackBeatmapAction::openPackFilePicker()
     // 在途系统选择拥有已冻结的相对路径，不能被第二次菜单触发覆盖。
     // 正常取消以后可立即重新进入，不依赖定时器或线程等待。
     if ( m_outputPickerPending ) return;
+    cancelCandidateScan();
     const auto project = Logic::ProjectController::instance().uiSnapshot();
     if ( !project ) return;
     // 格式选择是本轮事务的开始，后续模态都使用这里采集的身份。

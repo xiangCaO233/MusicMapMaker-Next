@@ -3187,6 +3187,14 @@ std::string EditorEngine::makeBeatmapPathKeyForPath(
     return makeBeatmapPathKey(getCurrentProject(), beatmapPath);
 }
 
+/// @brief 使用已冻结的工程根生成外部谱面路径键。
+std::string EditorEngine::makeBeatmapPathKeyForPath(
+    const Project& project, const std::filesystem::path& beatmapPath)
+{
+    // 复用会话路径规范规则，传入快照允许文件工作者不触碰当前工程。
+    return makeBeatmapPathKey(&project, beatmapPath);
+}
+
 /// @brief 更新指定主画布窗口在 UI 中的可见状态。
 /// @param cameraId 主画布的稳定相机 ID。
 /// @param isVisible 当前窗口是否参与可见后台会话更新。
