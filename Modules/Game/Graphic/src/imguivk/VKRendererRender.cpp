@@ -87,6 +87,11 @@ struct RenderProfileAccumulator {
     /// @brief 当前统计窗口内累计的完整帧数。
     uint64_t frameCount{ 0 };
 
+    /// @brief 相邻完整帧尾间隔直方图，桶宽 0.1 ms，末桶记录超出量程的间隔。
+    std::array<uint64_t, 1001> frameIntervals{};
+    /// @brief 最近一次完整帧尾；复位时以新窗口起点为基准。
+    RenderProfileClock::time_point previousFrameEnd{ windowStart };
+
     /// @brief 单帧总耗时统计。
     RenderStageStat total;
 
@@ -134,8 +139,10 @@ struct RenderProfileAccumulator {
     void reset(RenderProfileClock::time_point nextStart)
     {
         // 新窗口从调用方给出的同一时间点开始，避免逐字段 reset 期间的时间偏移。
-        windowStart = nextStart;
-        frameCount  = 0;
+        windowStart      = nextStart;
+        frameCount       = 0;
+        previousFrameEnd = nextStart;
+        frameIntervals.fill(0);
         total.reset();
         fence.reset();
         acquire.reset();
@@ -162,6 +169,14 @@ struct RenderProfileAccumulator {
     /// @warning 渲染热路径：每帧只做时间间隔判断；到达间隔后才写日志。
     void logIfReady(RenderProfileClock::time_point now)
     {
+        // 帧尾间隔包含限帧和展示等待，以区别于只统计 render 内部的 total。
+        // 复用既有帧尾时间，避免诊断再增加系统读钟。
+        const double intervalMs =
+            std::chrono::duration<double, std::milli>(now - previousFrameEnd)
+                .count();
+        previousFrameEnd = now;
+        ++frameIntervals[std::min(static_cast<size_t>(intervalMs * 10),
+                                  frameIntervals.size() - 1)];
         // steady_clock 不受系统时间校准影响，适合跨多个渲染帧累计间隔。
         const double elapsedSeconds =
             std::chrono::duration<double>(now - windowStart).count();
@@ -174,6 +189,15 @@ struct RenderProfileAccumulator {
         // 极小下限仅防御异常零间隔，不改变正常两秒统计窗口的 FPS。
         const double averageFps = static_cast<double>(frameCount) /
                                   std::max(elapsedSeconds, 0.000001);
+        // 最近秩百分位取所在桶的上界。溢出时输出负值，避免把慢帧截成 100 ms。
+        uint64_t remaining = frameCount - frameCount / 100;
+        size_t   bucket    = 0;
+        while ( bucket + 1 < frameIntervals.size() &&
+                remaining > frameIntervals[bucket] ) {
+            remaining -= frameIntervals[bucket++];
+        }
+        XINFO("FrameInterval p99_upper_ms={:.1f}",
+              bucket + 1 == frameIntervals.size() ? -1.0 : (bucket + 1) * 0.1);
         XINFO(
             "RenderProfile {:.2f}s frames={} fps={:.1f} "
             "total(avg/max)={:.4f}/{:.4f}ms",
@@ -800,7 +824,7 @@ void VKRenderer::render(NativeWindow&                window,
         // 不支持透明时底色由启动主题提供，避免圆角外露出灰色块。
         const auto bg = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
         clearColor    = swapchainCreateInfo.compositeAlpha ==
-                             vk::CompositeAlphaFlagBitsKHR::eOpaque
+                                vk::CompositeAlphaFlagBitsKHR::eOpaque
                             ? std::array<float, 4>{ bg.x, bg.y, bg.z, 1.0f }
                             : std::array<float, 4>{};
     }
@@ -836,7 +860,7 @@ void VKRenderer::render(NativeWindow&                window,
             // 任务描述与 command buffer 句柄按值捕获；只有 latch
             // 以引用跨线程共享。
             const OffscreenRecordTask task = m_offscreenRecordTasks[taskSlot];
-            vk::CommandBuffer         taskCmd = m_offscreenRecordSlots[taskSlot]
+            vk::CommandBuffer taskCmd = m_offscreenRecordSlots[taskSlot]
                                             .commandBuffers[recordFrameIndex];
             offscreenRecordThreadPool->enqueue_void(
                 [task, taskCmd, recordFrameIndex, &offscreenLatch]() mutable {

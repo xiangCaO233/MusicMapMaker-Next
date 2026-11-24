@@ -47,6 +47,10 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "runtime/AppThreadPool.h"
+#if defined(__linux__)
+#    include <sys/syscall.h>
+#    include <unistd.h>
+#endif
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -4790,6 +4794,18 @@ void EditorEngine::loop()
     (void)refreshEditorConfigSnapshot(editorConfigSnapshot,
                                       editorConfigSnapshotRevision);
 
+    // 诊断只使用逻辑线程私有计数，半秒窗口沿用 UPS 的时间戳。
+    // Linux 采集器用内核线程号关联调度统计和 perf，避免按占用率猜线程。
+    // 线程号仅作日志关联键，不能作为跨重启的会话标识。
+    // 非 Linux 构建仍可使用日志内的吞吐统计，只省略 /proc 关联。
+    long profileThreadId = 0;
+#if defined(__linux__)
+    profileThreadId = ::syscall(SYS_gettid);
+#endif
+    // 此计数域与半秒 UPS 窗口同时清零，不复用渲染快照的发布次数。
+    // 更新函数内部提前返回也算一次实际调用，便于与空闲门控区分。
+    std::uint64_t             sessionUpdates = 0, timedUpdates = 0;
+    FrameLimitClock::duration sampledUpdateTime{};
     // 去抖状态只属于本轮逻辑线程生命周期，重启时不恢复旧通知。
     // 目录等待与会话调度截止时间独立。慢磁盘只推迟资源刷新，不能扩大 dt。
     // 即使当前没有画布，仍处理项目的扫描完成和配置落盘。
@@ -4858,8 +4874,30 @@ void EditorEngine::loop()
             m_logicUps.store(static_cast<float>(impl().m_logicUpdateCount /
                                                 upsElapsed.count()),
                              std::memory_order_relaxed);
-            impl().m_logicUpdateCount = 0;
-            impl().m_lastUpsTime      = currentTime;
+            // loops 含空闲门控跳过的轮次，updates 只计入真正执行的会话调用。
+            // 多画布时一次迭代可能推进多个会话，因此不能拿循环数当调用数。
+            // sample_ns 仅累计被抽中的会话调用，除以 samples 得到抽样均值。
+            // 这个耗时包括调用期间被抢占的时间，与内核记录的线程 CPU 时间互补。
+            // 此处复用现有 UPS 边界，不为未启用诊断的用户增加时钟查询。
+            if ( editorConfigSnapshot.settings.renderProfileLogging ) {
+                XINFO(
+                    "LogicProfile tid={} seconds={:.6f} loops={} updates={} "
+                    "samples={} sample_ns={}",
+                    profileThreadId,
+                    upsElapsed.count(),
+                    impl().m_logicUpdateCount,
+                    sessionUpdates,
+                    timedUpdates,
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        sampledUpdateTime)
+                        .count());
+            }
+            // 在诊断关闭时也清理窗口，避免下次开启继承历史样本。
+            // 模式切换所在窗口可能只有部分样本，外部采集应选择稳定区间。
+            sessionUpdates = timedUpdates = 0;
+            sampledUpdateTime             = {};
+            impl().m_logicUpdateCount     = 0;
+            impl().m_lastUpsTime          = currentTime;
         }
 
         if ( projectController.hasPendingUiSettingsEdit() ) {
@@ -5033,10 +5071,26 @@ void EditorEngine::loop()
                         const auto* previousBeatmap =
                             context.currentBeatmap.get();
                         // 快照修订稳定时，会话可复用已物化的键数布局。
+                        // 稀疏采样只围住实际会话调用，避免每次更新增加两次读钟。
+                        // 每个窗口从首个调用起采样，低 UPS 也能保留耗时观测。
+                        // 样本包含同步等待和执行耗时，不能作为音频回调耗时。
+                        // 计数器为该逻辑线程独占，避免为跨线程观测引入原子写入。
+                        // 比较前后版本必须使用相同的采样配置和窗口。
+                        const bool timeUpdate = editorConfigSnapshot.settings
+                                                    .renderProfileLogging &&
+                                                sessionUpdates++ % 1021 == 0;
+                        const auto updateStart =
+                            timeUpdate ? FrameLimitClock::now()
+                                       : FrameLimitClock::time_point{};
                         entry.session->update(sessionDt,
                                               editorConfigSnapshot,
                                               isActiveSession,
                                               editorConfigSnapshotRevision);
+                        if ( timeUpdate ) {
+                            sampledUpdateTime +=
+                                FrameLimitClock::now() - updateStart;
+                            ++timedUpdates;
+                        }
                         if ( previousBeatmap != context.currentBeatmap.get() )
                             impl().m_sessionRegistry.publishSnapshotUnsafe();
                         if ( isActiveSession ) {
