@@ -123,6 +123,36 @@ def check_restart_failure(updater, install_dir):
     assert not marker.exists()
 
 
+def check_alive_parent_timeout(updater, install_dir):
+    """父进程超时仍存活时中止更新，保全目标、下载和已有标记。"""
+    target = install_dir / "MusicMapMaker-Next"
+    downloaded = install_dir / "downloaded"
+    marker = install_dir / ".mm_update_success"
+    # 正式目标与下载内容不同，单独对比两者才能发现先安装后报错。
+    target.write_bytes(b"old executable")
+    downloaded.write_bytes(b"#!/bin/sh\nexit 0\n")
+    downloaded.chmod(0o755)
+    marker.write_bytes(b"previous marker")
+    # 真实子进程由测试独占。测试清理负责回收它，即使断言失败也不会留下进程。
+    # 六十秒寿命超过更新器的等待上限与测试超时，保证断言时子进程仍应存活。
+    with subprocess.Popen(["/bin/sleep", "60"]) as parent:
+        try:
+            result = subprocess.run(
+                [updater, downloaded, target, str(parent.pid)],
+                capture_output=True, timeout=45, check=False,
+            )
+            # 确认旧进程没有被更新器或测试夹具提前结束。
+            assert parent.poll() is None
+            assert result.returncode == 1 and b"parent process exited" in result.stderr
+            # 检查三个独立文件，捕捉先改名、先消费下载或先写标记的回归。
+            assert target.read_bytes() == b"old executable"
+            assert downloaded.read_bytes() == b"#!/bin/sh\nexit 0\n"
+            assert marker.read_bytes() == b"previous marker"
+        finally:
+            # 终止对象来自本用例的 Popen，不使用传给生产程序的 PID 重新定位。
+            parent.terminate()
+
+
 def main():
     """在构建树运行同卷测试，另一个可写文件系统存在时补充跨卷。
 
@@ -139,6 +169,7 @@ def main():
         check_success(updater, install_dir, install_dir, 0o600)
         # 故障后仍运行跨卷用例，确认错误标记的清理不影响后续成功更新。
         check_restart_failure(updater, install_dir)
+        check_alive_parent_timeout(updater, install_dir)
         other_mount = Path("/dev/shm")
         if (
             os.access(other_mount, os.W_OK | os.X_OK)

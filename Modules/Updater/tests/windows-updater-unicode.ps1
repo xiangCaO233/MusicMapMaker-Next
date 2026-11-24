@@ -62,17 +62,49 @@ public static class UpdaterUnicodeProbe {
     Add-Type -TypeDefinition $fixtureCode -OutputType ConsoleApplication -OutputAssembly $download
     $payloadHash = (Get-FileHash -LiteralPath $download).Hash
 
-    # 先启动并等待一个短命父进程，传给更新器真实已退出的 PID。
-    $parent = Start-Process -FilePath $env:ComSpec -ArgumentList '/d /c exit 0' -NoNewWindow -PassThru -Wait
     $start = New-Object System.Diagnostics.ProcessStartInfo
     $start.FileName = $Updater
     # 两个文件路径含空格和非 BMP 字符，使用引号保持 argv 的参数边界。
-    $start.Arguments = '"{0}" "{1}" {2}' -f $download, $target, $parent.Id
     # 刻意从另一个目录启动更新器，重启进程若错误继承该目录便不能通过检查。
     $start.WorkingDirectory = $work
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
     $start.RedirectStandardError = $true
+    # 用真实长驻进程覆盖等待超时，必须保住原程序、下载文件和已有标记。
+    [IO.File]::WriteAllText($marker, 'previous marker')
+    # 以不同哈希区分载荷和旧文件，防止复用内容让误替换通过。
+    $oldHash = (Get-FileHash -LiteralPath $target).Hash
+    # 长驻夹具寿命超过两侧超时，且不启动任何桌面交互。
+    $parent = Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile -Command Start-Sleep -Seconds 60' -NoNewWindow -PassThru
+    try {
+        $start.Arguments = '"{0}" "{1}" {2}' -f $download, $target, $parent.Id
+        $process = [Diagnostics.Process]::Start($start)
+        # 正常超时应报告父进程状态，不能以路径解析错误掩盖等待失败。
+        if (!$process.WaitForExit(45000) -or $parent.HasExited -or $process.ExitCode -ne 1 -or
+            $process.StandardError.ReadToEnd() -notmatch 'parent process exited') {
+            throw 'Updater did not reject the live parent'
+        }
+        # 同时检查落地状态与重启证据，防止非零返回发生在替换之后。
+        if ((Get-FileHash -LiteralPath $target).Hash -ne $oldHash -or
+            (Get-FileHash -LiteralPath $download).Hash -ne $payloadHash -or
+            [IO.File]::ReadAllText($marker) -cne 'previous marker' -or
+            [IO.File]::Exists($target + '.old') -or [IO.File]::Exists($witness)) {
+            throw 'A live parent allowed changes to the installation'
+        }
+        # 释放超时用例的进程对象，成功分支再记录单独的重启证据。
+        $process.Dispose()
+        $process = $null
+        Write-Output 'Live parent timeout preserved both files and the marker.'
+    } finally {
+        # 只结束本用例创建的进程对象，避免按可能复用的 PID 结束其他进程。
+        if (!$parent.HasExited) { $parent.Kill() }
+        $parent.Dispose()
+    }
+
+    # 正常路径传入已经退出的真实 PID，验证超时路径之后仍可以完成安装。
+    $parent = Start-Process -FilePath $env:ComSpec -ArgumentList '/d /c exit 0' -NoNewWindow -PassThru -Wait
+    $start.Arguments = '"{0}" "{1}" {2}' -f $download, $target, $parent.Id
+    $parent.Dispose()
     # 使用进程 API 调用实际二进制，跳过交互式终端或 cmd 的代码页转换。
     $process = [System.Diagnostics.Process]::Start($start)
     # 夹具没有长驻父进程。测试超时用于防止生产 wait 退化时让测试永久阻塞。
