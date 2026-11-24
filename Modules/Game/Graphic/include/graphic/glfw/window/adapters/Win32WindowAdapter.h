@@ -3,6 +3,7 @@
 #ifdef _WIN32
 #    include "event/ui/UpdateDragAreaEvent.h"
 #    include "graphic/glfw/window/adapters/IWindowFrameAdapter.h"
+#    include <span>
 #    include <vector>
 #    include <windows.h>
 
@@ -63,6 +64,35 @@ public:
     /// @warning 仅在窗口初始化、归属变化或显式重载时调用；禁止逐帧加载图标。
     static void applyApplicationIcons(HWND window);
 
+    /// @brief 保留来自窗口缓存或 Win32 系统状态的最大化恢复意图。
+    /// @return 任一来源确认要恢复为最大化时返回 true。
+    [[nodiscard]] static bool shouldPreserveMaximizedRestore(
+        GLFWwindow* window, bool lastRequestedMaximized,
+        bool cachedRestoreMaximized);
+
+    /// @brief 写入共享最大化恢复意图，使 GLFW 回调和 Win32 子类过程一致。
+    static void updateMaximizedRestoreIntent(GLFWwindow* window, bool restore);
+
+    /// @brief 删除普通窗口残留的系统恢复最大化标志，保留其它窗口布局标志。
+    static void clearMaximizedRestoreFlag(GLFWwindow* window);
+
+    /// @brief 最小化窗口并保存任务栏恢复时所需的最大化状态。
+    static void iconifyPreservingMaximizedState(GLFWwindow* window,
+                                                bool lastRequestedMaximized);
+
+    /// @brief 裁剪启动窗口的客户区轮廓，半径使用设备像素。
+    static void applyStartupFrameShape(GLFWwindow* window, float radius);
+
+    /// @brief 先激活主窗口，再无激活提升从属窗口的 Z 序。
+    /// @warning 只在主窗口的激活边沿调用，禁止逐帧设置原生 Z 序。
+    static void raiseViewportGroup(GLFWwindow*                  mainWindow,
+                                   std::span<GLFWwindow* const> viewports);
+
+    /// @brief 应用独立视口的任务栏归属、阴影与圆角。
+    /// @warning 渲染线程只把已由 ImGui 创建的视口传入。
+    static void refreshNativeViewportDecoration(GLFWwindow* viewport,
+                                                GLFWwindow* mainWindow);
+
     /// @brief 将独立平台窗口登记为主窗口所有的任务栏窗口组成员。
     /// @param window 待登记的独立平台窗口。
     /// @param mainWindow 任务栏窗口组对应的主窗口。
@@ -89,7 +119,7 @@ private:
     /// @brief 判断 Win32 窗口当前是否明确处于最大化状态。
     /// @param hWnd Win32 窗口句柄。
     /// @return 当前窗口为最大化时返回 true。
-    [[nodiscard]] bool windowPlacementWantsMaximized(HWND hWnd) const;
+    [[nodiscard]] static bool windowPlacementWantsMaximized(HWND hWnd);
 
     /// @brief 在最小化发生前记录后续应恢复到的最大化状态。
     /// @param hWnd Win32 窗口句柄。
@@ -98,7 +128,7 @@ private:
     /// @brief 判断窗口是否仍带有恢复最大化标记。
     /// @param hWnd Win32 窗口句柄。
     /// @return 仍需恢复最大化时返回 true。
-    [[nodiscard]] bool hasRestoreMaximizedProperty(HWND hWnd) const;
+    [[nodiscard]] static bool hasRestoreMaximizedProperty(HWND hWnd);
 
     /// @brief 任务栏恢复后重新应用最大化，修正无边框窗口被还原成普通窗口。
     /// @param hWnd Win32 窗口句柄。

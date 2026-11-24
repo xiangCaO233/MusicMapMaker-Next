@@ -254,6 +254,11 @@
   - 整改：将窗口组提升、最大化恢复意图、startup frame shape 操作逐项收入现有平台适配器；renderer 只调用抽象窗口动作。保留现有低频激活边沿机制，不把系统调用移入逐帧无条件路径。
   - 验收：Windows 任务栏/系统菜单最小化与恢复、浮动 ImGui 工具窗不抢焦点；macOS 模拟最大化；X11/Wayland 的既有行为分别验证。此项是职责治理建议，未发现仅靠宏本身即可证明的运行故障。
 
+  - 窗口组激活、浮动视口外观、启动窗裁剪和最大化恢复状态已迁到 GLFW 窗口层及 Win32 适配器。恢复意图只维护一份 HWND 属性。最小化的工具窗以无激活方式恢复，组内最后一次前台请求交给主窗。通用 Vulkan 录制代码只收集视口并发起窗口动作。
+  - Linux Clang 22 RelWithDebInfo 全量构建和 11 项相关 CTest 通过。X11 与 Weston Wayland 窗口探针通过；X11 的由窗口管理器决定的焦点表现与原操作序列一致。原生 macOS arm64、部署目标 11.0 的探针验证了启动窗、模拟最大化和还原。
+  - Windows 在 debsrv 现有 MSVC-clang Runner 交叉编译，Wine 探针通过任务栏所有者、`WM_SYSCOMMAND` 恢复最大化、最小化浮窗恢复及主窗焦点验证。真实 Windows Explorer 任务栏交互尚待实机验收。两台 Runner 已恢复到验证前提交。
+  - 注释／代码行数分别为 `NativeWindow.h` 123/102、`NativeWindow.cpp` 578/1110、`Win32WindowAdapter.h` 86/65、`Win32WindowAdapter.cpp` 301/634、`VKRendererRender.cpp` 292/659，均达到 30%。
+
 - [x] **PLAT-07（P3）致命提示接口的平台实现不完整**
 
   - 位置：`Modules/Game/Common/include/common/MessageBox.h:21-40`；唯一已定位调用 `Modules/Game/Graphic/src/imguivk/context/VKContextDebugFeats.cpp:82`。
