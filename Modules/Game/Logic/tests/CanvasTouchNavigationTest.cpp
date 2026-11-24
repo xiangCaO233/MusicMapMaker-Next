@@ -314,6 +314,42 @@ bool testPanSnapAccumulation()
 }
 
 
+/// @brief 验证同一配置修订下的键数切换及新配置修订的生效时序。
+/// @details 四键使用独立布局，五键没有独立项。消费改键命令后，根级布局
+/// 必须先于新一轮发布恢复。之后在键数不变时更新配置修订，
+/// 确保稳定轮次缓存不会挡住配置发布。
+/// @note 测试只驱动逻辑会话且不接管音频时钟，改键通过生产命令处理顺序发生。
+/// 第一次更新建立布局，第二次在相同修订和空队列下读取缓存结果。
+/// 后续分别改变键数和修订，可以识别只监听其中一个失效来源的错误。
+/// @return 播放更新使用的直接布局字段始终对应当前键数和最新修订时返回 true。
+bool testRevisionedUpdateRefreshesLayout()
+{
+    using namespace MMM::Logic;
+    BeatmapSession session;
+    auto&          context = session.getContextMutable();
+    configureContext(context);
+    auto config = context.lastConfig;
+    // 独立布局与根级布局取不同值，使上轮物化结果误作回退模板时直接失败。
+    config.visual.judgeline_pos                              = .8f;
+    config.visual.editableJudgmentLinePositionForKeyCount(4) = .6f;
+    session.update(0.0, config, false, 1);
+    session.update(0.0, config, false, 1);
+    if ( !near(context.lastConfig.visual.judgeline_pos, .6) ) return false;
+
+    // 保持修订不变，只有真实出队的改键命令能触发从根模板重新物化。
+    session.pushCommand(LogicCommand{ CmdUpdateTrackCount{ .trackCount = 5 } });
+    session.update(0.0, config, false, 1);
+    if ( context.trackCount != 5 ||
+         !near(context.lastConfig.visual.judgeline_pos, .8) )
+        return false;
+
+    // 无待处理命令，单凭配置快照更新也要在本轮更换布局。
+    // 第三种判定线位置用于和四键独立值及改键后的根级值区分。
+    config.visual.judgeline_pos = .7f;
+    session.update(0.0, config, false, 2);
+    return near(context.lastConfig.visual.judgeline_pos, .7);
+}
+
 }  // namespace
 /// @brief 退出码由真实控制器及 Session 更新的最终投影契约决定。
 /// 两个场景独立持有会话，不共享上一轮上下文或导航余量。
@@ -330,9 +366,14 @@ int main()
         testDirectZoomKeepsCentroidAnchor(FrameLimitPreference::Unlimited);
     const bool vsync =
         testDirectZoomKeepsCentroidAnchor(FrameLimitPreference::VSync);
-    const bool preview = testPreviewOverrideAdoption();
-    const bool pan     = testPanSnapAccumulation();
+    const bool preview          = testPreviewOverrideAdoption();
+    const bool pan              = testPanSnapAccumulation();
+    const bool revisionedLayout = testRevisionedUpdateRefreshesLayout();
     if ( !pan ) XERROR("Continuous touch scroll snapping regression failed");
     if ( !preview ) XERROR("Preview configuration adoption regression failed");
-    return pinch && unlimited && vsync && preview && pan ? 0 : 1;
+    if ( !revisionedLayout )
+        XERROR("Revisioned session layout regression failed");
+    return pinch && unlimited && vsync && preview && pan && revisionedLayout
+               ? 0
+               : 1;
 }

@@ -2680,10 +2680,15 @@ void BeatmapSession::Persistence::applyResourceRenames(
 /// 观察者，同时确保权威远端替换不会被当作新的本地编辑回传。
 /// @warning 逻辑 update 调用；普通保存只复制快照并提交后台任务，其余文件指令
 /// 仍只尝试门闩，禁止阻塞等待正在执行的后台文件任务。
-bool BeatmapSession::processCommands()
+/// @param config 本轮的有效配置模板，包含项目覆盖。
+/// @param configNeedsLayout 是否已装入模板，供调用方在批次后重选布局。
+bool BeatmapSession::processCommands(const Config::EditorConfig& config,
+                                     bool& configNeedsLayout)
 {
     // 延后队首一旦再次遇忙，本轮不重复尝试；成功后可继续处理下一个文件命令。
-    LogicCommand cmd;
+    // 取队列失败时占位值不会交给处理器。显式选用轻量命令，避免在空队列
+    // 的每轮播放中构造 variant 首项持有的完整配置和快捷键表。
+    LogicCommand cmd{ CmdSetHoveredEntity{} };
     bool         processed            = false;
     bool         deferredBlockedAgain = false;
     // 多条连续编辑命令的变更类别按位合并，到同步边界一次性发布观察者通知。
@@ -2775,6 +2780,12 @@ bool BeatmapSession::processCommands()
             fromDeferred = true;
         } else if ( !m_commands->queue.try_dequeue(cmd) ) {
             break;
+        }
+        if ( !configNeedsLayout ) {
+            // 之前的有效配置已按旧键数展开；首条实际出队的命令才需要恢复
+            // 根级模板。若本轮紧接着切到没有独立配置的键数，仍能使用根级布局。
+            m_ctx->lastConfig = config;
+            configNeedsLayout = true;
         }
         // 设置页可能比重新载图晚一帧提交，必须在消费前核对模型控制块。
         // 这里只比较弱引用的所有权身份，不额外提升旧对象的引用计数。

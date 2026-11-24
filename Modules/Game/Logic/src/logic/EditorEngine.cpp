@@ -3595,8 +3595,6 @@ void EditorEngine::syncSameMainAudioCanvases()
 /// relaxed，并短暂持有 SessionRegistry 递归锁以串行化 SessionContext 访问。
 void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
 {
-    // 配置按值读取，视觉偏移和缩放参数在本轮所有 follower 间保持一致。
-    const auto editorConfig = getEditorConfig();
     if ( !m_syncSameMainAudioCanvases.load(std::memory_order_relaxed) ) {
         // 用户关闭同步后不进入注册表扫描，follower 身份已由设置入口主动清理。
         return;
@@ -3606,6 +3604,13 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
         // 真正同步仍会在锁内逐项验证，不依赖该原子保证正确性。
         return;
     }
+
+    // 普通单画布播放没有跟随者，先快速返回，避免每次播放更新都复制配置。
+    // 只读取同步所需的偏移，配置锁在取得会话注册表锁之前释放。
+    const double visualOffset = [this]() {
+        std::lock_guard lock(impl().m_editorConfigMutex);
+        return impl().m_editorConfig.visual.getEffectiveVisualOffset();
+    }();
 
     {
         // 快照用于稳定枚举会话及其 shared_ptr 生命周期，注册表锁则串行化
@@ -3677,8 +3682,7 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
             }
 
             const double sourceAnimateTarget =
-                sourceCtx.currentTime +
-                editorConfig.visual.getEffectiveVisualOffset();
+                sourceCtx.currentTime + visualOffset;
             // 播放中以来源实际动画时间判断特效重置，暂停时以目标视觉偏移位置判断。
             const double sourceResetTime     = sourceCtx.isPlaying
                                                    ? sourceCtx.animateTime
@@ -5028,8 +5032,11 @@ void EditorEngine::loop()
                         // 仅在实例替换时更新模板列表。常态只比较地址，不复制谱面所有权。
                         const auto* previousBeatmap =
                             context.currentBeatmap.get();
-                        entry.session->update(
-                            sessionDt, editorConfigSnapshot, isActiveSession);
+                        // 快照修订稳定时，会话可复用已物化的键数布局。
+                        entry.session->update(sessionDt,
+                                              editorConfigSnapshot,
+                                              isActiveSession,
+                                              editorConfigSnapshotRevision);
                         if ( previousBeatmap != context.currentBeatmap.get() )
                             impl().m_sessionRegistry.publishSnapshotUnsafe();
                         if ( isActiveSession ) {

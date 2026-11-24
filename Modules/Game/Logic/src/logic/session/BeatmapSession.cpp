@@ -1209,13 +1209,17 @@ void BeatmapSession::updateAnimatedTimelineZoom(
 /// @param dt 逻辑轮次的经过时间，单位秒。
 /// @param config 已应用项目覆盖的有效编辑器配置。
 /// @param isActiveSession 是否拥有当前全局音频控制权。
+/// @param configRevision 配置快照的修订号；缺省时不复用上轮配置。
 /// @pre 调用方串行更新本会话，dt 与配置由同一逻辑调度轮次提供。
 /// @note 命令消费先于本轮布局和播放处理，避免渲染继续使用已失效的会话参数。
+/// 稳定轮次保留已按键数展开的配置；实际消费命令时先恢复模板，允许命令改变轨道
+/// 数量或软件级配置，再由本轮配置和最终键数恢复会话布局。
 /// @warning 逻辑热路径：由 EditorEngine::loop 按 UPS
 /// 调用；普通路径禁止文件系统访问、完整排序、try/catch 和可避免的 shared_ptr
 /// 拷贝；仅配置到期的自动保存/备份低频分支允许持久化。
 void BeatmapSession::update(double dt, const Config::EditorConfig& config,
-                            bool isActiveSession)
+                            bool                         isActiveSession,
+                            std::optional<std::uint64_t> configRevision)
 {
     if ( sanitizeTimelineZoom(m_ctx->lastConfig.visual.timelineZoom) !=
          sanitizeTimelineZoom(config.visual.timelineZoom) ) {
@@ -1226,7 +1230,12 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
             cache->isDirty = true;
         m_ctx->isTransformDirty = true;
     }
-    m_ctx->lastConfig      = config;
+    bool configNeedsLayout =
+        !configRevision || configRevision != m_appliedConfigRevision;
+    if ( configNeedsLayout ) {
+        // 新修订先提交给保存及编辑入口，后续仍以会话最终键数确定布局。
+        m_ctx->lastConfig = config;
+    }
     m_ctx->isActiveSession = isActiveSession;
     // 完成检查不等待后台任务；先提交旧保存结果，再消费本轮可能新增的编辑命令。
     // 这也让保存期间切换到其他标签后，后台会话在维护轮询中正确安装最终哈希。
@@ -1240,15 +1249,18 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
         // 后台会话不再作为播放源，但同音轨跟随由独立状态维护。
         m_ctx->isPlaying = false;
     }
-    bool processed = processCommands();
+    bool processed = processCommands(config, configNeedsLayout);
     // processed 参与后续强制快照条件，不能只看消费后队列是否为空。
     // 初始观察快照应包含本轮已处理的命令，不能抢在它们之前发布旧模型。
     publishRequestedMutationSnapshot();
-    // 配置命令携带软件级快照；本轮调度仍必须恢复项目覆盖后的有效配置。
-    m_ctx->lastConfig = config;
-    m_ctx->lastConfig.visual.applyKeyCountLayout(m_ctx->trackCount);
-    // 命令可能改变轨道数量，重新选择布局后本轮投影才与新元数据一致。
-    // effectiveConfig 借用会话内副本，本轮后续流程均使用这份一致的布局配置。
+    if ( configNeedsLayout ) {
+        // 配置命令可能携带软件级快照。恢复项目覆盖，再按命令结束后的键数
+        // 展开布局；没有配置变化或实际出队的轮次复用这份结果。
+        m_ctx->lastConfig = config;
+        m_ctx->lastConfig.visual.applyKeyCountLayout(m_ctx->trackCount);
+    }
+    m_appliedConfigRevision = configRevision;
+    // 播放及渲染投影借用同一份会话配置，无需持有调用方的可变引用。
     const auto& effectiveConfig = m_ctx->lastConfig;
 
     if ( m_ctx->isAudioTimelineDescriptorDirty ) {
