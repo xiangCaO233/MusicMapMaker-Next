@@ -407,6 +407,12 @@ void HitFXSystem::update(double                       animateTime,
         auto& active = it->second;
 
         if ( active.isHold ) {
+            // 尾判定之前一定不能结束。持续中的长条无需反复查询皮肤动画。
+            // 尾部仍沿用严格大于边界，并以当时的皮肤计算最短播放周期。
+            if ( !(animateTime > active.startTime + active.holdDuration) ) {
+                ++it;
+                continue;
+            }
             // 长条最短可见时长取皮肤一轮动画长度，持续阶段允许循环播放。
             auto&             skinManager = Config::SkinManager::instance();
             const auto*       seq = resolveVisualSequence(active.effectKey);
@@ -416,9 +422,8 @@ void HitFXSystem::update(double                       animateTime,
             // 结束时间，且至少播放完一个完整的 Hold 动画周期，则结束
             // 这确保了极短或 0 时长的 Hold 也能正常播放完一个完整的打击动画
             double animDuration = static_cast<double>(frameCount) / baseFps;
-            // 两个结束条件必须同时成立：长条已过尾部，且最短动画周期已完成。
-            if ( animateTime > (active.startTime + active.holdDuration) &&
-                 animateTime >= (active.startTime + animDuration) ) {
+            // 已通过尾部边界；仍需保留皮肤要求的完整动画周期。
+            if ( animateTime >= active.startTime + animDuration ) {
                 it = m_trackActiveEffects.erase(it);
                 // erase 返回下一元素，不再递增已失效的旧迭代器。
                 continue;

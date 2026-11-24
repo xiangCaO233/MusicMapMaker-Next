@@ -1221,33 +1221,36 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                             bool                         isActiveSession,
                             std::optional<std::uint64_t> configRevision)
 {
-    if ( sanitizeTimelineZoom(m_ctx->lastConfig.visual.timelineZoom) !=
+    // SessionContext 与会话同寿命。命令只替换其中的谱面与缓存，引用不会失效。
+    // 本轮借用一次上下文，避免 Debug 在每个字段访问中重复展开智能指针。
+    auto& ctx = *m_ctx;
+    if ( sanitizeTimelineZoom(ctx.lastConfig.visual.timelineZoom) !=
          sanitizeTimelineZoom(config.visual.timelineZoom) ) {
         // 轻量缩放发布不广播完整设置命令，只有最终目标变化才重建积分。
         // 手势中的局部倍率不改配置，所以常态移动不进入这个低频分支。
         if ( auto* cache =
-                 m_ctx->timelineRegistry.ctx().find<System::ScrollCache>() )
+                 ctx.timelineRegistry.ctx().find<System::ScrollCache>() )
             cache->isDirty = true;
-        m_ctx->isTransformDirty = true;
+        ctx.isTransformDirty = true;
     }
     bool configNeedsLayout =
         !configRevision || configRevision != m_appliedConfigRevision;
     if ( configNeedsLayout ) {
         // 新修订先提交给保存及编辑入口，后续仍以会话最终键数确定布局。
-        m_ctx->lastConfig = config;
+        ctx.lastConfig = config;
     }
-    m_ctx->isActiveSession = isActiveSession;
+    ctx.isActiveSession = isActiveSession;
     // 完成检查不等待后台任务；先提交旧保存结果，再消费本轮可能新增的编辑命令。
     // 这也让保存期间切换到其他标签后，后台会话在维护轮询中正确安装最终哈希。
     // 实际结果气泡由工作线程结束，不依赖当前标签是否仍然可见或会话是否存活。
     // 项目路径只在当前谱面身份仍与任务启动时一致时更新，避免跨载图提交。
-    m_persistence->finalizeAsyncBeatmapSave(*m_ctx);
+    m_persistence->finalizeAsyncBeatmapSave(ctx);
     // 保存有效配置副本供本轮控制器读取，避免持有调用方配置对象的可变引用。
     // 先接收同谱面草稿的新版本，再处理当前会话命令，避免从旧基线编辑。
-    ProjectDraftLaneService::refreshIfChanged(*m_ctx);
-    if ( !isActiveSession && m_ctx->isPlaying ) {
+    ProjectDraftLaneService::refreshIfChanged(ctx);
+    if ( !isActiveSession && ctx.isPlaying ) {
         // 后台会话不再作为播放源，但同音轨跟随由独立状态维护。
-        m_ctx->isPlaying = false;
+        ctx.isPlaying = false;
     }
     bool processed = processCommands(config, configNeedsLayout);
     // processed 参与后续强制快照条件，不能只看消费后队列是否为空。
@@ -1256,32 +1259,32 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     if ( configNeedsLayout ) {
         // 配置命令可能携带软件级快照。恢复项目覆盖，再按命令结束后的键数
         // 展开布局；没有配置变化或实际出队的轮次复用这份结果。
-        m_ctx->lastConfig = config;
-        m_ctx->lastConfig.visual.applyKeyCountLayout(m_ctx->trackCount);
+        ctx.lastConfig = config;
+        ctx.lastConfig.visual.applyKeyCountLayout(ctx.trackCount);
     }
     m_appliedConfigRevision = configRevision;
     // 播放及渲染投影借用同一份会话配置，无需持有调用方的可变引用。
-    const auto& effectiveConfig = m_ctx->lastConfig;
+    const auto& effectiveConfig = ctx.lastConfig;
 
-    if ( m_ctx->isAudioTimelineDescriptorDirty ) {
+    if ( ctx.isAudioTimelineDescriptorDirty ) {
         // 描述符重建仅由脏状态触发，协作会话优先使用自己的项目资源视图。
         const auto* project =
-            m_ctx->collaborationProject
-                ? m_ctx->collaborationProject.get()
+            ctx.collaborationProject
+                ? ctx.collaborationProject.get()
                 : EditorEngine::instance().getCurrentProject();
-        SessionUtils::rebuildAudioTimelineDescriptor(*m_ctx, project);
+        SessionUtils::rebuildAudioTimelineDescriptor(ctx, project);
     }
-    if ( m_ctx->isAudioTimelineFingerprintPublishPending ) {
+    if ( ctx.isAudioTimelineFingerprintPublishPending ) {
         // 指纹发布和音频激活是不同待办，先让跨会话匹配看到新资源身份。
         // 指纹改变后更新引擎的跨会话匹配信息，再尝试激活新的音频时间线。
         EditorEngine::instance().refreshAudioTimelineFingerprints();
-        m_ctx->isAudioTimelineFingerprintPublishPending = false;
+        ctx.isAudioTimelineFingerprintPublishPending = false;
     }
-    if ( isActiveSession && m_ctx->isAudioTimelineActivationPending &&
-         !m_ctx->m_waitingForCanvasAudio ) {
+    if ( isActiveSession && ctx.isAudioTimelineActivationPending &&
+         !ctx.m_waitingForCanvasAudio ) {
         // 后台会话可刷新描述符，但不能借此替换全局正在加载的音频。
-        if ( !SessionUtils::activateAudioTimeline(*m_ctx, m_ctx->isPlaying) ) {
-            m_ctx->isPlaying = false;
+        if ( !SessionUtils::activateAudioTimeline(ctx, ctx.isPlaying) ) {
+            ctx.isPlaying = false;
             // 激活失败停止本地播放声明，避免渲染按未就绪的传输继续推进。
         }
     }
@@ -1292,42 +1295,40 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
             std::chrono::steady_clock::now().time_since_epoch())
             .count();
 
-    bool isInteracting = m_ctx->isDragging || m_ctx->isSelecting ||
+    bool isInteracting = ctx.isDragging || ctx.isSelecting ||
                          // 未提交的笔刷和擦除同样是交互，不只看通用拖拽标志。
-                         m_ctx->brushState.isActive ||
-                         m_ctx->eraserState.isActive;
+                         ctx.brushState.isActive || ctx.eraserState.isActive;
     const bool isVisualAnimationActive =
-        m_ctx->animateTimeAnimationActive ||
-        m_ctx->animatedTimelineZoomAnimationActive;
+        ctx.animateTimeAnimationActive ||
+        ctx.animatedTimelineZoomAnimationActive;
     const bool isEdgeScrollActive =
-        std::abs(m_ctx->previewEdgeScrollVelocity) > 0.0001;
+        std::abs(ctx.previewEdgeScrollVelocity) > 0.0001;
     // 最终配置到达是需要立即消费的状态边沿，不能被当作空闲轮次跳过。
     // 旧配置尚未追上时不强制保持忙碌，避免待采纳覆盖无限绕过空闲节流。
     const bool navigationConfigReady =
-        (m_ctx->m_pointerTimelineZoom && m_ctx->m_pointerZoomFinished &&
+        (ctx.m_pointerTimelineZoom && ctx.m_pointerZoomFinished &&
          std::abs(effectiveConfig.visual.timelineZoom -
-                  *m_ctx->m_pointerTimelineZoom) < VISUAL_ANIMATION_EPSILON) ||
-        (m_ctx->m_pointerPreviewAreaRatio && m_ctx->m_pointerPreviewFinished &&
+                  *ctx.m_pointerTimelineZoom) < VISUAL_ANIMATION_EPSILON) ||
+        (ctx.m_pointerPreviewAreaRatio && ctx.m_pointerPreviewFinished &&
          std::abs(effectiveConfig.visual.previewConfig.areaRatio -
-                  *m_ctx->m_pointerPreviewAreaRatio) <
-             VISUAL_ANIMATION_EPSILON);
-    bool isBusy = isInteracting || m_ctx->isPlaying ||
+                  *ctx.m_pointerPreviewAreaRatio) < VISUAL_ANIMATION_EPSILON);
+    bool isBusy = isInteracting || ctx.isPlaying ||
                   // 播放、动画、边缘滚动和剩余命令都要求继续推进逻辑。
-                  m_ctx->isAudioTimelineSyncFollower ||
-                  isVisualAnimationActive || isEdgeScrollActive ||
+                  ctx.isAudioTimelineSyncFollower || isVisualAnimationActive ||
+                  isEdgeScrollActive ||
                   // 配置采纳轮次必须完成倍率覆盖清除及必要的积分缓存重建。
                   navigationConfigReady || hasPendingCommands();
 
     // 空闲会话维护与显示器同步模式无关。命令或实时状态发生变化时立即推进。
     if ( !isBusy && !processed ) {
         // 空闲节流发生在命令和资源状态处理之后，不能延迟输入的本地反馈。
-        if ( currentSysTime - m_ctx->lastSnapshotTime <
+        if ( currentSysTime - ctx.lastSnapshotTime <
              IDLE_UPDATE_MIN_INTERVAL_SECONDS ) {
             // 已有干净缓存时仍响应表格轮询，无需为此生成完整渲染快照。
             // 两个请求彼此独立，开启时间点表不触发额外的批注文字投影。
             if ( isActiveSession ) {
-                m_tables->publishAnnotationTableSnapshot(*m_ctx);
-                m_tables->publishTimingTableSnapshot(*m_ctx);
+                m_tables->publishAnnotationTableSnapshot(ctx);
+                m_tables->publishTimingTableSnapshot(ctx);
             }
             // 这里跳过空闲尾部工作，不丢弃此前已经消费的命令或资源状态变化。
             return;
@@ -1341,62 +1342,61 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     // 组件只选出调度结果，实际保存仍经过命令入口，以便在途任务占用时排队。
     // 保持自动保存、独立备份、尾随元数据的原更新顺序，避免调度之间改变脏状态判断。
     if ( const auto kind = m_persistence->takeConfiguredAutoSave(
-             *m_ctx,
+             ctx,
              currentSysTime,
              isMetadataEditingBusy,
              effectiveConfig.settings.autoSave) ) {
         handleCommand(CmdSaveBeatmap{ .kind = *kind });
     }
     m_persistence->flushConfiguredAutoBackup(
-        *m_ctx,
+        ctx,
         currentSysTime,
         isMetadataEditingBusy,
         effectiveConfig.settings.autoBackup);
     m_persistence->flushDeferredMetadataAutoSave(
-        *m_ctx, currentSysTime, isMetadataEditingBusy);
+        ctx, currentSysTime, isMetadataEditingBusy);
     // lastSnapshotTime 在此是轻量轮询节流基准，实际渲染发布另有独立时间字段。
-    m_ctx->lastSnapshotTime = currentSysTime;
+    ctx.lastSnapshotTime = currentSysTime;
 
     // 边缘速度按实际经过时间积分，使拖动自动滚动不依赖逻辑帧率。
     // 教学自动播放由音频时钟唯一驱动，遗留的边缘速度不能抢占播放位置。
-    if ( m_ctx->composeLessonInputMode == ComposeLessonInputMode::AutoPlayback )
-        m_ctx->previewEdgeScrollVelocity = 0.0;
-    if ( std::abs(m_ctx->previewEdgeScrollVelocity) > 0.0001 ) {
-        double delta     = m_ctx->previewEdgeScrollVelocity * dt;
-        double totalTime = SessionUtils::getEffectiveTotalTimeSeconds(*m_ctx);
+    if ( ctx.composeLessonInputMode == ComposeLessonInputMode::AutoPlayback )
+        ctx.previewEdgeScrollVelocity = 0.0;
+    if ( std::abs(ctx.previewEdgeScrollVelocity) > 0.0001 ) {
+        double delta     = ctx.previewEdgeScrollVelocity * dt;
+        double totalTime = SessionUtils::getEffectiveTotalTimeSeconds(ctx);
         double minTime   = 0.0;
-        if ( m_ctx->composeLessonInputMode ==
-             ComposeLessonInputMode::Practice ) {
+        if ( ctx.composeLessonInputMode == ComposeLessonInputMode::Practice ) {
             // 预览边缘自动滚动不经过 CmdSeek/CmdScroll，必须独立遵守段落边界。
-            minTime   = std::clamp(m_ctx->composeLessonBegin, 0.0, totalTime);
-            totalTime = std::clamp(m_ctx->composeLessonEnd, minTime, totalTime);
+            minTime   = std::clamp(ctx.composeLessonBegin, 0.0, totalTime);
+            totalTime = std::clamp(ctx.composeLessonEnd, minTime, totalTime);
         }
-        m_ctx->currentTime =
+        ctx.currentTime =
             // 自动滚动限制在有效曲长内，不允许持续速度将位置推到范围外。
-            std::clamp(m_ctx->currentTime + delta, minTime, totalTime);
+            std::clamp(ctx.currentTime + delta, minTime, totalTime);
 
-        if ( m_ctx->isPlaying && m_ctx->isActiveSession ) {
+        if ( ctx.isPlaying && ctx.isActiveSession ) {
             // 只有播放源同步全局音频定位，后台画布不能抢占传输位置。
-            Audio::AudioManager::instance().seek(m_ctx->currentTime);
+            Audio::AudioManager::instance().seek(ctx.currentTime);
         }
-        SessionUtils::syncHitIndex(*m_ctx);
+        SessionUtils::syncHitIndex(ctx);
         // 自动滚动同样改变时间，命中游标必须跟随新位置。
     }
 
-    double previousAnimateTime = m_ctx->animateTime;
+    double previousAnimateTime = ctx.animateTime;
     // 保留更新前视觉时间，用于识别本轮越过的事件与不连续跳转。
     updateAnimatedTimelineZoom(dt, effectiveConfig);
 
     // 播放源和同音轨跟随者都读取传输时钟，但只有播放源负责调度声音。
     bool isPlaybackClockActive =
-        m_ctx->isPlaying || m_ctx->isAudioTimelineSyncFollower;
-    const bool scrubReleased   = m_ctx->m_seekScrubReleased;
-    m_ctx->m_seekScrubReleased = false;
-    bool playbackJumped        = false;
+        ctx.isPlaying || ctx.isAudioTimelineSyncFollower;
+    const bool scrubReleased = ctx.m_seekScrubReleased;
+    ctx.m_seekScrubReleased  = false;
+    bool playbackJumped      = false;
     // 是否发生跳转要保留到发布阶段，保证新位置不受普通快照限频拖延。
     if ( isPlaybackClockActive ) {
         // 命中表可被本轮命令修改，在推进两个事件游标前确保缓存有效。
-        SessionUtils::ensureHitEvents(*m_ctx);
+        SessionUtils::ensureHitEvents(ctx);
 
         auto&      audio              = Audio::AudioManager::instance();
         const auto audioClockSnapshot = audio.getAudioTimelineClockSnapshot();
@@ -1409,7 +1409,7 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
         isPlaybackClockActive =
             // 资源身份不匹配或传输结束可在此取消活跃状态，后续分支使用返回值。
             SessionUtils::applyAudioTimelineTransportSnapshot(
-                *m_ctx,
+                ctx,
                 audio.getLoadedAudioTimelineFingerprint(),
                 audioClockSnapshot,
                 playbackClockNow,
@@ -1426,13 +1426,12 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
         std::vector<System::HitFXSystem::HitEvent> triggeredEvents;
         // 本轮视觉事件与提前预约音频不是同一列表，预播放不能提前点亮命中特效。
 
-        const bool scheduleHitSounds =
-            m_ctx->isPlaying && !m_ctx->isSeekScrubbing;
+        const bool scheduleHitSounds = ctx.isPlaying && !ctx.isSeekScrubbing;
         const bool isJump =
             // 回退、较大跨越、首轮播放或时钟失效都不视作正常连续命中区间。
             !isPlaybackClockActive || scrubReleased ||
-            (std::abs(m_ctx->animateTime - previousAnimateTime) > 0.2) ||
-            (m_ctx->animateTime < previousAnimateTime) || !m_wasPlaying;
+            (std::abs(ctx.animateTime - previousAnimateTime) > 0.2) ||
+            (ctx.animateTime < previousAnimateTime) || !m_wasPlaying;
         playbackJumped = isJump;
 
         if ( isJump ) {
@@ -1444,72 +1443,65 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                 // 拖动首帧和松手已由传输提交撤销旧预约，各中间位置不再重置。
                 Audio::AudioManager::instance().clearAllScheduledSoundEffects();
             }
-            m_ctx->hitFXSystem.clearActiveEffects();
-            SessionUtils::syncHitIndex(*m_ctx);
-            m_ctx->hitFXSystem.restoreActiveHoldEffects(
+            ctx.hitFXSystem.clearActiveEffects();
+            SessionUtils::syncHitIndex(ctx);
+            ctx.hitFXSystem.restoreActiveHoldEffects(
                 // 长条头可能在跳转点之前，持续效果需要独立于头部命中恢复。
-                m_ctx->animateTime,
-                m_ctx->hitEvents,
+                ctx.animateTime,
+                ctx.hitEvents,
                 effectiveConfig);
 
             if ( scheduleHitSounds ) {
                 // 跳转后重建前方音效窗口，不能只等待下一轮新增事件进入窗口。
                 // 预测窗口只用于预约，不通过阻塞等待窗口结束来同步音画。
                 double predictWindow = 0.2;
-                while (
-                    m_ctx->nextPredictHitIndex < m_ctx->hitEvents.size() &&
-                    m_ctx->hitEvents[m_ctx->nextPredictHitIndex].timestamp <=
-                        (m_ctx->animateTime + predictWindow) ) {
-                    const auto& ev =
-                        m_ctx->hitEvents[m_ctx->nextPredictHitIndex];
+                while ( ctx.nextPredictHitIndex < ctx.hitEvents.size() &&
+                        ctx.hitEvents[ctx.nextPredictHitIndex].timestamp <=
+                            (ctx.animateTime + predictWindow) ) {
+                    const auto& ev = ctx.hitEvents[ctx.nextPredictHitIndex];
                     // 过滤当前播放点之前的事件，不补播已经跨过的音符。
-                    if ( ev.timestamp >= m_ctx->animateTime ) {
-                        scheduleHitSound(*m_ctx,
-                                         m_ctx->nextPredictHitIndex,
-                                         effectiveConfig);
+                    if ( ev.timestamp >= ctx.animateTime ) {
+                        scheduleHitSound(
+                            ctx, ctx.nextPredictHitIndex, effectiveConfig);
                     }
-                    m_ctx->nextPredictHitIndex++;
+                    ctx.nextPredictHitIndex++;
                 }
             }
         } else {
             // 连续播放只处理窗口新增长的尾部，避免重复预约已经覆盖的音效。
             if ( scheduleHitSounds ) {
                 double predictWindow = 0.2;
-                while (
-                    m_ctx->nextPredictHitIndex < m_ctx->hitEvents.size() &&
-                    m_ctx->hitEvents[m_ctx->nextPredictHitIndex].timestamp <=
-                        (m_ctx->animateTime + predictWindow) ) {
-                    const auto& ev =
-                        m_ctx->hitEvents[m_ctx->nextPredictHitIndex];
+                while ( ctx.nextPredictHitIndex < ctx.hitEvents.size() &&
+                        ctx.hitEvents[ctx.nextPredictHitIndex].timestamp <=
+                            (ctx.animateTime + predictWindow) ) {
+                    const auto& ev = ctx.hitEvents[ctx.nextPredictHitIndex];
                     if ( ev.timestamp >
                          (previousAnimateTime + predictWindow) ) {
                         // 左边界取上一轮预测窗口末端，不是上一轮实际播放位置。
-                        scheduleHitSound(*m_ctx,
-                                         m_ctx->nextPredictHitIndex,
-                                         effectiveConfig);
+                        scheduleHitSound(
+                            ctx, ctx.nextPredictHitIndex, effectiveConfig);
                     }
-                    m_ctx->nextPredictHitIndex++;
+                    ctx.nextPredictHitIndex++;
                 }
             }
 
-            while ( m_ctx->nextHitIndex < m_ctx->hitEvents.size() &&
-                    m_ctx->hitEvents[m_ctx->nextHitIndex].timestamp <=
-                        m_ctx->animateTime ) {
+            while ( ctx.nextHitIndex < ctx.hitEvents.size() &&
+                    ctx.hitEvents[ctx.nextHitIndex].timestamp <=
+                        ctx.animateTime ) {
                 // 右端点包含当前时间、左端点排除上一时刻，避免同一边界事件重复触发。
                 // 视觉命中只取实际跨越区间，与提前调度的音效游标分开推进。
-                const auto& ev = m_ctx->hitEvents[m_ctx->nextHitIndex];
+                const auto& ev = ctx.hitEvents[ctx.nextHitIndex];
                 if ( ev.timestamp > previousAnimateTime ) {
                     triggeredEvents.push_back(ev);
                 }
-                m_ctx->nextHitIndex++;
+                ctx.nextHitIndex++;
             }
         }
-        m_ctx->hitFXSystem.update(
-            m_ctx->animateTime,
-            // 跳转时列表为空，但已恢复的持续效果仍需更新。
-            triggeredEvents,
-            m_ctx->trackCount,
-            effectiveConfig);
+        ctx.hitFXSystem.update(ctx.animateTime,
+                               // 跳转时列表为空，但已恢复的持续效果仍需更新。
+                               triggeredEvents,
+                               ctx.trackCount,
+                               effectiveConfig);
         // 节拍器在全局跳转清空预约后重排，并按画布视觉偏移换算播放时间。
         m_playback->updateMetronome(playbackJumped);
     } else {
@@ -1518,8 +1510,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
         updateAnimateTime(dt, effectiveConfig, false);
         // 暂停态仍可执行滚动动画，但不按动画经过的音符调度打击声音。
 
-        if ( std::abs(m_ctx->animateTime - previousAnimateTime) > 0.0001 ) {
-            SessionUtils::syncHitIndex(*m_ctx);
+        if ( std::abs(ctx.animateTime - previousAnimateTime) > 0.0001 ) {
+            SessionUtils::syncHitIndex(ctx);
         }
     }
 
@@ -1528,17 +1520,17 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     // 按实际播放位置而非插值前的旧位置开始预读，向后跳转也从正确的命中窗口恢复。
     // 释放当轮绕过预读节流；解码仍走后台队列，不等待结果来推进视觉或主音轨。
     // 同音轨跟随会话也能准备所需资源，但只有活动来源提交可播放的预约。
-    const bool shouldPumpBoundSounds = isActiveSession || m_ctx->isPlaying ||
-                                       m_ctx->isAudioTimelineSyncFollower;
+    const bool shouldPumpBoundSounds =
+        isActiveSession || ctx.isPlaying || ctx.isAudioTimelineSyncFollower;
     if ( shouldPumpBoundSounds &&
          (scrubReleased ||
-          currentSysTime >= m_ctx->nextBoundSoundPrefetchSystemTime) ) {
-        if ( !m_ctx->isSeekScrubbing ) prefetchBoundNoteSounds(*m_ctx);
+          currentSysTime >= ctx.nextBoundSoundPrefetchSystemTime) ) {
+        if ( !ctx.isSeekScrubbing ) prefetchBoundNoteSounds(ctx);
         Audio::AudioManager::instance().updateQueuedSoundEffectLoads();
         // 本轮接纳的冷采样可赶上未来时间点；仍未到位的预约留到下次轮询。
-        if ( m_ctx->isPlaying && !m_ctx->isSeekScrubbing )
-            retryWaitingHitSounds(*m_ctx, effectiveConfig);
-        m_ctx->nextBoundSoundPrefetchSystemTime =
+        if ( ctx.isPlaying && !ctx.isSeekScrubbing )
+            retryWaitingHitSounds(ctx, effectiveConfig);
+        ctx.nextBoundSoundPrefetchSystemTime =
             currentSysTime + BOUND_SOUND_PREFETCH_INTERVAL_SECONDS;
     }
 
@@ -1548,14 +1540,13 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     // 传输失效后即使本轮没有声音，也必须更新该状态以免下轮误判连续播放。
 
     const auto* scrollCache =
-        m_ctx->timelineRegistry.ctx().find<System::ScrollCache>();
+        ctx.timelineRegistry.ctx().find<System::ScrollCache>();
     const bool isTimelineCacheDirty = scrollCache && scrollCache->isDirty;
     const bool hasRenderDirtyState =
         // 数据变化与普通动画区分：前者需立即更新，后者可以接受快照背压。
-        m_ctx->isNoteOrderDirty || m_ctx->isNotePruneDirty ||
-        m_ctx->isNoteStatsDirty || m_ctx->isTransformDirty ||
-        m_ctx->isBpmEventsDirty || m_ctx->isMarqueeSelectionDirty ||
-        isTimelineCacheDirty;
+        ctx.isNoteOrderDirty || ctx.isNotePruneDirty || ctx.isNoteStatsDirty ||
+        ctx.isTransformDirty || ctx.isBpmEventsDirty ||
+        ctx.isMarqueeSelectionDirty || isTimelineCacheDirty;
     // 连续视野动画必须遵守自适应快照间隔，避免逻辑线程空转时无限重建快照。
     const bool forceRenderSnapshot =
         processed || playbackJumped || hasRenderDirtyState;
@@ -1570,8 +1561,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     // 主画布隐藏时仍允许独立辅助表格更新，检查请求不生成相机几何。
     // 只让活动会话发布，避免后台标签在一次切换后继续重建整份表格。
     if ( isActiveSession ) {
-        m_tables->publishAnnotationTableSnapshot(*m_ctx);
-        m_tables->publishTimingTableSnapshot(*m_ctx);
+        m_tables->publishAnnotationTableSnapshot(ctx);
+        m_tables->publishTimingTableSnapshot(ctx);
     }
 }
 
