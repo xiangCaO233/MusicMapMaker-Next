@@ -1,3 +1,4 @@
+#include "BeatmapSession_Domains.h"
 #include "logic/BeatmapSession.h"
 #include "mmm/metadata/BaseMapMeta.h"
 #include "mmm/metadata/MapMetadata.h"
@@ -876,8 +877,8 @@ void syncPreviewDragHoverTime(SessionContext&             ctx,
     double currentAbsY = cache->getAbsY(ctx.animateTime);
     // 先把压缩后的屏幕距离还原成滚动距离，再逆映射到时间。
     // 不能直接将鼠标 Y 当作毫秒或线性时间差。
-    double deltaY        = (judgmentLineY - ctx.lastMousePos.y) /
-                           static_cast<double>(renderScaleY);
+    double deltaY = (judgmentLineY - ctx.lastMousePos.y) /
+                    static_cast<double>(renderScaleY);
     ctx.previewHoverTime = cache->getTime(currentAbsY + deltaY);
 }
 }  // namespace
@@ -1242,9 +1243,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             std::filesystem::path bgPath;
             // 协作项目优先使用其独立资源根。
             // 没有项目时才回退到谱面父目录，支持单文件载入。
-            auto* project = m_ctx->collaborationProject
-                                ? m_ctx->collaborationProject.get()
-                                : engine.getCurrentProject();
+            auto*                 project      = m_ctx->collaborationProject
+                                                     ? m_ctx->collaborationProject.get()
+                                                     : engine.getCurrentProject();
             std::filesystem::path resourcePath = metadata.main_cover_path;
             const auto resourceKey = Config::pathToUtf8(resourcePath);
             // 协作资源映射可能改变本地文件位置。
@@ -1435,8 +1436,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                 note && note->m_collaborationId == practice.collaborationId,
                 note && note->m_collaborationId == practice.collaborationId &&
                         note->m_type == ::MMM::NoteType::POLYLINE
-                    ? static_cast<std::uint32_t>(note->m_subNotes.size())
-                    : 0U
+                                ? static_cast<std::uint32_t>(note->m_subNotes.size())
+                                : 0U
             };
             if ( state.alive ) {
                 // 四个教学句柄是固定上限；只复制根与前 32 个子段的值。
@@ -1591,7 +1592,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                        m_ctx->mouseCameraId == "Preview" ||
                                        m_ctx->dragCameraId == "AudioWaveform" ||
                                        m_ctx->dragCameraId == "AudioSpectrum");
-        snapshot->previewHoverTime  = m_ctx->previewHoverTime;
+        snapshot->previewHoverTime = m_ctx->previewHoverTime;
 
         // --- 注入框选状态 ---
         snapshot->isSelecting = m_ctx->isSelecting;
@@ -2081,10 +2082,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                             inspect.body = makeBeatPoint(note.m_timestamp,
                                                          note.m_trackIndex);
                         } else {
-                            inspect.kind  = HoverInspectKind::FlickHead;
-                            inspect.head  = makeBeatPoint(note.m_timestamp,
-                                                          note.m_trackIndex);
-                            inspect.track = note.m_trackIndex;
+                            inspect.kind      = HoverInspectKind::FlickHead;
+                            inspect.head      = makeBeatPoint(note.m_timestamp,
+                                                         note.m_trackIndex);
+                            inspect.track     = note.m_trackIndex;
                             inspect.showTrack = true;
                         }
                         inspect.showDtrack = true;
@@ -2452,12 +2453,19 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
 /// @note 调用不保证读到本次请求的结果；逻辑线程会独立推进。
 /// @warning UI 低频调用。请求只传递标志，数据寿命由发布槽的共享句柄承担。
 std::shared_ptr<const AnnotationTableSnapshot>
-BeatmapSession::requestAnnotationTableSnapshot()
+BeatmapSession::TableProjection::requestAnnotationTableSnapshot()
 {
     // UI 只声明需要刷新，不向逻辑线程传递参数；多次轮询可以合并。
     // 发布槽的 acquire/release 单独负责快照内容和文本的可见性。
     m_annotationTableRequested.store(true, std::memory_order_relaxed);
     return m_annotationTableSnapshot.load();
+}
+
+/// @brief 转交对当前会话表格的请求。
+std::shared_ptr<const AnnotationTableSnapshot>
+BeatmapSession::requestAnnotationTableSnapshot()
+{
+    return m_tables->requestAnnotationTableSnapshot();
 }
 
 /// @brief 在渲染缓存完成后按需发布批注表状态。
@@ -2466,10 +2474,10 @@ BeatmapSession::requestAnnotationTableSnapshot()
 /// @note 表格未请求时不为额外窗口构造字符串，也不要求有可见主画布。
 /// @warning 每轮逻辑更新可调用。无请求时只读一个 relaxed 原子；
 /// 修订未变时不复制整表或 BPM。已发布数据由 UI 共享保活以跨过会话关闭。
-void BeatmapSession::publishAnnotationTableSnapshot()
+void BeatmapSession::TableProjection::publishAnnotationTableSnapshot(
+    const SessionContext& context)
 {
     if ( !m_annotationTableRequested.load(std::memory_order_relaxed) ) return;
-    const auto& context = *m_ctx;
     const auto* beatmap = context.currentBeatmap.get();
     // 等待已有渲染缓存完成该修订。此时请求仍在，下次更新会继续处理。
     if ( beatmap && context.isAnnotationRenderCacheDirty ) return;

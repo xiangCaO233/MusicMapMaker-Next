@@ -8,11 +8,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
-#include <optional>
 #include <string>
-#include <unordered_map>
 #include <utility>
-#include <vector>
 
 namespace MMM::Config
 {
@@ -158,18 +155,12 @@ public:
     /// @brief 判断会话是否仍需低频轮询元数据尾随保存。
     /// @return 存在等待空闲期的元数据保存时返回 true。
     /// @warning 逻辑线程调度路径：只读取逻辑线程维护的布尔状态。
-    bool hasPendingMetadataAutoSave() const
-    {
-        return m_metadataAutoSavePending;
-    }
+    bool hasPendingMetadataAutoSave() const;
 
     /// @brief 判断当前会话是否有可能覆盖磁盘资源改名结果的后台谱面保存。
     /// @return 后台保存已启动且尚未由逻辑线程提交时返回 true。
     /// @warning 仅在 SessionRegistry 锁保护下的低频资源操作入口读取。
-    [[nodiscard]] bool hasInFlightBeatmapSave() const
-    {
-        return static_cast<bool>(m_asyncSaveOperation);
-    }
+    [[nodiscard]] bool hasInFlightBeatmapSave() const;
 
     /// @brief 记录外部媒体资源改名，供尚未消费的元数据命令迁移旧路径。
     /// @param oldPath 改名前的项目相对路径。
@@ -201,58 +192,12 @@ private:
     void flushDeferredBeatmapSync(double currentSysTime, bool processed,
                                   bool isBusy);
 
-    /// @brief 在元数据停止变化且会话空闲后执行一次尾随自动保存。
-    /// @param currentSysTime 当前单调系统时间（秒）。
-    /// @param isEditingBusy 当前会话是否仍处于编辑或命令堆积状态。
-    /// @warning 逻辑热路径：普通帧只做常量级状态判断；仅空闲超时分支允许
-    /// 调用同步文件保存流程。
-    void flushDeferredMetadataAutoSave(double currentSysTime,
-                                       bool   isEditingBusy);
-
-    /// @brief 消费全局配置允许的事件请求并推进定时/事件自动保存。
-    /// @param currentSysTime 当前单调系统时间（秒）。
-    /// @param isEditingBusy 当前会话是否仍处于连续交互或命令堆积状态。
-    /// @param config 当前软件全局自动保存配置。
-    /// @warning 逻辑热路径：普通帧只做常量级状态判断；仅到期且存在未保存
-    /// 修改的低频分支允许同步谱面并访问文件系统。
-    void flushConfiguredAutoSave(double currentSysTime, bool isEditingBusy,
-                                 const Config::AutoSaveConfig& config);
-
-    /// @brief 消费有效项目配置允许的事件请求并推进谱面自动备份。
-    /// @param currentSysTime 当前单调系统时间（秒）。
-    /// @param isEditingBusy 当前会话是否仍处于连续交互或命令堆积状态。
-    /// @param config 项目覆盖后的有效自动备份配置。
-    /// @warning 逻辑热路径：普通帧只做常量级状态判断；仅到期且有新修改的
-    /// 低频分支允许同步谱面、写文件并轮转备份。
-    void flushConfiguredAutoBackup(double currentSysTime, bool isEditingBusy,
-                                   const Config::AutoBackupConfig& config);
-
     /// @brief 消费并路由指令队列中的所有命令
     /// @return 如果处理了至少一个指令，则返回 true
     /// @warning 逻辑热路径：每个 Session update 调用；普通帧只检查空队列，
     /// 仅低频元数据命令允许同步自动采样领域数据，纯物件协作同步期间可复制一次
     /// 活跃画笔草稿以保持未结束手势。
     bool processCommands();
-
-    /// @brief 在逻辑线程提交当前谱面快照的后台保存任务。
-    /// @param cmd 保存来源、格式与覆盖策略。
-    /// @return 已启动任务、已发布冲突或无需保存时返回 true；当前会话已有保存
-    /// 任务时返回 false，由命令循环延后重试。
-    /// @warning 低频保存入口：只同步已标脏领域并复制一次完整
-    /// BeatMap；文件编码、 哈希和写入在独立文件池中执行，不占用 UI
-    /// 每帧等待的通用线程池。
-    bool beginAsyncBeatmapSave(const CmdSaveBeatmap& cmd);
-
-    /// @brief 轮询并提交已经完成的后台保存结果。
-    /// @warning 逻辑热路径：每次 update 只做一次非阻塞 future 状态检查；完成
-    /// 分支才更新项目路径、保存点和项目配置。
-    void finalizeAsyncBeatmapSave();
-
-    /// @brief 同步保存当前谱面，供关闭项目与打包前的强制提交边界使用。
-    /// @param cmd 保存来源、格式与覆盖策略。
-    /// @return 谱面文件写入并完成会话提交时返回 true。
-    /// @warning 低频阻塞路径：只允许必须在返回前确认落盘的生命周期事务调用。
-    bool saveBeatmapBlocking(const CmdSaveBeatmap& cmd);
 
     /// @brief 在入队与消费边界统一拦截离线房间谱面的编辑命令。
     /// @param cmd 待检查命令。
@@ -329,38 +274,9 @@ private:
         const CmdUpdateBeatmapMetadata& cmd);
     void handleCommand(const CmdMarkBeatmapMetadataDirty& cmd);
 
-    /// @brief 在渲染缓存之后投影批注表。
-    /// @warning 每次活动会话更新可调用，无请求时只检查标志。
-    void publishAnnotationTableSnapshot();
-
-    /// @brief 按需投影当前谱面完整的时间点表格。
-    /// @warning 每轮活动会话更新可调用，无请求仅检查一个标志。
-    void publishTimingTableSnapshot();
-
-    /// @brief UI 写、逻辑线程读写。连续请求合并，relaxed 只传递意图。
-    /// @warning 活动会话每轮检查，关表后不启动新的全表投影。
-    std::atomic<bool> m_timingTableRequested{ false };
-
-    /// @brief 逻辑线程发布、UI 读取，保活已排序的时间点表格数据。
-    /// @warning 请求或发布时复制句柄，旧表跨编辑或会话销毁继续有效。
-    PublishedSharedPtr<const TimingTableSnapshot> m_timingTableSnapshot;
-
-    /// @brief 逻辑侧已经投影的滚动缓存修订，载入时清空以撤回已有发布。
-    /// @note 由唯一写者直接查询，避免每次比较时复制已发布的共享句柄。
-    std::optional<std::uint64_t> m_timingTableRevision;
-
-    /// @brief UI 轮询设置标志，逻辑更新消费合并的待处理请求。
-    /// @warning 每次活动逻辑更新可能读取一次，relaxed 仅传递请求，不传数据。
-    std::atomic<bool> m_annotationTableRequested{ false };
-    /// @brief 逻辑写、UI 读的快照发布槽，对象独立于会话生命周期。
-    /// @warning 只在请求时读取或发布共享句柄，不持有会话更新锁供 UI 访问。
-    PublishedSharedPtr<const AnnotationTableSnapshot> m_annotationTableSnapshot;
-    /// @brief 逻辑侧记录最后投影的谱面身份，仅比较地址，不借用或解引用旧实例。
-    const ::MMM::BeatMap* m_annotationTableBeatmap{};
-    /// @brief 已发布批注行的逻辑缓存修订。
-    std::uint64_t m_annotationTableRevision{};
-    /// @brief 已发布拍位锚点的滚动缓存修订。
-    std::uint64_t m_annotationTableTimingRevision{};
+    /// @brief 会话期间稳定存在的只读表格投影器。
+    struct TableProjection;
+    std::unique_ptr<TableProjection> m_tables;
 
     std::unique_ptr<SessionContext>        m_ctx;          ///< 共享上下文状态
     std::unique_ptr<PlaybackController>    m_playback;     ///< 播放控制器
@@ -372,32 +288,9 @@ private:
     /// @brief 会话构造时分配一次，入队和 update 期间不替换其地址。
     std::unique_ptr<CommandState> m_commands;
 
-    /// @brief 后台保存任务及其逻辑线程提交信息的私有实现。
-    struct AsyncSaveOperation;
-
-    /// @brief 当前会话唯一的后台谱面保存任务。
-    /// @warning 逻辑线程独占；后台任务只持有独立谱面副本和 future 共享状态。
-    std::shared_ptr<AsyncSaveOperation> m_asyncSaveOperation;
-
-    /// @brief 一次文件改名及提交它时的会话代次。
-    struct ResourceRenameAlias {
-        /// @brief 改名前的项目相对路径。
-        std::filesystem::path m_oldPath;
-
-        /// @brief 改名后的项目相对路径。
-        std::filesystem::path m_newPath;
-
-        /// @brief 改名提交后的单调代次。
-        std::uint64_t m_generation{ 0U };
-    };
-
-    /// @brief 供入队生产者标记元数据命令所属资源身份代次。
-    /// @warning UI 线程仅对元数据命令读取，逻辑线程只在显式改名时写入；
-    /// relaxed 足够，因为两端只传递数字身份，别名数据仍由会话锁保护。
-    std::atomic_uint64_t m_resourceRenameGeneration{ 0U };
-
-    /// @brief 改名后的旧路径映射，仅迁移早于对应代次入队的元数据命令。
-    std::vector<ResourceRenameAlias> m_resourceRenameAliases;
+    /// @brief 管理自动保存、备份、文件基线及在途写入。
+    struct Persistence;
+    std::unique_ptr<Persistence> m_persistence;
 
     /// @brief 当前低频谱面变化观察者。
     /// @warning UI 绑定或解绑，逻辑仅在已有变更、首次同步或权威提交时获取，
@@ -436,16 +329,6 @@ private:
         static_cast<std::uint8_t>(::MMM::BeatmapMutationFlags::All)
     };
 
-    /// @brief UI 与谱面切换路径提交、逻辑线程消费的自动保存事件位。
-    /// @warning 多个低频生产者执行 relaxed fetch_or，逻辑线程每 update
-    /// 执行一次 relaxed exchange；事件仅用于唤醒保存调度，不承载其它数据。
-    std::atomic_uint8_t m_requestedAutoSaveTriggers{ 0U };
-
-    /// @brief UI 与谱面切换路径提交、逻辑线程消费的自动备份事件位。
-    /// @warning 多个低频生产者执行 relaxed fetch_or，逻辑线程每 update
-    /// 执行一次 relaxed exchange；事件不承载谱面数据或生命周期。
-    std::atomic_uint8_t m_requestedAutoBackupTriggers{ 0U };
-
     /// @brief 当前离线周期是否已经发布过编辑拦截提示。
     /// @warning 多命令生产线程写入；用于把连续鼠标命令合并为一次 UI 提示。
     std::atomic_bool m_offlineEditBlockedNotificationSent{ false };
@@ -456,43 +339,10 @@ private:
         0.0
     };  ///< 最近一次刷新延迟同步的时间
 
-    /// @brief 是否有元数据编辑正在等待尾随自动保存。
-    bool m_metadataAutoSavePending{ false };
-
-    /// @brief 下一次更新是否需要重置元数据自动保存空闲计时点。
-    bool m_metadataAutoSaveTimerNeedsReset{ false };
-
-    /// @brief 最近一次元数据编辑后的自动保存计时点（秒）。
-    double m_lastMetadataUpdateTime{ 0.0 };
-
-    /// @brief 是否有已启用的编辑器事件正在等待会话空闲后自动保存。
-    bool m_triggeredAutoSavePending{ false };
-
-    /// @brief 当前定时自动保存周期的下一次截止时间（单调秒）。
-    double m_timedAutoSaveDeadline{ 0.0 };
-
-    /// @brief 最近一次用于生成截止时间的定时间隔秒数。
-    double m_timedAutoSaveIntervalSeconds{ 0.0 };
-
-    /// @brief 是否有已启用的编辑器事件正在等待会话空闲后自动备份。
-    bool m_triggeredAutoBackupPending{ false };
-
-    /// @brief 谱面自上次成功备份后是否又产生了持久化内容变化。
-    bool m_autoBackupDirty{ false };
-
-    /// @brief 当前定时自动备份周期的下一次截止时间（单调秒）。
-    double m_timedAutoBackupDeadline{ 0.0 };
-
-    /// @brief 最近一次用于生成备份截止时间的定时间隔秒数。
-    double m_timedAutoBackupIntervalSeconds{ 0.0 };
-
     /// @brief 最近一次生成渲染快照的单调系统时间（秒）。
     /// @warning 逻辑热路径：每 update 读取，只有发布渲染快照后写入；用于给
     /// RenderSnapshot 生成施加背压，避免压低逻辑 UPS。
     double m_lastRenderSnapshotTime{ 0.0 };
-
-    /// @brief 当前会话已加载或成功保存过的谱面文件哈希，键为规范化路径。
-    std::unordered_map<std::string, std::uint64_t> m_savedBeatmapFileHashes;
 };
 
 }  // namespace MMM::Logic

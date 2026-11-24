@@ -1,5 +1,6 @@
 #include "logic/BeatmapSession.h"
 #include "BeatmapSession_CommandState.h"
+#include "BeatmapSession_Domains.h"
 #include "audio/AudioManager.h"
 #include "common/LogicCommandMutationClassification.h"
 #include "common/LogicCommands.h"
@@ -293,7 +294,10 @@ double sanitizeTimelineZoom(double zoom)
 /// @brief 建立会话上下文、领域控制器和时间线缓存失效连接。
 /// @note 控制器借用同一上下文，必须先构造上下文再创建控制器。
 /// @note 初始化只建立运行期状态，谱面内容通过后续加载命令进入会话。
-BeatmapSession::BeatmapSession() : m_commands(std::make_unique<CommandState>())
+BeatmapSession::BeatmapSession()
+    : m_tables(std::make_unique<TableProjection>())
+    , m_commands(std::make_unique<CommandState>())
+    , m_persistence(std::make_unique<Persistence>())
 {
     // 会话持有所有权，各领域控制器共享数据但不各自复制会话状态。
     m_ctx         = std::make_unique<SessionContext>();
@@ -328,7 +332,7 @@ void BeatmapSession::pushCommand(LogicCommand&& cmd)
         // 仅元数据命令读取改名代次，其他鼠标和渲染命令不承担额外原子访问。
         // 后续资源改名只迁移入队时仍旧的路径，不改变新选择的文件身份。
         metadata->m_resourceRenameGeneration =
-            m_resourceRenameGeneration.load(std::memory_order_relaxed);
+            m_persistence->resourceRenameGeneration();
     }
     // 不在提交线程直接执行命令，维持会话状态更新的统一入口。
     m_commands->queue.enqueue(std::move(cmd));
@@ -648,8 +652,10 @@ bool BeatmapSession::needsUnlimitedPolling() const
 /// @note 不保证请求一定产生文件，消费方仍检查模式、脏数据与忙碌状态。
 /// @warning
 /// 多个事件来源写入位集合，逻辑线程交换消费；原子只承载事件位，不发布谱面数据。
-void BeatmapSession::requestAutoSave(AutoSaveTrigger trigger)
+void BeatmapSession::Persistence::requestAutoSave(AutoSaveTrigger trigger)
 {
+    // 两次写入是独立意图，不需要用原子发布所借用的 SessionContext。
+    // 消费者的配置读取仍发生在持有会话锁的逻辑侧。
     // 位并集保留不同来源的事件，同类重复请求合并；此处不执行磁盘写入。
     const auto triggerBit = autoSaveTriggerBit(trigger);
     // 两个消费者使用独立原子位集合，先处理保存不会吞掉备份所需的同一事件。
@@ -659,13 +665,35 @@ void BeatmapSession::requestAutoSave(AutoSaveTrigger trigger)
                                            std::memory_order_relaxed);
 }
 
+/// @brief 转交外部自动保存与备份信号。
+/// @warning 低频跨线程路径。持久化组件的地址在会话创建后保持稳定；
+/// 此调用不获取会话锁，也不复制会话的共享所有权。
+void BeatmapSession::requestAutoSave(AutoSaveTrigger trigger)
+{
+    m_persistence->requestAutoSave(trigger);
+}
+
+/// @brief 查询是否仍有未触发的元数据尾随保存。
+/// @warning 逻辑调度路径。只读会话已持有的组件，不轮询 future。
+bool BeatmapSession::hasPendingMetadataAutoSave() const
+{
+    return m_persistence->hasPendingMetadataAutoSave();
+}
+
+/// @brief 查询磁盘写入结果是否仍等待会话提交。
+/// @note 即使文件池已完成，等待逻辑线程提交的保存也继续拦截资源改名。
+bool BeatmapSession::hasInFlightBeatmapSave() const
+{
+    return m_persistence->hasInFlightBeatmapSave();
+}
+
 /// @brief 判断后台会话是否仍需轮询自动保存或自动备份。
 /// @param saveConfig 全局保存调度策略。
 /// @param backupConfig 项目覆盖后的备份调度策略。
 /// @return 存在待处理请求或满足定时轮询条件时返回 true。
 /// @warning 调度热路径只读取请求位和会话状态；请求位由事件来源跨线程写入。
-bool BeatmapSession::needsAutoSavePolling(
-    const Config::AutoSaveConfig&   saveConfig,
+bool BeatmapSession::Persistence::needsAutoSavePolling(
+    const SessionContext& context, const Config::AutoSaveConfig& saveConfig,
     const Config::AutoBackupConfig& backupConfig) const
 {
     // 后台保存 future 需要低频完成轮询；不把它伪装成命令以免 Unlimited 空转。
@@ -679,13 +707,24 @@ bool BeatmapSession::needsAutoSavePolling(
     const bool needsTimedSave =
         // 定时任务只为实际有待保存数据的会话保留轮询，避免空白页无效唤醒。
         saveConfig.mode == Config::AutoSaveMode::Timed &&
-        m_ctx->currentBeatmap && m_ctx->actionStack.isDirty();
+        context.currentBeatmap && context.actionStack.isDirty();
     const bool needsTimedBackup =
         // 备份使用独立脏状态，普通保存是否清理撤销栈不能替代备份判断。
         backupConfig.mode == Config::AutoSaveMode::Timed &&
-        m_ctx->currentBeatmap && m_autoBackupDirty;
+        context.currentBeatmap && m_autoBackupDirty;
     // 保存与备份任一需要推进就保持轮询，不能因另一项关闭而让任务饿死。
     return needsTimedSave || needsTimedBackup;
+}
+
+/// @brief 根据有效配置与当前脏状态决定后台会话是否还需维护。
+/// @warning 逻辑调度热路径。以借用方式读取上下文和配置，不复制谱面或快照。
+bool BeatmapSession::needsAutoSavePolling(
+    const Config::AutoSaveConfig&   saveConfig,
+    const Config::AutoBackupConfig& backupConfig) const
+{
+    // 脏标志由逻辑线程按当前谱面读取，调度器不保存可能在载图时失效的模型地址。
+    return m_persistence->needsAutoSavePolling(
+        *m_ctx, saveConfig, backupConfig);
 }
 
 /// @brief 在用户停止 note 编辑一段时间后同步 BeatMap 数据。
@@ -737,8 +776,8 @@ void BeatmapSession::flushDeferredBeatmapSync(double currentSysTime,
 /// @note 请求计时重置优先于超时判断，刚发生的元数据编辑不能沿用旧截止点保存。
 /// @warning 逻辑热路径：普通帧只做常量级状态判断；仅空闲超时分支允许
 /// 调用同步文件保存流程。
-void BeatmapSession::flushDeferredMetadataAutoSave(double currentSysTime,
-                                                   bool   isEditingBusy)
+void BeatmapSession::Persistence::flushDeferredMetadataAutoSave(
+    SessionContext& context, double currentSysTime, bool isEditingBusy)
 {
     if ( !m_metadataAutoSavePending ) return;
 
@@ -755,7 +794,7 @@ void BeatmapSession::flushDeferredMetadataAutoSave(double currentSysTime,
         return;
     }
 
-    (void)flushPendingMetadataAutoSave();
+    (void)flushPendingMetadataAutoSave(context);
     // 保存结果由实际保存入口维护，此处不根据调用发生就擅自清除待保存状态。
 }
 
@@ -765,8 +804,9 @@ void BeatmapSession::flushDeferredMetadataAutoSave(double currentSysTime,
 /// @param config 当前有效的全局自动保存配置。
 /// @note 事件位按种类合并，不保存同类事件次数，不能据此生成逐事件保存历史。
 /// @warning 周期检查只更新状态；到期且非编辑忙碌时可进入同步文件保存流程。
-void BeatmapSession::flushConfiguredAutoSave(
-    double currentSysTime, bool isEditingBusy,
+std::optional<BeatmapSaveKind>
+BeatmapSession::Persistence::takeConfiguredAutoSave(
+    const SessionContext& context, double currentSysTime, bool isEditingBusy,
     const Config::AutoSaveConfig& config)
 {
     // 一次交换取得此前累积的事件；交换后到达的请求留给下一轮处理。
@@ -787,8 +827,8 @@ void BeatmapSession::flushConfiguredAutoSave(
 
     const bool hasUnsavedChanges =
         // 元数据可能不在撤销栈中，因此不能只检查 actionStack 的保存深度。
-        m_ctx->currentBeatmap &&
-        (m_ctx->actionStack.isDirty() || m_metadataAutoSavePending);
+        context.currentBeatmap &&
+        (context.actionStack.isDirty() || m_metadataAutoSavePending);
 
     if ( config.mode == Config::AutoSaveMode::Timed ) {
         // 定时和事件模式互斥，切换模式时不继承旧事件形成的待保存标记。
@@ -799,21 +839,19 @@ void BeatmapSession::flushConfiguredAutoSave(
             // 初次启用或用户修改间隔时从现在重新计时，不追补旧周期。
             m_timedAutoSaveIntervalSeconds = intervalSeconds;
             m_timedAutoSaveDeadline        = currentSysTime + intervalSeconds;
-            return;
+            return std::nullopt;
         }
         if ( currentSysTime < m_timedAutoSaveDeadline || isEditingBusy ) {
-            return;
+            return std::nullopt;
         }
 
         m_timedAutoSaveDeadline = currentSysTime + intervalSeconds;
         // 下一周期以实际处理时刻为基准，忙碌造成的延迟不会引发补偿式连环保存。
         // 无脏数据也推进下一截止点，避免到期后每轮重复执行到期分支。
         if ( hasUnsavedChanges ) {
-            handleCommand(CmdSaveBeatmap{
-                .kind = BeatmapSaveKind::TimedAutoSave,
-            });
+            return BeatmapSaveKind::TimedAutoSave;
         }
-        return;
+        return std::nullopt;
     }
 
     m_timedAutoSaveDeadline = 0.0;
@@ -822,20 +860,19 @@ void BeatmapSession::flushConfiguredAutoSave(
     // 关闭自动保存不删除谱面脏状态，只清除该调度器不再适用的请求。
     if ( config.mode != Config::AutoSaveMode::EventTriggered ) {
         m_triggeredAutoSavePending = false;
-        return;
+        return std::nullopt;
     }
-    if ( !m_triggeredAutoSavePending ) return;
+    if ( !m_triggeredAutoSavePending ) return std::nullopt;
 
-    if ( isEditingBusy ) return;
+    if ( isEditingBusy ) return std::nullopt;
 
     m_triggeredAutoSavePending = false;
     if ( hasUnsavedChanges ) {
         // 触发事件是一次请求，不因保存失败自动恢复同一个事件位。
         // 先消费触发状态，再进入保存命令；无修改时不生成额外写盘。
-        handleCommand(CmdSaveBeatmap{
-            .kind = BeatmapSaveKind::TriggeredAutoSave,
-        });
+        return BeatmapSaveKind::TriggeredAutoSave;
     }
+    return std::nullopt;
 }
 
 /// @brief 消费有效项目配置允许的事件请求并推进谱面自动备份。
@@ -844,8 +881,8 @@ void BeatmapSession::flushConfiguredAutoSave(
 /// @param config 项目覆盖后得到的有效备份策略。
 /// @note 备份与保存有各自的事件交换和截止时间，不能共用其中一方已消费的请求位。
 /// @warning 到期备份会同步完整模型并访问文件系统，仅在非编辑忙碌分支执行。
-void BeatmapSession::flushConfiguredAutoBackup(
-    double currentSysTime, bool isEditingBusy,
+void BeatmapSession::Persistence::flushConfiguredAutoBackup(
+    SessionContext& context, double currentSysTime, bool isEditingBusy,
     const Config::AutoBackupConfig& config)
 {
     const std::uint8_t requestedTriggers =
@@ -894,20 +931,20 @@ void BeatmapSession::flushConfiguredAutoBackup(
         shouldBackup                 = m_autoBackupDirty;
     }
 
-    if ( !shouldBackup || !m_ctx->currentBeatmap ) return;
+    if ( !shouldBackup || !context.currentBeatmap ) return;
     // 触发已消费但数据仍脏；缺少项目上下文时等待后续有效触发，不制造无归属副本。
     // 备份依赖正式项目根目录，无项目或无根路径时不能推导备份归属位置。
     auto* project = EditorEngine::instance().getCurrentProject();
     if ( !project || project->m_projectRoot.empty() ) return;
 
-    m_ctx->m_needsTimingsSync = true;
+    context.m_needsTimingsSync = true;
     // 强制把时间线和物件当前状态回写到模型，不能备份仍滞后的缓存快照。
-    m_ctx->m_needsNotesSync = true;
-    SessionUtils::syncBeatmap(*m_ctx);
-    const auto sourcePath = m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
+    context.m_needsNotesSync = true;
+    SessionUtils::syncBeatmap(context);
+    const auto sourcePath = context.currentBeatmap->m_baseMapMetadata.map_path;
     // 源路径用于确定谱面归属，实际输出和轮转由备份服务统一管理。
     const auto result =
-        BeatmapBackupService::createBackup(*m_ctx->currentBeatmap,
+        BeatmapBackupService::createBackup(*context.currentBeatmap,
                                            project->m_projectRoot,
                                            sourcePath,
                                            config.maxBackupCount);
@@ -952,17 +989,26 @@ void BeatmapSession::flushConfiguredAutoBackup(
 /// @note 此强制刷新入口允许覆盖外部修改，不能当成无副作用的状态查询。
 /// @warning 低频阻塞路径：仅允许逻辑线程在打包、项目关闭或尾随自动保存
 /// 超时时调用；可能同步谱面数据、访问文件系统并保存项目配置。
-bool BeatmapSession::flushPendingMetadataAutoSave()
+bool BeatmapSession::Persistence::flushPendingMetadataAutoSave(
+    SessionContext& context)
 {
     if ( !m_metadataAutoSavePending ) return true;
     // 无待处理元数据仅表示本入口无需工作，不承诺其他数据域已经全部落盘。
     // 尚未关联谱面时不能完成待处理保存，保留请求供调用方处理失败。
-    if ( !m_ctx->currentBeatmap ) return false;
+    if ( !context.currentBeatmap ) return false;
 
-    return saveBeatmapBlocking(CmdSaveBeatmap{
-        .allowExternallyModifiedOverwrite = true,
-        .kind                             = BeatmapSaveKind::TriggeredAutoSave,
-    });
+    return saveBeatmapBlocking(context,
+                               CmdSaveBeatmap{
+                                   .allowExternallyModifiedOverwrite = true,
+                                   .kind = BeatmapSaveKind::TriggeredAutoSave,
+                               });
+}
+
+/// @brief 在关闭、载图或打包边界确认尾随元数据已落盘。
+/// @warning 此入口可能阻塞；失败依旧保留实际保存逻辑恢复的请求。
+bool BeatmapSession::flushPendingMetadataAutoSave()
+{
+    return m_persistence->flushPendingMetadataAutoSave(*m_ctx);
 }
 
 /// @brief 为打包流程立即保存当前会话中的全部未落盘修改。
@@ -970,19 +1016,28 @@ bool BeatmapSession::flushPendingMetadataAutoSave()
 /// @note 这里只准备当前会话的源文件，不创建谱包，也不保存其他会话。
 /// @warning
 /// 低频阻塞路径：仅允许逻辑线程在打包前调用；会同步完整谱面并访问文件系统。
-bool BeatmapSession::saveDirtyBeatmapForPackaging()
+bool BeatmapSession::Persistence::saveDirtyBeatmapForPackaging(
+    SessionContext& context)
 {
-    if ( !m_ctx->currentBeatmap ) return true;
+    if ( !context.currentBeatmap ) return true;
     // 没有关联谱面时此会话不提供打包输入，不在这里创建空谱面文件。
-    if ( !m_metadataAutoSavePending && !m_ctx->actionStack.isDirty() ) {
+    if ( !m_metadataAutoSavePending && !context.actionStack.isDirty() ) {
         // 文件已是最新状态时跳过写入，避免打包入口产生无关保存副作用。
         return true;
     }
 
-    return saveBeatmapBlocking(CmdSaveBeatmap{
-        .allowExternallyModifiedOverwrite = true,
-        .kind                             = BeatmapSaveKind::Internal,
-    });
+    return saveBeatmapBlocking(context,
+                               CmdSaveBeatmap{
+                                   .allowExternallyModifiedOverwrite = true,
+                                   .kind = BeatmapSaveKind::Internal,
+                               });
+}
+
+/// @brief 只有当前谱面脏内容落盘后才允许打包继续。
+/// @warning 此生命周期入口可能同步磁盘写入。
+bool BeatmapSession::saveDirtyBeatmapForPackaging()
+{
+    return m_persistence->saveDirtyBeatmapForPackaging(*m_ctx);
 }
 
 /// @brief 判断本轮是否需要生成并发布渲染快照。
@@ -1177,7 +1232,7 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     // 这也让保存期间切换到其他标签后，后台会话在维护轮询中正确安装最终哈希。
     // 实际结果气泡由工作线程结束，不依赖当前标签是否仍然可见或会话是否存活。
     // 项目路径只在当前谱面身份仍与任务启动时一致时更新，避免跨载图提交。
-    finalizeAsyncBeatmapSave();
+    m_persistence->finalizeAsyncBeatmapSave(*m_ctx);
     // 保存有效配置副本供本轮控制器读取，避免持有调用方配置对象的可变引用。
     // 先接收同谱面草稿的新版本，再处理当前会话命令，避免从旧基线编辑。
     ProjectDraftLaneService::refreshIfChanged(*m_ctx);
@@ -1260,8 +1315,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
             // 已有干净缓存时仍响应表格轮询，无需为此生成完整渲染快照。
             // 两个请求彼此独立，开启时间点表不触发额外的批注文字投影。
             if ( isActiveSession ) {
-                publishAnnotationTableSnapshot();
-                publishTimingTableSnapshot();
+                m_tables->publishAnnotationTableSnapshot(*m_ctx);
+                m_tables->publishTimingTableSnapshot(*m_ctx);
             }
             // 这里跳过空闲尾部工作，不丢弃此前已经消费的命令或资源状态变化。
             return;
@@ -1272,13 +1327,22 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     const bool isMetadataEditingBusy =
         // 文件持久化仅避开编辑与命令处理，单纯播放不被算作编辑忙碌。
         isInteracting || processed || hasPendingCommands();
-    flushConfiguredAutoSave(currentSysTime,
-                            isMetadataEditingBusy,
-                            effectiveConfig.settings.autoSave);
-    flushConfiguredAutoBackup(currentSysTime,
-                              isMetadataEditingBusy,
-                              effectiveConfig.settings.autoBackup);
-    flushDeferredMetadataAutoSave(currentSysTime, isMetadataEditingBusy);
+    // 组件只选出调度结果，实际保存仍经过命令入口，以便在途任务占用时排队。
+    // 保持自动保存、独立备份、尾随元数据的原更新顺序，避免调度之间改变脏状态判断。
+    if ( const auto kind = m_persistence->takeConfiguredAutoSave(
+             *m_ctx,
+             currentSysTime,
+             isMetadataEditingBusy,
+             effectiveConfig.settings.autoSave) ) {
+        handleCommand(CmdSaveBeatmap{ .kind = *kind });
+    }
+    m_persistence->flushConfiguredAutoBackup(
+        *m_ctx,
+        currentSysTime,
+        isMetadataEditingBusy,
+        effectiveConfig.settings.autoBackup);
+    m_persistence->flushDeferredMetadataAutoSave(
+        *m_ctx, currentSysTime, isMetadataEditingBusy);
     // lastSnapshotTime 在此是轻量轮询节流基准，实际渲染发布另有独立时间字段。
     m_ctx->lastSnapshotTime = currentSysTime;
 
@@ -1495,8 +1559,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     // 主画布隐藏时仍允许独立辅助表格更新，检查请求不生成相机几何。
     // 只让活动会话发布，避免后台标签在一次切换后继续重建整份表格。
     if ( isActiveSession ) {
-        publishAnnotationTableSnapshot();
-        publishTimingTableSnapshot();
+        m_tables->publishAnnotationTableSnapshot(*m_ctx);
+        m_tables->publishTimingTableSnapshot(*m_ctx);
     }
 }
 
