@@ -5,11 +5,7 @@
 #include "config/skin/translation/Translation.h"
 #include "imgui.h"
 #include "imgui_internal.h"
-#include "logic/BeatmapSession.h"
-#include "logic/EditorEngine.h"
-#include "logic/session/context/SessionContext.h"
-#include "mmm/beatmap/BeatMap.h"
-#include "mmm/project/Project.h"
+#include "logic/BeatmapSettingsSnapshot.h"
 #include "ui/Icons.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/TimeFormatUtils.h"
@@ -17,12 +13,15 @@
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
-#include <initializer_list>
+#include <future>
 #include <limits>
+#include <memory>
 #include <string_view>
-#include <system_error>
+
+#include <utility>
 #include <vector>
 
 namespace MMM::UI
@@ -138,9 +137,8 @@ void drawTrackCountStepper(Clay_BoundingBox bounds, std::int32_t trackCount,
 /// 活动会话可能先于谱面出现，此时没有可供搜索导航定位的设置行。
 /// 独立谱面也能打开表单，因此空状态以活动谱面为判断条件，工程可缺省。
 ///
-/// 页面持有 session
-/// 递归互斥锁直到布局回调执行完成，确保活动谱面、SessionContext
-/// 和元数据引用在本帧内稳定。不得把这些引用保存到函数之外。
+/// 页面借用文件线程已发布的不可变快照，不读取会话或工程可变对象。
+/// 选择、重命名和导入保留点击时的工程及谱面身份，逻辑消费时再复核。
 ///
 /// `.imd` 格式只允许编辑项目能够安全表达的字段。受格式约束的标题、封面类型、
 /// BPM 和资源控件会禁用，但版本、轨道信息和只读时长仍按现有能力展示。
@@ -154,8 +152,8 @@ void drawTrackCountStepper(Clay_BoundingBox bounds, std::int32_t trackCount,
 /// 页面不直接保存 Project 或 BeatMap 文件，也不加载音频、图片与视频内容。
 /// 资源扫描只生成候选相对路径，实际消费由音频和渲染模块负责。
 ///
-/// 元数据草稿以谱面路径变化作为切换信号。同一路径下，外部工具可能同步修改轨道
-/// 数、封面和背景字段，因此这些结构字段每帧从当前谱面刷新；正在输入的标题文本
+/// 元数据草稿以载图实例变化作为切换信号。同一实例中，外部工具可能同步修改轨道
+/// 数、封面和背景字段，因此这些结构字段随已完成的快照刷新；正在输入的标题文本
 /// 则保留在草稿中，避免其他 UI 刷新导致编辑内容丢失。
 ///
 /// 路径兼容 helper 不使用异常接口。权限错误、文件被并发删除和跨卷相对化失败都
@@ -164,26 +162,66 @@ void drawTrackCountStepper(Clay_BoundingBox bounds, std::int32_t trackCount,
 /// 文件扩展名比较统一转换为小写。此处的白名单只控制下拉候选可见性，不承担
 /// 媒体内容验证；解码器仍需独立检查实际文件格式和内容。
 ///
-/// 资源组合框关闭时不得递归扫描工程目录。打开时生成的候选只在当前布局回调内
-/// 使用，不缓存文件迭代器，也不把绝对路径写入工程资源字段。
-///
-/// 所有 ImGui 样式栈、禁用栈、ID 栈和裁剪栈必须在同一回调内成对恢复。特别是
-/// 失效资源的警告色会在弹窗打开前提前出栈，避免候选列表全部继承警告颜色。
-/// @warning UI 热路径：设置窗口打开且谱面页可见时每帧执行，并持有 session 锁；
-/// 资源目录递归扫描只应发生在对应组合框打开时，不得移动到无条件路径。
+/// 资源列表只在弹层需要时请求，文件线程合并封面和视频候选为一次扫描。
+/// 在此页没有有效目标时，不排周期性文件请求，因此首页、加载中的谱面和
+/// 已关闭的设置窗口均不会有此页读任务排队。关闭时至多有一个任务自然结束。
+/// 同时限制刷新任务数量以及候选扫描时机，避免 NFS 等慢盘把普通文件操作排到
+/// 多个同目标的设置请求之后。窗口切换和导航不等待后台任务返回。
+/// @warning UI 热路径：只读取快照、轮询 future 与绘制；禁止等待会话锁或文件
+/// IO。
 void SettingsView::drawBeatmapSettings()
 {
-    // Engine 管理活动会话、当前工程和逻辑命令队列。
-    // 本页不创建会话，也不改变当前工程选择。
-    auto& engine = Logic::EditorEngine::instance();
-    // 锁覆盖本函数与 Clay 回调执行，防止活动谱面在绘制中途被替换。
-    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
-    // shared_ptr 副本保证会话在当前设置页绘制期间存活。
-    auto session = engine.getActiveSession();
-    // Project 是 Engine 持有的非拥有观察指针，可为空以兼容独立谱面上下文。
-    auto* project = engine.getCurrentProject();
+    using namespace std::chrono_literals;
+    // 单独读取发布的活动代次。即使文件线程还没交付新数据，
+    // 标签切换也可以立刻撤下原来的表单，并禁止派发旧谱面编辑。
+    const auto active        = Logic::activeBeatmapSettingsState();
+    const auto now           = std::chrono::steady_clock::now();
+    bool       refreshed     = false;
+    bool       changedTarget = false;
+    // 只消费完成任务，关闭窗口不会等待慢盘；任务不捕获 SettingsView。
+    if ( m_beatmapSettingsJob.valid() &&
+         m_beatmapSettingsJob.wait_for(0s) == std::future_status::ready ) {
+        auto next = m_beatmapSettingsJob.get();
+        if ( next && active && next->generation == active->generation ) {
+            // 代次只标识活动标签。比较控制块是为了识别同一标签中的替换，
+            // 不能用文件名或相同字符串路径判断谱面实例是否仍是原来的对象。
+            changedTarget =
+                !m_beatmapSettings ||
+                next->generation != m_beatmapSettings->generation ||
+                next->beatmap.owner_before(m_beatmapSettings->beatmap) ||
+                m_beatmapSettings->beatmap.owner_before(next->beatmap);
+            if ( changedTarget ||
+                 (m_beatmapSettingsMedia &&
+                  next->projectRoot != m_beatmapSettingsMedia->projectRoot) ) {
+                m_beatmapSettingsMedia.reset();
+            }
+            // 普通刷新不含候选，不覆盖原来的目录结果。扫描返回空列表时
+            // 仍需要替换旧缓存，防止已删除的文件继续显示。
+            if ( next->scanned ) m_beatmapSettingsMedia = next;
+            m_beatmapSettings = std::move(next);
+            refreshed         = true;
+        } else if ( !next ) {
+            // 任务运行时可能已关掉会话。清掉旧表单和工程候选，
+            // 后续新谱面按自己的身份请求数据。
+            m_beatmapSettings.reset();
+            m_beatmapSettingsMedia.reset();
+        }
+    }
+    // 一个快照同时保有谱面身份和资源内容。扫描请求在普通刷新运行时保留，
+    // 直到能够发出下一次任务，避免下拉框恰好打开时丢掉唯一的刷新边沿。
+    if ( !m_beatmapSettingsJob.valid() && active &&
+         (m_beatmapSettingsScanRequested ||
+          now >= m_nextBeatmapSettingsRead) ) {
+        const bool scan = std::exchange(m_beatmapSettingsScanRequested, false);
+        // 只有普通刷新受读周期限制。打开资源下拉后优先在下一次可用时提交。
+        // 无需为了合并请求等待固定时长，字段编辑仍为当帧入队。
+        m_beatmapSettingsJob      = Logic::requestBeatmapSettings(scan);
+        m_nextBeatmapSettingsRead = now + 150ms;
+    }
 
-    if ( !session || !session->getContext().currentBeatmap ) {
+    if ( !m_beatmapSettings || !active ||
+         m_beatmapSettings->generation != active->generation ||
+         m_beatmapSettings->beatmap.expired() ) {
         // 没有活动谱面时只显示明确提示，不登记任何捕获空上下文的回调。
         // 空状态跳过表单布局，单独补齐表单的左侧和顶部留白。
         // 内容子窗口紧邻分类分隔线，基准坐标取自当前光标。
@@ -198,16 +236,15 @@ void SettingsView::drawBeatmapSettings()
         return;
     }
 
-    // 锁保护下借用当前谱面，路径作为切换草稿的稳定身份线索。
-    auto&       beatmap = *session->getContext().currentBeatmap;
-    std::string currentPath =
-        Config::pathToUtf8(beatmap.m_baseMapMetadata.map_path);
-    if ( m_lastBeatmapPath != currentPath ) {
-        // 切换谱面时完整刷新编辑草稿，避免上一谱面的未提交文本串入新谱面。
-        m_editingMeta     = beatmap.m_baseMapMetadata;
-        m_lastBeatmapPath = currentPath;
-    } else {
-        const auto& currentMeta = beatmap.m_baseMapMetadata;
+    // 整帧借用同一个已校验的结果。后续控件只修改草稿，
+    // 提交时还能用快照里的身份阻止操作越过异步载图边界。
+    const auto& snapshot    = *m_beatmapSettings;
+    const auto& currentMeta = snapshot.metadata;
+    const bool  project     = snapshot.hasProject;
+    if ( changedTarget ) {
+        // 身份包含载入实例，同一路径重载不会继承上一个实例的草稿。
+        m_editingMeta = currentMeta;
+    } else if ( refreshed ) {
         // 右侧工具栏和原始元数据编辑器可直接修改这些字段，设置页需要同步外部变更。
         // 这里只同步会由其他 UI
         // 即时修改的结构字段，文本输入草稿继续由本页保留。
@@ -227,195 +264,41 @@ void SettingsView::drawBeatmapSettings()
     // 文本草稿与外部结构字段同步完成后，所有控件读取同一份 m_editingMeta。
     // 后续控件统一编辑草稿引用，changed 决定是否提交完整元数据命令。
     // changed 初始为 false，纯展示、折叠和资源悬浮不会触发命令。
+    // 文件任务完成后只替换后台结果，控件仍在同一帧读写稳定草稿。
+    // 缓存恢复前继续显示最近一次已完成候选，避免编辑时下拉内容闪空。
     auto& meta    = m_editingMeta;
     bool  changed = false;
 
-    /// 从旧式相对路径开头剥离重复的工程目录名。
-    /// @param path 待检查的资源路径。
-    /// @return 成功识别时返回剥离后的规范路径，否则返回空路径。
-    ///
-    /// 仅处理相对路径，且第一段必须与当前工程根目录文件名完全一致。返回空路径
-    /// 同时表示“不适用”，调用方还需结合原路径选择回退行为。
-    auto stripProjectFolderPrefix = [&](const std::filesystem::path& path) {
-        // 缺少工程、根目录、输入或遇到绝对路径时不执行兼容剥离。
-        if ( !project || project->m_projectRoot.empty() || path.empty() ||
-             path.is_absolute() ) {
-            return std::filesystem::path{};
-        }
-
-        // 第一段必须正好是工程目录名，避免误删普通资源子目录。
-        auto iterator = path.begin();
-        if ( iterator == path.end() ||
-             *iterator != project->m_projectRoot.filename() ) {
-            return std::filesystem::path{};
-        }
-
-        // 按路径组件重新拼接剩余部分，保持平台分隔符语义。
-        std::filesystem::path stripped;
-        ++iterator;
-        for ( ; iterator != path.end(); ++iterator ) {
-            stripped /= *iterator;
-        }
-        // 词法规范化不访问文件系统，仅清理点号和冗余分隔组件。
-        return stripped.lexically_normal();
+    // 文件描述随快照发布；本帧刚改过的引用先显示原文，稍后的结果再补足状态。
+    const auto displayPath = [](const Logic::BeatmapSettingsPath& known,
+                                const std::filesystem::path&      source) {
+        return known.source == source ? known.display
+                                      : Config::pathToUtf8(source);
     };
-
-    /// 规范化准备写入元数据的工程资源路径。
-    /// @param path 用户选择或旧元数据提供的路径。
-    /// @return 优先返回可验证存在的工程相对路径，否则返回原路径的词法规范形式。
-    auto normalizeProjectResourcePath = [&](const std::filesystem::path& path) {
-        // 绝对路径和无工程上下文的路径无法安全相对化，仅做词法规范化。
-        if ( path.empty() || path.is_absolute() || !project ) {
-            return path.lexically_normal();
-        }
-
-        // 对误带工程目录名的旧相对路径，只有目标确实存在时才采用剥离结果。
-        const auto stripped = stripProjectFolderPrefix(path);
-        if ( !stripped.empty() ) {
-            // 使用 error_code 避免权限或损坏路径通过异常打断 UI 帧。
-            std::error_code filesystemError;
-            if ( std::filesystem::exists(project->m_projectRoot / stripped,
-                                         filesystemError) &&
-                 !filesystemError ) {
-                return stripped.lexically_normal();
-            }
-        }
-        // 无法验证兼容路径时保留原始相对语义，避免静默指向其他文件。
-        return path.lexically_normal();
+    const auto pathExists = [](const Logic::BeatmapSettingsPath& known,
+                               const std::filesystem::path&      source) {
+        return known.source == source && known.exists;
     };
-
-    /// 把元数据中的资源引用解析成用于存在性检查的实际路径。
-    /// @param path 可能为空、绝对或相对的资源路径。
-    /// @return 首选存在的实际路径；均不存在时返回直接拼接后的候选路径。
-    ///
-    /// 解析顺序先尊重新式工程相对路径，再尝试剥离旧式工程目录前缀。返回不存在的
-    /// directPath 可让调用方继续显示原引用并用警告色标记。
-    auto resolveProjectPath = [&](const std::filesystem::path& path) {
-        // 空值、绝对路径或无工程上下文时无需拼接工程根目录。
-        if ( path.empty() || path.is_absolute() || !project ) {
-            return path.lexically_normal();
-        }
-
-        // 新式路径直接相对工程根目录解析，优先级高于兼容分支。
-        auto directPath = (project->m_projectRoot / path).lexically_normal();
-        // error_code 路径避免文件系统异常进入每帧 UI 调用链。
-        std::error_code filesystemError;
-        if ( std::filesystem::exists(directPath, filesystemError) &&
-             !filesystemError ) {
-            return directPath;
-        }
-
-        // 直接路径不存在时，尝试旧式重复工程目录前缀。
-        const auto stripped = stripProjectFolderPrefix(path);
-        if ( !stripped.empty() ) {
-            // 兼容候选仍限制在当前工程根目录之下。
-            auto strippedPath =
-                (project->m_projectRoot / stripped).lexically_normal();
-            // 清除第一次 exists 的错误，再独立检查兼容候选。
-            filesystemError.clear();
-            if ( std::filesystem::exists(strippedPath, filesystemError) &&
-                 !filesystemError ) {
-                return strippedPath;
-            }
-        }
-
-        // 均不存在时返回首选候选，调用方据此生成一致的警告状态。
-        return directPath;
-    };
-
-    /// 生成适合在设置页中展示的工程资源路径。
-    /// @param path 元数据中保存的资源引用。
-    /// @return 优先为工程相对 UTF-8 路径，无法相对化时为绝对 UTF-8 路径。
-    auto displayProjectPath = [&](const std::filesystem::path& path) {
-        // 空引用显示为空字符串，不制造当前目录等误导性文本。
-        if ( path.empty() ) return std::string{};
-        if ( !project || path.is_relative() ) {
-            // 相对路径先应用旧格式兼容规范化，再转换为 ImGui 使用的 UTF-8。
-            return Config::pathToUtf8(normalizeProjectResourcePath(path));
-        }
-
-        // 绝对路径位于工程根目录内时缩短成相对形式，便于阅读和比较。
-        std::error_code ec;
-        auto            relativePath =
-            std::filesystem::relative(path, project->m_projectRoot, ec);
-        if ( !ec && !relativePath.empty() ) {
-            return Config::pathToUtf8(relativePath);
-        }
-        // 跨卷、权限错误或空相对结果时保留完整路径用于诊断。
-        return Config::pathToUtf8(path);
-    };
-
-    /// 收集工程根目录中扩展名符合白名单的普通文件。
-    /// @param allowedExtensions 小写且包含点号的扩展名集合。
-    /// @return 相对于工程根目录的 UTF-8 路径列表。
-    ///
-    /// 遍历跳过无权限目录和单个错误项，不因一个损坏链接或竞态删除而终止整个
-    /// 下拉框。调用只应位于已打开的资源组合框中，避免关闭状态每帧扫描工程。
-    auto collectProjectResources =
-        [&](std::initializer_list<std::string_view> allowedExtensions) {
-            // 无 Project 时没有权威资源根目录，返回空候选集合。
-            std::vector<std::string> resources;
-            if ( !project ) return resources;
-
-            // skip_permission_denied 配合 error_code 保持 UI 无异常机制。
-            std::error_code                               filesystemError;
-            std::filesystem::recursive_directory_iterator it(
-                project->m_projectRoot,
-                std::filesystem::directory_options::skip_permission_denied,
-                filesystemError);
-            std::filesystem::recursive_directory_iterator end;
-            // 根迭代器本身创建失败时直接返回空列表。
-            if ( filesystemError ) return resources;
-
-            for ( ; it != end; it.increment(filesystemError) ) {
-                if ( filesystemError ) {
-                    // 清除当前迭代错误并继续，让其他可访问资源仍能显示。
-                    filesystemError.clear();
-                    continue;
-                }
-                if ( !it->is_regular_file(filesystemError) ||
-                     filesystemError ) {
-                    // 目录、特殊文件和状态查询失败项都不作为可选资源。
-                    filesystemError.clear();
-                    continue;
-                }
-
-                // 扩展名统一转成小写，实现大小写不敏感的格式筛选。
-                auto ext = Config::pathToUtf8(it->path().extension());
-                std::transform(ext.begin(), ext.end(), ext.begin(), [](char c) {
-                    return static_cast<char>(
-                        std::tolower(static_cast<unsigned char>(c)));
-                });
-                // 白名单由调用场景提供，音频、图像与视频候选彼此隔离。
-                const bool accepted = std::any_of(
-                    allowedExtensions.begin(),
-                    allowedExtensions.end(),
-                    [&](std::string_view allowed) { return ext == allowed; });
-                if ( !accepted ) continue;
-
-                // 持久化候选转换为工程相对路径，避免工程移动后引用失效。
-                auto relativePath = std::filesystem::relative(
-                    it->path(), project->m_projectRoot, filesystemError);
-                if ( filesystemError ) {
-                    // 无法相对化的单个资源被忽略，不泄漏绝对路径到元数据候选。
-                    filesystemError.clear();
-                    continue;
-                }
-                // 下拉框只需要 UTF-8 相对路径，不在此处读取资源内容。
-                resources.push_back(Config::pathToUtf8(relativePath));
-            }
-            // 保留目录迭代顺序；本页不额外排序或去重。
-            // 调用方应把结果限制在当前打开的组合框作用域内使用。
-            return resources;
-        };
+    // 资源列表可能比当前设置早发布。同一根目录才可以继续用已有结果，
+    // 切换项目或同一标签重载时上方已经撤回旧候选。
+    const bool mediaReady =
+        m_beatmapSettingsMedia &&
+        m_beatmapSettingsMedia->projectRoot == snapshot.projectRoot;
+    // 草稿初值与后续修改只在本帧内比较，作为差量命令基线。
+    // 这样本次编辑不会把所有其它字段强行写回到异步捕获时的值。
+    // 文件状态展示仍引用已发布快照，最近一次改名可先显示草稿中的路径。
+    auto baseline = meta;
 
     // IMD 检测只依据当前谱面文件扩展名，用于控制格式不支持的编辑项。
+    // 这些限制只依赖源文件格式，不以工程资源是否扫描成功为前提。
     bool isImd = false;
-    if ( !beatmap.m_baseMapMetadata.map_path.empty() ) {
+    if ( !currentMeta.map_path.empty() ) {
         // 扩展名转换为 UTF-8 小写形式，兼容大小写不同的文件名。
-        auto ext =
-            Config::pathToUtf8(beatmap.m_baseMapMetadata.map_path.extension());
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        auto ext = Config::pathToUtf8(currentMeta.map_path.extension());
+        // 转换扩展名时先提升到 unsigned char，避免多字节文件名触发非法参数。
+        std::ranges::transform(ext, ext.begin(), [](unsigned char character) {
+            return static_cast<char>(std::tolower(character));
+        });
         if ( ext == ".imd" ) {
             // 禁用状态仅阻止 UI 写入，不改变已经加载的元数据。
             isImd = true;
@@ -606,33 +489,20 @@ void SettingsView::drawBeatmapSettings()
             TR_CACHE("ui.settings.beatmap.version").data(), meta.version, true);
         // 难度版本在 IMD 中仍允许编辑，因此显式传入 true。
 
-        // 路径行同时准备简短相对文本与悬浮提示使用的实际路径。
-        std::string relativePathStr = "";
-        std::string absolutePathStr = "";
-        if ( !beatmap.m_baseMapMetadata.map_path.empty() ) {
-            // resolveProjectPath 兼容新式与旧式工程相对路径。
-            auto absolutePath =
-                resolveProjectPath(beatmap.m_baseMapMetadata.map_path);
-            absolutePathStr = Config::pathToUtf8(absolutePath);
-            if ( project ) {
-                // 有 Project 时优先展示可迁移的相对形式。
-                relativePathStr =
-                    displayProjectPath(beatmap.m_baseMapMetadata.map_path);
-            } else {
-                // 独立谱面上下文没有相对基准，显示实际路径。
-                relativePathStr = absolutePathStr;
-            }
-        }
+        // 实际路径及显示文本均由文件线程计算，此处只借用快照。
+        // 绝对路径提示在后台已完成编码转换，界面悬浮时不查文件系统。
+        const auto& mapPath = snapshot.paths[0];
 
         addSettingItem(
             *sec,
             rowIndex,
             TR_CACHE("ui.settings.beatmap.path").data(),
             maxLabelW,
-            [relativePathStr, absolutePathStr](Clay_BoundingBox r, bool) {
-                // 路径字符串按值捕获，保证布局回调执行时缓冲仍有效。
+            [&mapPath](Clay_BoundingBox r, bool) {
+                // 布局回调在本帧结束前运行，管理器在下一帧才可能替换快照。
+                // 直接借用后台转换的字符串，避免每帧重复分配窗口路径和提示。
                 ImVec2 cursorPos = ImGui::GetCursorScreenPos();
-                ImVec2 textSize  = ImGui::CalcTextSize(relativePathStr.c_str());
+                ImVec2 textSize  = ImGui::CalcTextSize(mapPath.display.c_str());
 
                 // 超宽相对路径才计算滚动位移，完整可见时保持静止。
                 float offset       = 0.0f;
@@ -665,14 +535,14 @@ void SettingsView::drawBeatmapSettings()
                 ImGui::Dummy(ImVec2(r.width, widgetH));
                 if ( ImGui::IsItemHovered() ) {
                     // Tooltip 保留完整实际路径，滚动文本只负责紧凑展示。
-                    ImGui::SetTooltip("%s", absolutePathStr.c_str());
+                    ImGui::SetTooltip("%s", mapPath.absoluteDisplay.c_str());
                 }
 
                 // 直接提交到窗口 DrawList，使用当前主题文字颜色。
                 ImGui::GetWindowDrawList()->AddText(
                     ImVec2(cursorPos.x - offset, cursorPos.y + offsetY),
                     ImGui::GetColorU32(ImGuiCol_Text),
-                    relativePathStr.c_str());
+                    mapPath.display.c_str());
 
                 // 恢复父窗口裁剪范围，避免截断下一行。
                 ImGui::PopClipRect();
@@ -799,10 +669,10 @@ void SettingsView::drawBeatmapSettings()
                 TR_CACHE("ui.settings.beatmap.draft_tracks").data(),
                 maxLabelW,
                 [&](Clay_BoundingBox r, bool) {
-                    // SessionContext
-                    // 是当前显示数量的权威来源，至少保留一条草稿轨。
+                    // 草稿轨采用独立槽中的实时值；资源扫描不会延迟连续步进。
+                    // 只读与此表单同一代次的数量，仍至少保留一条草稿轨。
                     const auto draftTrackCount =
-                        std::max(1, session->getContext().draftTrackCount);
+                        std::max(1, active->draftTracks);
                     drawTrackCountStepper(
                         r,
                         draftTrackCount,
@@ -813,11 +683,12 @@ void SettingsView::drawBeatmapSettings()
                         [&](std::int32_t count) {
                             // 回调只向 Engine 入队，避免持锁 UI
                             // 路径直接重建轨道。
-                            engine.pushCommand(Logic::CmdUpdateDraftTrackCount{
-                                count,
-                            });
-                            // 当前帧显示值仍来自锁定的
-                            // SessionContext，下一帧读取命令结果。
+                            Logic::submitBeatmapSettingsCommand(
+                                snapshot,
+                                Logic::CmdUpdateDraftTrackCount{
+                                    count,
+                                });
+                            // 指令发往该快照绑定的谱面，重载后同一标签不会误接收。
                         });
                 });
 
@@ -828,8 +699,7 @@ void SettingsView::drawBeatmapSettings()
                 maxLabelW,
                 [&](Clay_BoundingBox r, bool) {
                     // BGM 轨允许为零，负值上下文按零显示以保护步进边界。
-                    const auto bgmTrackCount =
-                        std::max(0, session->getContext().bgmTrackCount);
+                    const auto bgmTrackCount = std::max(0, active->bgmTracks);
                     drawTrackCountStepper(
                         r,
                         bgmTrackCount,
@@ -840,9 +710,11 @@ void SettingsView::drawBeatmapSettings()
                         [&](std::int32_t count) {
                             // 专用命令维护 BGM 轨资源与 SessionContext
                             // 的一致性。
-                            engine.pushCommand(Logic::CmdUpdateBgmTrackCount{
-                                count,
-                            });
+                            Logic::submitBeatmapSettingsCommand(
+                                snapshot,
+                                Logic::CmdUpdateBgmTrackCount{
+                                    count,
+                                });
                             // 不提前修改上下文，避免 UI
                             // 与逻辑线程各自维护一份计数。
                         });
@@ -902,9 +774,9 @@ void SettingsView::drawBeatmapSettings()
             };
         /// @brief 记录资源导入请求，实际选择与复制交给锁外的低频路径。
         /// @note 目标枚举区分同名的封面与背景“导入图片”按钮。
-        // 只借用受本函数 session 锁保护的谱面；其余分组局部状态按值捕获。
+        // 回调执行在本帧结束前，工程和值身份由同一不可变快照保持。
         const auto drawResourceImportButton =
-            [this, project, beatmapPtr = &beatmap, importButtonWidth, &meta](
+            [this, project, &snapshot, importButtonWidth, &meta](
                 const char*                  label,
                 BeatmapResourceTarget        target,
                 const std::filesystem::path& resourcePath) {
@@ -912,7 +784,7 @@ void SettingsView::drawBeatmapSettings()
                 ImGui::PushID(static_cast<int>(target));
                 // 三行共享相同的按钮几何，资源路径再长也不能改变动作列宽度。
                 // 相同的隐藏按钮名在资源位置作用域内唯一，封面和背景不会串触发。
-                const bool readOnly = project && project->m_isTemporaryProject;
+                const bool readOnly = project && snapshot.readOnly;
                 ImGui::BeginDisabled(!project || readOnly);
                 /// @brief 隔离文字按钮内边距，在固定方形中居中绘制资源图标。
                 /// @return 当前按钮有效点击时返回 true。
@@ -937,9 +809,8 @@ void SettingsView::drawBeatmapSettings()
                     m_importBackgroundVideo =
                         target == BeatmapResourceTarget::Background &&
                         meta.cover_type == CoverType::VIDEO;
-                    m_resourceImportProjectRoot = project->m_projectRoot;
-                    m_resourceImportBeatmapPath =
-                        beatmapPtr->m_baseMapMetadata.map_path;
+                    m_resourceImportProjectRoot = snapshot.projectRoot;
+                    m_resourceImportBeatmapPath = snapshot.metadata.map_path;
                     // 请求仅保存值，不把 project 或 beatmap
                     // 观察指针带到弹窗下一帧。
                     // 对话框可能跨帧返回，结果必须与这两项身份重新比较。
@@ -967,9 +838,9 @@ void SettingsView::drawBeatmapSettings()
                         m_renameResourceTarget = target;
                         m_resourceRenamePath   = resourcePath;
                         // 旧路径只用于确认时的身份复核，不在本帧移动文件。
-                        m_resourceRenameProjectRoot = project->m_projectRoot;
+                        m_resourceRenameProjectRoot = snapshot.projectRoot;
                         m_resourceRenameBeatmapPath =
-                            beatmapPtr->m_baseMapMetadata.map_path;
+                            snapshot.metadata.map_path;
                         m_resourceRenameBuffer.fill('\0');
                         // 文件扩展名保留在初始输入内，用户可看见格式不变的约束。
                         // 完整清零后复制原名，短文件名不会带入上一次输入的尾部字节。
@@ -1018,18 +889,18 @@ void SettingsView::drawBeatmapSettings()
              drawClearReference](Clay_BoundingBox r, bool) {
                 /// @brief 歌曲文件提示只服务于外部格式，不决定实际播放时间线。
                 /// 空提示时回退到主音频路径，兼容本项目原生元数据。
-                const auto& audioHint        = meta.song_file_hint.empty()
-                                                   ? meta.main_audio_path
-                                                   : meta.song_file_hint;
-                std::string currentAudioPath = displayProjectPath(audioHint);
+                const auto& audioHint = meta.song_file_hint.empty()
+                                            ? meta.main_audio_path
+                                            : meta.song_file_hint;
+                std::string currentAudioPath =
+                    displayPath(snapshot.paths[1], audioHint);
                 // 预览与比较都使用规范化后的显示路径。
                 const char* audioPreview =
                     audioHint.empty() ? noResource : currentAudioPath.c_str();
 
                 // 当前引用不存在时以警告色提示，但不自动清空草稿字段。
-                bool audioExists =
-                    project &&
-                    std::filesystem::exists(resolveProjectPath(audioHint));
+                const bool audioExists =
+                    project && pathExists(snapshot.paths[1], audioHint);
                 bool audioPushed = false;
                 if ( !audioExists && !currentAudioPath.empty() ) {
                     // 仅非空失效引用需要警告，未选择资源保持普通颜色。
@@ -1058,21 +929,15 @@ void SettingsView::drawBeatmapSettings()
                         changed                     = true;
                     }
                     if ( project ) {
-                        // 只列出 Main 类型，BGM 和音效资源不能成为谱面主音频。
-                        for ( const auto& res : project->m_audioResources ) {
-                            if ( res.m_type != MMM::AudioTrackType::Main )
-                                // 非主音频保留在 Project
-                                // 清单中，但不出现在此下拉框。
-                                continue;
-                            bool isSelected = (currentAudioPath == res.m_path);
+                        // 只列出后台复制的 Main 候选，不借用工程资源容器。
+                        for ( const auto& res : snapshot.audio ) {
+                            bool isSelected = (currentAudioPath == res.path);
                             // 可见资源 ID
                             // 后附路径作为隐藏标识，避免同名资源冲突。
                             if ( ::MMM::UI::FeedbackSelectable(
-                                     (res.m_id + "##" + res.m_path).c_str(),
+                                     (res.id + "##" + res.path).c_str(),
                                      isSelected) ) {
-                                meta.song_file_hint =
-                                    normalizeProjectResourcePath(
-                                        Config::utf8ToPath(res.m_path));
+                                meta.song_file_hint = res.selection;
                                 // 选择提示字段后清空旧主音频路径，消除双重来源歧义。
                                 meta.main_audio_path.clear();
                                 meta.song_file_hint_cleared = false;
@@ -1105,18 +970,13 @@ void SettingsView::drawBeatmapSettings()
              drawClearReference](Clay_BoundingBox r, bool) {
                 // 当前显示路径经过旧前缀兼容和工程相对化。
                 std::string currentCoverPath =
-                    displayProjectPath(meta.cover_path);
+                    displayPath(snapshot.paths[2], meta.cover_path);
                 const char* coverPreview = meta.cover_path.empty()
                                                ? noResource
                                                : currentCoverPath.c_str();
 
-                // error_code 避免文件状态异常中断当前 UI 帧。
-                std::error_code coverExistsError;
-                bool            coverExists =
-                    project &&
-                    std::filesystem::exists(resolveProjectPath(meta.cover_path),
-                                            coverExistsError) &&
-                    !coverExistsError;
+                const bool coverExists =
+                    project && pathExists(snapshot.paths[2], meta.cover_path);
                 bool coverPushed = false;
                 if ( !coverExists && !currentCoverPath.empty() ) {
                     // 非空但无法解析的引用使用主题警告色。
@@ -1125,7 +985,8 @@ void SettingsView::drawBeatmapSettings()
                     coverPushed = true;
                 }
 
-                // 目录递归扫描仅在组合框打开后的分支发生。
+                // 组合框只提交目录刷新请求；磁盘访问由独立文件线程执行。
+                // 后台运行期间仍能清除引用或使用本工程上一次的候选。
                 ImGui::SetNextItemWidth(resourceComboWidth(r));
                 if ( ::MMM::UI::FeedbackBeginCombo("##CoverCombo",
                                                    coverPreview) ) {
@@ -1139,12 +1000,15 @@ void SettingsView::drawBeatmapSettings()
                         meta.cover_path.clear();
                         changed = true;
                     }
-                    if ( project ) {
-                        // 封面白名单限定常见静态图片格式。
-                        std::vector<std::string> images =
-                            collectProjectResources(
-                                { ".png", ".jpg", ".jpeg", ".bmp" });
-
+                    // IsWindowAppearing 只在候选 popup 打开的首帧产生边沿。
+                    // 保持下拉打开时借用已扫描结果，无需周期性重扫整个工程。
+                    m_beatmapSettingsScanRequested =
+                        (project && ImGui::IsWindowAppearing()) ||
+                        m_beatmapSettingsScanRequested;
+                    // 文件线程还没交付时只显示引用操作，仍可以取消或清除。
+                    // 已有候选属于当前工程时继续可选，避免刷新期间强制关闭弹窗。
+                    if ( project && mediaReady ) {
+                        const auto& images = m_beatmapSettingsMedia->images;
                         for ( const auto& imgPath : images ) {
                             // 相对路径同时作为显示文本和唯一隐藏 ID
                             // 的组成部分。
@@ -1183,19 +1047,14 @@ void SettingsView::drawBeatmapSettings()
              drawClearReference](Clay_BoundingBox r, bool) {
                 // main_cover_path 是实际背景引用，独立于缩略封面 cover_path。
                 std::string currentBgPath =
-                    displayProjectPath(meta.main_cover_path);
+                    displayPath(snapshot.paths[3], meta.main_cover_path);
                 const char* bgPreview = meta.main_cover_path.empty()
                                             ? noResource
                                             : currentBgPath.c_str();
 
-                // 存在性检查失败与明确不存在都产生同样的警告预览。
-                std::error_code bgExistsError;
-                const bool      bgExists =
+                const bool bgExists =
                     project &&
-                    std::filesystem::exists(
-                        resolveProjectPath(meta.main_cover_path),
-                        bgExistsError) &&
-                    !bgExistsError;
+                    pathExists(snapshot.paths[3], meta.main_cover_path);
                 bool bgPushed = false;
                 if ( !bgExists && !currentBgPath.empty() ) {
                     // 空引用是合法未选择状态，不使用警告颜色。
@@ -1217,25 +1076,16 @@ void SettingsView::drawBeatmapSettings()
                         meta.main_cover_path.clear();
                         changed = true;
                     }
-                    if ( project ) {
-                        // 背景类型是用户的显式选择，下拉项只展示同类型资源。
-                        // 类型切换不会自动替换既有路径，失配引用会由警告色提示。
-                        std::vector<std::string> backgroundResources;
-                        if ( meta.cover_type == MMM::CoverType::VIDEO ) {
-                            // 视频白名单覆盖当前支持的常见容器扩展名。
-                            backgroundResources =
-                                collectProjectResources({ ".mp4",
-                                                          ".avi",
-                                                          ".mkv",
-                                                          ".webm",
-                                                          ".mov",
-                                                          ".flv",
-                                                          ".m4v" });
-                        } else {
-                            // 图片背景与封面沿用同一静态图像白名单。
-                            backgroundResources = collectProjectResources(
-                                { ".png", ".jpg", ".jpeg", ".bmp" });
-                        }
+                    // IsWindowAppearing 只在候选 popup 打开的首帧产生边沿。
+                    // 保持下拉打开时借用已扫描结果，无需周期性重扫整个工程。
+                    m_beatmapSettingsScanRequested =
+                        (project && ImGui::IsWindowAppearing()) ||
+                        m_beatmapSettingsScanRequested;
+                    if ( project && mediaReady ) {
+                        const auto& backgroundResources =
+                            meta.cover_type == CoverType::VIDEO
+                                ? m_beatmapSettingsMedia->videos
+                                : m_beatmapSettingsMedia->images;
 
                         for ( const auto& backgroundPath :
                               backgroundResources ) {
@@ -1253,14 +1103,10 @@ void SettingsView::drawBeatmapSettings()
 
                                 // 如果背景是图片且封面为空，则自动沿用同一张图片。
                                 // 已有封面始终保留，避免隐式覆盖用户显式选择。
-                                auto ext =
-                                    Config::pathToUtf8(chosenPath.extension());
-                                std::transform(ext.begin(),
-                                               ext.end(),
-                                               ext.begin(),
-                                               ::tolower);
-                                if ( ext == ".png" || ext == ".jpg" ||
-                                     ext == ".jpeg" || ext == ".bmp" ) {
+                                // 两种候选在扫描时已按当前背景类型互斥分组，
+                                // 可直接判断选中项是不是图片，无需在 UI
+                                // 重查后缀。
+                                if ( meta.cover_type != CoverType::VIDEO ) {
                                     if ( meta.cover_path.empty() ) {
                                         // 使用同一工程相对路径维持封面与背景可迁移性。
                                         meta.cover_path = chosenPath;
@@ -1308,8 +1154,16 @@ void SettingsView::drawBeatmapSettings()
 
     if ( changed ) {
         // 一帧内所有元数据字段变化合并成一个逻辑命令，保持原子更新语义。
+        // 草稿初值用于提取实际变化字段，后台快照到达前已经发生的外部修改
+        // 继续由逻辑线程按消费时的最新值保留。
         // 专用轨道数量命令不设置 changed，避免与完整元数据命令重复处理。
-        engine.pushCommand(Logic::CmdUpdateBeatmapMetadata{ meta });
+        // 只有编辑发生才为差量基线分配所有权，普通绘制不增加引用计数。
+        Logic::submitBeatmapSettingsCommand(
+            snapshot,
+            Logic::CmdUpdateBeatmapMetadata{
+                .baseMeta = meta,
+                .settingsBaseline =
+                    std::make_shared<const BaseMapMeta>(std::move(baseline)) });
     }
 }
 

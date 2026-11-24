@@ -506,8 +506,8 @@ std::filesystem::path prepareMalodySaveAudio(
         resolveCurrentProjectPath(snapshot.m_baseMapMetadata.map_path);
     auto* project = MMM::Logic::EditorEngine::instance().getCurrentProject();
     const auto* resource  = project ? MMM::Logic::ProjectResourceService::
-                                          findDefaultBeatmapAudioResource(
-                                              *project, snapshot, sourcePath)
+                                         findDefaultBeatmapAudioResource(
+                                             *project, snapshot, sourcePath)
                                     : nullptr;
     auto        audioPath = snapshot.m_baseMapMetadata.song_file_hint;
     if ( resource ) {
@@ -595,6 +595,54 @@ bool baseMapMetadataEqual(const MMM::BaseMapMeta& lhs,
            lhs.map_length == rhs.map_length;
 }
 
+/// @brief 把设置页实际编辑的字段叠加到消费时模型。
+/// @param live 同一载图实例消费前已经应用了早先的指令。
+/// @param baseline 本次设置动作前界面看到的草稿字段。
+/// @param edited 当前帧控件完成变更后的草稿字段。
+/// @return 带本次变更的元数据，未改动字段仍以消费时模型为准。
+/// @note 这里只定义字段合并规则，不修改媒体布局、资源索引或播放状态。
+/// @note 文件路径和轨道迁移仍走 CmdUpdateBeatmapMetadata 原有处理器。
+/// @warning 只在消费携带设置草稿的命令时调用；不会扫描谱面或访问文件。
+MMM::BaseMapMeta mergeBeatmapSettings(const MMM::BaseMapMeta& live,
+                                      const MMM::BaseMapMeta& baseline,
+                                      const MMM::BaseMapMeta& edited)
+{
+    auto       result = live;
+    const auto apply  = [&](auto... fields) {
+        // 草稿只定义本次动作的差量，早已排队的外部改名和其它字段修改仍有效。
+        (
+            [&] {
+                if ( baseline.*fields != edited.*fields )
+                    result.*fields = edited.*fields;
+            }(),
+            ...);
+    };
+    using Meta = MMM::BaseMapMeta;
+    // 只列出设置页实际可编辑的字段，文件身份与时长留给会话维护。
+    // 资源和格式字段需要成组保留各自的差量，不能用整个旧快照替换。
+    // 持久化 BGM 和草稿轨数量不属于元数据编辑，在专用命令里调整。
+    apply(&Meta::name,
+          &Meta::title,
+          &Meta::title_unicode,
+          &Meta::artist,
+          &Meta::artist_unicode,
+          &Meta::album,
+          &Meta::author,
+          &Meta::version,
+          &Meta::preference_bpm,
+          &Meta::track_count,
+          &Meta::cover_type,
+          &Meta::video_starttime,
+          &Meta::bgxoffset,
+          &Meta::bgyoffset,
+          &Meta::main_audio_path,
+          &Meta::song_file_hint,
+          &Meta::song_file_hint_cleared,
+          &Meta::cover_path,
+          &Meta::main_cover_path);
+    return result;
+}
+
 /// @brief 在提交玩家轨道数变化前验证全部自动采样的绝对轨道迁移。
 /// @param ctx 当前会话上下文。
 /// @param oldTrackCount 当前玩家轨道数。
@@ -674,9 +722,9 @@ bool clearLinkedMainBgmSamples(MMM::Logic::SessionContext& ctx,
                               : oldMetadata.song_file_hint;
     if ( oldHint.empty() || ctx.trackCount <= 0 ) return false;
 
-    const auto* project = ctx.collaborationProject
-                              ? ctx.collaborationProject.get()
-                              : EditorEngine::instance().getCurrentProject();
+    const auto* project      = ctx.collaborationProject
+                                   ? ctx.collaborationProject.get()
+                                   : EditorEngine::instance().getCurrentProject();
     const auto  oldReference = MMM::Config::pathToUtf8(oldHint);
     auto        view         = ctx.sampleRegistry.view<const SampleComponent>();
     std::vector<entt::entity>     candidates;
@@ -2666,6 +2714,39 @@ bool BeatmapSession::processCommands()
         } else if ( !m_commands->queue.try_dequeue(cmd) ) {
             break;
         }
+        // 设置页可能比重新载图晚一帧提交，必须在消费前核对模型控制块。
+        // 这里只比较弱引用的所有权身份，不额外提升旧对象的引用计数。
+        // 校验在权限和撤销策略分类之前，旧操作不能污染任何后续副作用。
+        const auto acceptsSettingsSource = [&](const auto& source) {
+            // 普通调用方仍经原路由校验。设置页直接入队，须在逻辑线程使用同一只读门禁。
+            // 先确认模型身份，避免过期命令为当前工程弹出错误的只读提示。
+            return !source ||
+                   (m_ctx->currentBeatmap &&
+                    !source->owner_before(m_ctx->currentBeatmap) &&
+                    !m_ctx->currentBeatmap.owner_before(*source) &&
+                    !EditorEngine::instance().rejectTemporaryProjectEdit());
+        };
+        // 只有设置页命令携带控制块，其余路径仍能直接提交工具栏差量或全量元数据。
+        if ( auto* edit = std::get_if<CmdUpdateBeatmapMetadata>(&cmd) ) {
+            if ( !acceptsSettingsSource(edit->settingsSource) ) continue;
+            if ( edit->settingsBaseline && m_ctx->currentBeatmap ) {
+                // 先合并差量，再走既有权限分类、路径迁移与撤销协议。
+                // 消费前完成合并，权限策略看到的是接下来将写入的实际内容，
+                // 而不是后台快照在其它属性修改入队之前看到的旧值。
+                edit->baseMeta = mergeBeatmapSettings(
+                    m_ctx->currentBeatmap->m_baseMapMetadata,
+                    *edit->settingsBaseline,
+                    edit->baseMeta);
+            }
+        } else if ( const auto* draft =
+                        std::get_if<CmdUpdateDraftTrackCount>(&cmd) ) {
+            // 草稿轨可能触发重建，即使目标数量恰好相同也需要先校验所属谱面。
+            if ( !acceptsSettingsSource(draft->settingsSource) ) continue;
+        } else if ( const auto* bgm =
+                        std::get_if<CmdUpdateBgmTrackCount>(&cmd) ) {
+            // BGM 轨变更涉及自动采样，不能把未生效的旧内容写给重载后的轨道。
+            if ( !acceptsSettingsSource(bgm->settingsSource) ) continue;
+        }
         const bool isAsyncSave = std::holds_alternative<CmdSaveBeatmap>(cmd);
         const bool isFileOperation =
             isAsyncSave || std::holds_alternative<CmdSaveBeatmapAs>(cmd) ||
@@ -4222,9 +4303,9 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
         // 资源找不到时终止导出，不能回退成恰好同名的无效 ID。
         const auto extension = Config::pathToUtf8(savePath.extension());
         const bool isBms     = packageExtensionEquals(extension, ".bms") ||
-                               packageExtensionEquals(extension, ".bme") ||
-                               packageExtensionEquals(extension, ".bml") ||
-                               packageExtensionEquals(extension, ".pms");
+                           packageExtensionEquals(extension, ".bme") ||
+                           packageExtensionEquals(extension, ".bml") ||
+                           packageExtensionEquals(extension, ".pms");
         const bool needsResourceSnapshot =
             isBms || packageExtensionEquals(extension, ".mc");
         auto exportMap = needsResourceSnapshot

@@ -63,6 +63,7 @@ add_library(
   src/logic/EditorEngine.cpp
   # 导出对话框读取纯值快照，命名与文案不会占用会话临界区。
   src/logic/BeatmapExportPresentation.cpp
+  src/logic/BeatmapSettingsSnapshot.cpp
   # 视觉资源改名包含独立的谱面磁盘事务与会话同步，避免扩张调度主文件。
   src/logic/EditorEngine_VisualResource.cpp
   src/logic/VisualResourceRenameService.cpp
@@ -417,8 +418,10 @@ mmm_register_test_case(NAME LogoPlaceholderScissorTest COMMAND
 mmm_add_test_executable(Logic BrushPaletteSessionStateTest
                         tests/BrushPaletteSessionStateTest.cpp)
 target_link_libraries(BrushPaletteSessionStateTest PRIVATE Logic Log)
-mmm_register_test_case(NAME BrushPaletteSessionStateTest COMMAND
-                       BrushPaletteSessionStateTest)
+# 设置快照回归需要真实目录项，输出独立根留在构建目录，避免触碰项目测试资源。
+mmm_register_test_case(
+  NAME BrushPaletteSessionStateTest COMMAND BrushPaletteSessionStateTest
+  "${CMAKE_BINARY_DIR}/test_output/BrushPaletteSessionStateTest")
 
 # 注册表快照生命周期测试确保关闭会话和替换图集后旧快照可回收。 此目标检查所有权边界，不需要真实图形设备完成一帧渲染。
 mmm_add_test_executable(Logic RegistrySnapshotLifetimeTest

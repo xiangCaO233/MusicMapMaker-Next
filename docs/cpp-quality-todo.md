@@ -77,7 +77,7 @@
     - `Modules/Game/include/game/EditorApplicationService.h` · 12 注释行 / 24 代码行 · 33.33%
     - `Modules/Game/src/EditorApplicationService.cpp` · 57 注释行 / 106 代码行 · 34.97%
 
-- [ ] **PERF-05 P2 SessionContext 与 EditorEngine 的公开面跨越多职责，锁与生命周期契约暴露到 UI**
+- [x] **PERF-05 P2 SessionContext 与 EditorEngine 的公开面跨越多职责，锁与生命周期契约暴露到 UI**
 
   - `Modules/Game/Logic/include/logic/session/context/SessionContext.h:95-226` 同时拥有 ECS 注册表、教学状态、草稿合并、播放/导航、项目与协作资源、配置、相机、同步缓冲、音频 transport；`:308-411` 又包括框选、画笔、橡皮擦、撤销与剪贴板。文件 414 行，当前 Modules 非测试源有 50 处直接包含此头。
   - `Modules/Game/Logic/include/logic/BeatmapSession.h:101-105` 公开完整 const 与 mutable 上下文引用，没有在线程/锁类型层面限制。
@@ -189,6 +189,24 @@
   - 已完成导出对话框批次。四处会话读取改为 Logic 的按值命名及兼容性读模型。BMS、osu!、IMD 和 Malody 只检查对应目标所需的字段；文件名清理和警告格式化在会话锁外运行。Ninja 中 `MenuUtil.cpp` 已解除 `SessionContext.h` 依赖，新增 Logic 读模型使用该头，总活动对象扇出维持 71。
   - Linux Clang 22 RelWithDebInfo 全量构建、11 项导出相关回归及全部 221 项 CTest 通过。新增回归覆盖 Unicode 命名、BMS 采样音量、osu! 负 Scroll、IMD 元数据、Malody mode 与会话关闭后结果保活。
   - 注释／代码行数分别为 `BeatmapExportPresentation.h` 27/35、`BeatmapExportPresentation.cpp` 77/172、`MenuUtil.cpp` 216/473、`BrushPaletteSessionStateTest.cpp` 408/950、`Modules/Game/Logic/CMakeLists.txt` 148/341，均达到 30%。
+
+  - 谱面设置绘制使用不可变快照；活动代次和辅助轨计数从独立发布槽读取。逻辑线程只复制当前工程与谱面字段，文件池负责路径探测，并在封面或背景下拉打开时合并枚举图片与视频。设置写命令绑定载图实例，消费时复核只读状态并按字段合并现有修改。
+  - Linux Clang 22 RelWithDebInfo 全量构建与 221 项 CTest 通过。回归覆盖会话锁占用期间的读取与提交、按需目录枚举、工程相对路径、临时工程只读、外部字段更新保留、同路径重载拒绝旧指令及关闭会话后快照保活。
+  - Ninja 实际依赖显示 `SettingsView_BeatmapTab.cpp` 解除 `SessionContext.h`、`BeatmapSession.h` 与 `EditorEngine.h` 依赖，重类型读取移至 Logic 实现。三者在当前活动对象中的扇出分别为 71、51 和 98；新快照头由 4 个活动对象依赖。
+  - 本批逐文件注释率
+
+    | 文件 | 注释行 | 代码行 | 比例 |
+    | --- | ---: | ---: | ---: |
+    | `Modules/Game/Common/include/common/LogicCommands.h` | 439 | 612 | 41.77% |
+    | `Modules/Game/Logic/CMakeLists.txt` | 149 | 343 | 30.28% |
+    | `Modules/Game/Logic/include/logic/BeatmapSettingsSnapshot.h` | 36 | 56 | 39.13% |
+    | `Modules/Game/Logic/include/logic/EditorEngine.h` | 380 | 256 | 59.75% |
+    | `Modules/Game/Logic/src/logic/BeatmapSettingsSnapshot.cpp` | 93 | 213 | 30.39% |
+    | `Modules/Game/Logic/src/logic/EditorEngine.cpp` | 1718 | 3993 | 30.08% |
+    | `Modules/Game/Logic/src/logic/session/BeatmapSession_Commands.cpp` | 1402 | 3271 | 30.00% |
+    | `Modules/Game/Logic/tests/BrushPaletteSessionStateTest.cpp` | 472 | 1092 | 30.18% |
+    | `Modules/Game/UI/include/ui/imgui/manager/SettingsView.h` | 261 | 216 | 54.72% |
+    | `Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapTab.cpp` | 335 | 767 | 30.40% |
 
 - [x] **PERF-06 P3 离屏几何容量扩张在命令录制阶段等待全 GPU 空闲**
 

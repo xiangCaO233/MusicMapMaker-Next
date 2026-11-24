@@ -9,10 +9,12 @@
 #include "ui/IUIView.h"
 #include "ui/layout/box/CLayBox.h"
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
@@ -28,7 +30,8 @@ struct ShortcutBinding;
 namespace MMM::Logic
 {
 struct SharedResourceRenamePlan;
-}
+struct BeatmapSettingsSnapshot;
+}  // namespace MMM::Logic
 namespace MMM
 {
 struct AudioResource;
@@ -218,8 +221,18 @@ private:
     /// @brief 当前谱面设置页正在编辑的元数据副本。
     ::MMM::BaseMapMeta m_editingMeta;
 
-    /// @brief 上一次同步到元数据编辑副本的谱面路径。
-    std::string m_lastBeatmapPath;
+    /// @brief 当前绘制借用的后台结果；其内容不会被文件线程原地修改。
+    std::shared_ptr<const Logic::BeatmapSettingsSnapshot> m_beatmapSettings;
+    /// @brief 最近一次资源枚举的结果，普通元数据刷新不会重建候选。
+    std::shared_ptr<const Logic::BeatmapSettingsSnapshot>
+        m_beatmapSettingsMedia;
+    /// @brief 同时只允许一个设置读取任务，绘制只轮询已就绪的结果。
+    std::future<std::shared_ptr<const Logic::BeatmapSettingsSnapshot>>
+        m_beatmapSettingsJob;
+    /// @brief 下一次允许请求值刷新；限制打开设置时对文件线程的额外负载。
+    std::chrono::steady_clock::time_point m_nextBeatmapSettingsRead{};
+    /// @brief 资源候选弹层已打开，请在当前刷新结束后合并扫描请求。
+    bool m_beatmapSettingsScanRequested{};
 
     /// @brief 谱面资源按钮对应的导入目标；None 表示没有待处理选择。
     enum class BeatmapResourceTarget { None, Audio, Cover, Background };
