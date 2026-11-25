@@ -8,7 +8,7 @@
 使用现有 Linux Debug / Clang 23 / `SOURCES_BUILD=OFF` 构建树和全部已注册测试。
 `scripts/dev/header_fanout.py` 从 Ninja 依赖中筛选当前 compile_commands 的活动对象，按头文件去重计数。
 依赖数量不是编译耗时比例；本任务未测量冷缓存全量构建耗时。
-先前设计、提交和各批次测量保存在 [历史记录](archive/header-dependency-isolation-history-2026-10-24.md)。
+先前设计、提交和各批次测量保存在 [历史记录](https://github.com/xiangCaO233/MusicMapMaker-Next/blob/64301a82bc60dad3a452c817eece66b72a3a4086/docs/archive/header-dependency-isolation-history-2026-10-24.md)。
 
 ## 已完成的主要边界
 
