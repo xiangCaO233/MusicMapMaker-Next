@@ -512,6 +512,12 @@ bool hasConcurrentBurstNotes(const std::shared_ptr<const BeatMap>& beatmap,
 /// 因此撤回与重做分别在权限为零的条件下运行，确认房主操作不再向
 /// 被撤回成员请求执行其本地 Undo。访客仅被动接受权威补偿修订。
 ///
+/// @par 编辑授权前置条件
+/// 连接成功只表示能够接收快照和参与跟随，新访客仍按产品约定默认只读。
+/// 完整编辑模式先确认初始权限为零，再经房主接口授予权限，等待真实广播到达。
+/// 只有两端权限事实一致后才提交并发增量，避免把未发送误判为合并丢失。
+/// 独立跟随模式在授权前结束，因此仍验证只读访客具备跟随能力。
+///
 /// @par 断线清理不变量
 /// 房主断开后，访客不仅要离开 Connected，还必须清除 peer ID、参与者列表、
 /// 视口缓存和权限。保留非空 lastError 与唯一 HostDisconnected 日志，使上层
@@ -790,6 +796,33 @@ bool testPublicDirectoryWebRtcRoom(bool followOnly = false)
     // 按模式明确隔离验收范围，不能将本返回值当作并发编辑和历史测试通过。
     if ( followOnly ) return true;
 
+    // 新加入的访客默认只读；完整编辑探针必须先经房主授权并观察到权限广播。
+    // 否则访客增量只在本机重放，收敛超时不能证明并发合并发生了覆盖。
+    for ( const auto& guest : guests ) {
+        // 按真实分配的 PeerId 授权，不假设访客槽位，也不直接改写访客缓存。
+        // 后续包含 Metadata 编辑及撤权历史测试，故在此授予完整分类权限。
+        if ( guest->localPermissions() != 0U ||
+             !host.setParticipantPermissions(
+                 guest->localPeerId(),
+                 MMM::Network::Collaboration::COLLABORATION_PERMISSION_ALL) ) {
+            XERROR("Could not authorize initially read-only test guest");
+            return false;
+        }
+    }
+    // 房主接口返回只表示广播已排队；必须等访客应用后才能开始发送探针。
+    // 轮询同时推进所有端点，不用固定等待时间猜测权限消息已完成交付。
+    if ( !pumpUntil(server, host, guests, [&]() {
+             return std::all_of(
+                 guests.begin(), guests.end(), [](const auto& guest) {
+                     return guest->localPermissions() ==
+                            MMM::Network::Collaboration::
+                                COLLABORATION_PERMISSION_ALL;
+                 });
+         }) ) {
+        XERROR("Guest edit authorization did not reach all test clients");
+        return false;
+    }
+
     // 第五阶段：房主和访客从同一基线各新增一个物件，并在尚未交换增量时连续
     // 提交，验证按 collaborationId 合并而不是后到版本整表覆盖。
     auto  hostConcurrent      = makeBeatmap(1000.0, "Host Creator");
@@ -822,6 +855,26 @@ bool testPublicDirectoryWebRtcRoom(bool followOnly = false)
     if ( !concurrentEditsConverged ) {
         XERROR(
             "Concurrent host and guest object additions overwrote each other");
+        /// @brief 保留最终可见身份和协议结果，区分文档损坏与交付水位遗漏。
+        const auto dumpState = [](const CollaborationRoom&              room,
+                                  const std::shared_ptr<const BeatMap>& model) {
+            XERROR("Room peer={} state={} error={}",
+                   room.localPeerId(),
+                   static_cast<int>(room.state()),
+                   room.lastError());
+            if ( model ) {
+                for ( const auto& note : model->m_noteData.notes )
+                    XERROR("Note id={} time={}",
+                           note.m_collaborationId,
+                           note.m_timestamp);
+            }
+            for ( const auto& entry : room.logs() )
+                XERROR("Room log type={} detail={}",
+                       static_cast<int>(entry.type),
+                       entry.detail);
+        };
+        dumpState(host, hostModel);
+        dumpState(*guests.front(), guestModels.front());
         return false;
     }
     // 并发重基仍然只涉及 Objects；若扩成 All，会造成无关元数据和时间线刷新。
