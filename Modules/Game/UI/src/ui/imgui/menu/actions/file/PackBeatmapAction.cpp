@@ -794,7 +794,7 @@ PackageBeatmapInfo collectPackageBeatmapInfo(
     const bool preferProjectRoot = packageExtensionEquals(mapExtension, ".mmm");
     const auto& meta             = beatMap.m_baseMapMetadata;
     const auto  bank = allowMyO2Archive ? Bms::bmsProperty(beatMap.m_metadata,
-                                                           Bms::MYO2_KEYSOUND)
+                                                          Bms::MYO2_KEYSOUND)
                                         : std::string_view{};
     if ( !bank.empty() ) {
         // 音包只按谱面位置解释；包外路径无法加入本项目归档。
@@ -1639,8 +1639,8 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
     // 移动外壳是否允许鼠标反馈是呈现能力，不用编译宏猜测当前设备。
     const bool touchBms = !workspaceAllowsHoverFeedback() &&
                           m_package.selectedFileType == PackageFileType::BmsZip;
-    bool       requestOutputPicker = false;
-    bool       closePopup          = false;
+    bool requestOutputPicker = false;
+    bool closePopup          = false;
     {
         ExportTouchLayout              touchLayout(dpiScale, touchBms);
         Utils::CenteredModalPopupScope popupStyle(dpiScale);
@@ -2568,10 +2568,10 @@ void PackBeatmapAction::rebuildPackageCandidateFiles()
     // 转为轻量状态列表，避免默认选择策略依赖编辑器内部会话类型。
     openBeatmaps.reserve(sessionEntries.size());
     for ( std::size_t index = 0; index < sessionEntries.size(); ++index ) {
-        // 会话快照只在提交处用于提取比较键，任何会话对象都不传给任务。
-        const auto& entry = sessionEntries[index];
+        // 会话条目是本地副本。将键移入任务，防止提交返回后工作者借用已释放内存。
+        auto& entry = sessionEntries[index];
         openBeatmaps.push_back(PackageOpenBeatmapState{
-            .beatmapPathKey  = entry.beatmapPathKey,
+            .beatmapPathKey  = std::move(entry.beatmapPathKey),
             .isCanvasVisible = entry.isCanvasVisible,
             .isActive = static_cast<int32_t>(index) == activeSessionIndex,
             .isLogoPlaceholder = entry.isLogoPlaceholder,
@@ -2582,10 +2582,10 @@ void PackBeatmapAction::rebuildPackageCandidateFiles()
     // 每轮使用独立令牌。下一次开启不能影响当前已取消任务对令牌的观察。
     m_candidateScanStop = std::stop_source{};
     m_candidateScan     = files->enqueue(scanPackageCandidates,
-                                         snapshot->m_details,
-                                         m_package.selectedFileType,
-                                         std::move(openBeatmaps),
-                                         m_candidateScanStop.get_token());
+                                     snapshot->m_details,
+                                     m_package.selectedFileType,
+                                     std::move(openBeatmaps),
+                                     m_candidateScanStop.get_token());
     // 文件池未接受提交时保留可关闭的空窗口，不等待不会完成的结果。
     if ( !m_candidateScan.valid() ) showStatusMessage("扫描项目文件失败");
 }
