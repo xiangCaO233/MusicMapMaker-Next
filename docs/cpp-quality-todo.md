@@ -36,7 +36,7 @@
 
   [CollaborationRoom.h L412](../Modules/Network/Collaboration/include/network/collaboration/CollaborationRoom.h#L412)、[CollaborationRoom.cpp L981](../Modules/Network/Collaboration/src/CollaborationRoom.cpp#L981)
 
-  已验证。拆分房间的目录连接、文档复制、资源收发与视口发布。独立值类型头保留公开配置、条目与进度数据。Linux RelWithDebInfo 全量构建及 15 项相关 CTest 通过。同一 Ninja 构建的活动对象依赖数如下。CollaborationRoom.h 11,CollaborationDirectoryClient.h 5,BeatmapDocumentCodec.h 3,CollaborationResourceSync.h 3,WebRtcTransport.h 3。本地真实 WebRTC 的 follow 与 resource 探针通过。额外的 p2p 探针在拆分前 main 和本分支均于并发添加物件阶段失败。
+  已验证。拆分房间的目录连接、文档复制、资源收发与视口发布。独立值类型头保留公开配置、条目与进度数据。Linux RelWithDebInfo 全量构建及 15 项相关 CTest 通过。同一 Ninja 构建的活动对象依赖数如下。CollaborationRoom.h 11,CollaborationDirectoryClient.h 5,BeatmapDocumentCodec.h 3,CollaborationResourceSync.h 3,WebRtcTransport.h 3。本地真实 WebRTC 的 follow 与 resource 探针通过。旧 p2p 探针在访客默认只读时直接提交，本地结果未发往房主。探针现在先验证默认只读，再由房主授权并等待权限传播。真实 WebRTC 的并发新增、连续提交、删除收敛和撤权历史均通过。
 
 - [x] **R66 · P0 · CollaborationPeer 的播放时钟与编辑提交日志共享头布局**
 
