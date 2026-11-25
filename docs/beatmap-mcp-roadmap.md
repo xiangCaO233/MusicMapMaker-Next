@@ -36,13 +36,16 @@
 
 ### 优先前置功能：音轨分离与试听
 
-工程已有独立音轨时直接读取。只有立体声混音时，使用预训练音乐源分离模型估计人声和乐器声部。第一版以人声、鼓、贝斯、其他四轨建立基准，允许任意组合。把包含大量吉他或键盘的曲目纳入选型样本。模型只能返回训练过的类别，“其他”可能同时含有多种乐器。
+工程已有独立音轨时直接读取。只有立体声混音时，使用预训练音乐源分离模型估计人声和乐器声部。第一版以人声、鼓、贝斯、其他四轨建立基准，允许任意组合。公开评测支持把 **SCNet / SCNet-large 放到首轮验证的首位**。模型返回各权重支持的类别，“其他”可能同时含有多种乐器。
 
-| 候选 | 可提供的声部 | 用途 |
+| 场景 | 优先验证的模型 | 选型依据 |
 | --- | --- | --- |
-| Demucs `htdemucs` | 人声、鼓、贝斯、其他 | 第一版基准。上游仓库已归档，评估时固定运行环境与权重版本。[官方仓库](https://github.com/facebookresearch/demucs) |
-| Demucs `htdemucs_6s` | 增加吉他、钢琴 | 可选实验模型。上游记录了钢琴串音和伪影，需用目标曲目实听。[官方发布记录](https://github.com/facebookresearch/demucs/blob/main/docs/release.md) |
-| BS-RoFormer 等具体权重 | 按权重声明，常见为人声与伴奏 | 作为更清晰的人声候选。对每个拟支持的权重分别核对来源、许可证与性能。[Audio Separator 模型目录](https://github.com/nomadkaraoke/python-audio-separator#list-models) |
+| 四轨通用分离 | 官方 SCNet 与 SCNet-large，Demucs `htdemucs` 作为对照 | 在同一项公开评测的 MUSDB18-HQ 测试上，官方 SCNet Small 与 Large 的平均 SDR 分别为 9.03 和 9.70 dB。原论文报告标准 SCNet 的 CPU 推理耗时约为其 HT Demucs 对照的 48%。作者确认官方发布的两种权重采用 MIT 许可证，可按要求署名分发。[评测表 3](https://reference-global.com/article/10.5334/tismir.366?tab=figures-and-tables) · [SCNet 论文](https://arxiv.org/abs/2401.13276) · [官方权重授权确认](https://github.com/starrytong/SCNet/issues/35) |
+| 更干净的人声 | 人声专用 BS-RoFormer 或 Mel-Band RoFormer | 在 Multisong MVSep 的人声评测中，多个特定 RoFormer 权重超过 SCNet Large。记录具体权重与推理参数，单独核对分发条件。[评测表 1 与表 9](https://reference-global.com/article/10.5334/tismir.366?tab=figures-and-tables) |
+| 吉他与钢琴 | 专用 RoFormer 权重或 Banquet，`htdemucs_6s` 作为对照 | 评测中的吉他 BS-RoFormer 为 7.12 dB，对照为 5.24 dB。钢琴 Mel-Band RoFormer 为 5.71 dB，对照为 2.23 dB。Banquet 论文在 MoisesDB 上也报告吉他和钢琴优于六轨 HT Demucs，并需要评估查询音频的准备成本。[评测表 4 与表 5](https://reference-global.com/article/10.5334/tismir.366?tab=figures-and-tables) · [Banquet 论文](https://arxiv.org/abs/2406.18747) |
+| 底鼓、军鼓、踩镲 | 鼓组专用 DrumSep，或具备相应输出的 SCNet XL / Mel-Band RoFormer 权重 | 按需实测鼓件拆分。评测中各模型的强项随鼓件变化，尤其要检查踩镲串音和瞬态保留。[评测表 8](https://reference-global.com/article/10.5334/tismir.366?tab=figures-and-tables) · [可用权重目录](https://github.com/ZFTurbo/Music-Source-Separation-Training/blob/main/docs/pretrained_models.md) |
+
+首轮用相同的真实写谱曲目对比 SCNet、SCNet-large 和 Demucs，并登记权重摘要、设备、窗口和重叠参数。除了 SDR，优先检查重拍起音偏差、延音断裂和相邻声部串音，再比较推理时间与峰值内存。专用模型的结果带上来源与所属分轨组。例如请求“鼓组 + 军鼓”混音时，要求选整组或选其细分轨，避免重复叠加。吉他、钢琴等独立提取结果可直接用于分析；加入同一可混音组前需要验证剩余声部及相加结果。
 
 **运行与数据。** 编辑器启动可选的本地工作进程执行分离，显示进度，允许取消。第一轮以 CPU 能完成为准，显卡加速按三平台实测纳入支持范围。主程序按需加载产物，无须加载 Python 或模型运行库。先分离完整曲目并缓存，再按时间切片，给连续试听和跨片段拼接提供统一源帧坐标。缓存以来源内容、预处理参数、模型与权重版本为键。每组声部附清单，记录可用声部 ID、来源资源、采样率、帧数和原音频起点。执行前核对代码、权重及运行库的分发条件。作业失败或取消时保留原曲及上次成功结果，仅发布完整对齐的一组产物。
 
