@@ -6,6 +6,7 @@
 set(FT_DISABLE_ZLIB
     ON
     CACHE BOOL "" FORCE)
+# 压缩字体的可选支持不进入发布依赖闭包，预编译链接不假设系统安装压缩库。
 set(FT_DISABLE_BZIP2
     ON
     CACHE BOOL "" FORCE)
@@ -33,9 +34,11 @@ set(FT_DISABLE_HVF
 set(SKIP_INSTALL_ALL
     ON
     CACHE BOOL "" FORCE)
+# 项目发布脚本负责快照公共头，安装规则不应额外产生一份来源不同的头。
 set(SKIP_INSTALL_HEADERS
     ON
     CACHE BOOL "" FORCE)
+# 正式产物由项目打包规则选择，不能直接拷贝上游默认安装目标。
 set(SKIP_INSTALL_LIBRARIES
     ON
     CACHE BOOL "" FORCE)
@@ -44,8 +47,10 @@ set(SKIP_INSTALL_LIBRARIES
 if(WIN32)
   # Windows 下同样跟随 PROJECT_LINKAGE，shared 预编译包必须产出真正的 FreeType DLL。
   if(PROJECT_LINKAGE STREQUAL "shared")
+    # 动态 Windows 包配套生成 DLL 和导入库，消费者分别使用运行时与链接目录。
     set(_freetype_build_shared ON)
   else()
+    # 静态包不依赖同目录另行部署 FreeType DLL。
     set(_freetype_build_shared OFF)
   endif()
   set(BUILD_SHARED_LIBS
@@ -62,6 +67,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/freetype SYSTEM)
 # =========================================================================
 # 别名设置
 # =========================================================================
+# 导出同预编译脚本一致的名称，同时容许采用新版源码已经定义的别名。
 if(NOT TARGET freetype::freetype)
   add_library(freetype::freetype ALIAS freetype)
 endif()

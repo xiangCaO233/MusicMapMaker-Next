@@ -92,6 +92,9 @@ struct ProjectMediaRenameResult {
 void copySharedMedia(ProjectMediaRenameResult&    result,
                      const std::filesystem::path& projectRoot, bool cover)
 {
+    // - 任务结果独占本次计划，可直接写入错误和输出字段。
+    // - 工程根按实际路径解析，确保输出引用基准与预检使用的路径相同。
+    // - 任何路径失败都在复制前返回，外层只消费错误信息。
     auto&           plan = result.m_plan;
     std::error_code error;
     const auto      root = std::filesystem::canonical(projectRoot, error);
@@ -99,16 +102,28 @@ void copySharedMedia(ProjectMediaRenameResult&    result,
         plan.m_error = error.message();
         return;
     }
+    // - 计划目的地已经过工程边界校验，此处只计算保存到谱面的相对引用。
+    // - 将冻结基线复制到更新值，稍后交付者可仅合并变化字段。
+    // - 源标题、作者等与资源无关的元数据不会在文件任务中重写。
     const auto relative = plan.m_destination.lexically_relative(root);
     result.m_updated    = result.m_baseline;
+    // - 音频副本复制轨道设置，源条目不从项目资源表移除。
+    // - 独立资源 ID 从目的文件名生成，冲突要在回收时重新确认。
+    // - 路径内表示使用 UTF-8；实际文件操作仍使用 filesystem::path。
     if ( result.m_audio ) {
         result.m_audio->m_id =
             Config::pathToUtf8(plan.m_destination.filename());
         result.m_audio->m_path          = Config::pathToUtf8(relative);
         result.m_updated.song_file_hint = relative;
+        // - 音频提示字段作为本次操作的唯一入口，旧兼容路径必须清掉。
+        // - 显式清除标记也要更新，否则加载器会忽略新提示。
         result.m_updated.main_audio_path.clear();
         result.m_updated.song_file_hint_cleared = false;
     } else {
+        // -
+        // 视觉资源依赖现有路径映射规则，避免单独处理封面和背景时产生不同语义。
+        // - 共享资源副本只更新冻结谱面的对应字段，其他谱面仍引用源文件。
+        // - 如果没有命中真实选择项，不能以其他字段的偶然变化判定成功。
         Logic::VisualResourceRenameService::remapMetadata(
             result.m_updated, root, plan.m_source, plan.m_destination);
         // 链接源的 canonical 名与原字段可能不同。不能只改另一个字段而误报成功。
@@ -119,6 +134,8 @@ void copySharedMedia(ProjectMediaRenameResult&    result,
             return;
         }
     }
+    // - 配套测量文件的名称由完整目的音频名派生，包含媒体扩展名。
+    // - 图片和视频没有音频测量副本，因此检测只在音频路径执行。
     auto companion = plan.m_destination;
     companion += ".mmm-timing.json";
     // 正式资源或配套已存在时都拒绝覆盖。失败清理由创建该文件的 worker 执行。
@@ -127,6 +144,8 @@ void copySharedMedia(ProjectMediaRenameResult&    result,
         plan.m_error = "目标音频的配套测量文件已存在或不可访问";
         return;
     }
+    // - 实际复制仍禁止覆盖，不能仅靠预检时目标不存在这一瞬时判断。
+    // - 预检与实际复制之间文件池可能让出线程，其他操作能够抢先占用目的路径。
     if ( !std::filesystem::copy_file(plan.m_source,
                                      plan.m_destination,
                                      std::filesystem::copy_options::none,
@@ -135,6 +154,9 @@ void copySharedMedia(ProjectMediaRenameResult&    result,
         return;
     }
     if ( result.m_audio ) {
+        // - 配套文件在媒体复制之后处理，错误时先回收本次媒体。
+        // - 保留已有目标配套文件，不能用目的路径递归清理。
+        // - 测量数据和媒体都准备完成才允许登记正式音轨。
         error = Audio::AudioMarkerService::copyCompanion(plan.m_source,
                                                          plan.m_destination);
         if ( error ) {
@@ -145,6 +167,8 @@ void copySharedMedia(ProjectMediaRenameResult&    result,
             return;
         }
     }
+    // - 此位只证明文件任务完成；回收时仍需核对会话、工程及资源输入。
+    // - 不得把文件成功当作谱面和项目模型已经更新。
     result.m_copied = true;
 }
 }  // namespace Utils
@@ -162,6 +186,8 @@ void copySharedMedia(ProjectMediaRenameResult&    result,
 /// @warning 用户点击才打开文件选择器；普通帧只检查一个布尔值和对话框状态。
 void SettingsView::renderBeatmapResourcePicker(float dpiScale)
 {
+    // - 每次设置帧先消费独立的异步导入结果，选择器已经关闭时也能完成提交。
+    // - 未完成的导入不会阻塞窗口，回收器只试探就绪状态。
     pollBeatmapResourceImport();
     if ( m_beatmapResourceTarget == BeatmapResourceTarget::None ) return;
 
@@ -178,6 +204,8 @@ void SettingsView::renderBeatmapResourcePicker(float dpiScale)
         // 两种选择器共享相同的媒体快照，不能只改变扩展名而遗漏导入校验。
         const auto& settings =
             Config::AppConfig::instance().getEditorSettings();
+        // - 过滤提示使用冻结媒体类型，翻译只影响可见标签和标题。
+        // - 后缀集合始终属于实际导入入口的验证规则，不随当前翻译变化。
         const char* title = TR(audio   ? "ui.settings.beatmap.import_audio"
                                : video ? "ui.settings.beatmap.import_video"
                                        : "ui.settings.beatmap.import_image")
@@ -193,6 +221,8 @@ void SettingsView::renderBeatmapResourcePicker(float dpiScale)
                 : video ? "mp4,avi,mkv,webm,mov,flv,m4v"
                         : "png,jpg,jpeg,bmp"
             };
+            // - 原生选择器返回结果码，不把无结果和读取错误合并处理。
+            // - 最近目录通过编辑器选项传入，浏览不直接改变当前谱面路径。
             const auto result = NativeFileDialog::openFile(
                 &selected, &filter, 1, settings.lastFilePickerPath.c_str());
             if ( result == NFD_OKAY ) {
@@ -204,6 +234,8 @@ void SettingsView::renderBeatmapResourcePicker(float dpiScale)
             } else if ( result == NFD_ERROR ) {
                 m_beatmapResourceImportError = NFD_GetError();
             }
+            // - 原生选择已经在本次调用内结束，立即清掉对话框请求。
+            // - 已排队的文件任务拥有独立源身份，仍可继续完成。
             m_beatmapResourceTarget = BeatmapResourceTarget::None;
             m_resourceImportSource.reset();
             return;
@@ -212,7 +244,9 @@ void SettingsView::renderBeatmapResourcePicker(float dpiScale)
         // IGFD 的固定 key 与主菜单音频选择器、创建向导选择器相互隔离。
         // 单选和只读文件名避免把未存在的手输名称当成已选资源。
         IGFD::FileDialogConfig config;
-        config.path              = settings.lastFilePickerPath;
+        config.path = settings.lastFilePickerPath;
+        // - 只允许选择一个资源，导入任务只有一个固定目的字段。
+        // - 只读文件名输入防止把不存在的手输路径误认为对话框结果。
         config.countSelectionMax = 1;
         config.flags             = ImGuiFileDialogFlags_Modal |
                        ImGuiFileDialogFlags_HideColumnType |
@@ -226,6 +260,8 @@ void SettingsView::renderBeatmapResourcePicker(float dpiScale)
         PlayPopupOpenFeedback();
     }
 
+    // - 共享对话框实例可能被其他功能使用，必须以本入口的固定键查询。
+    // - 尚未打开或已经关闭时，不读取其他选择器保留的跨帧数据。
     if ( !dialog->IsOpened(PICKER_ID) ) return;
     // 弹窗显示和结果消费只在内置模式运行；取消不导入也不写错误。
     // Close 必须晚于 IsOk 和 GetFilePathName，下一帧不沿用旧结果。
@@ -235,6 +271,8 @@ void SettingsView::renderBeatmapResourcePicker(float dpiScale)
              PICKER_ID, ImGuiWindowFlags_NoCollapse, { 600, 400 }) ) {
         if ( dialog->IsOk() ) {
             const auto source = Config::utf8ToPath(dialog->GetFilePathName());
+            // - 先按冻结输入提交文件任务，然后才处理选择器自己的最近路径。
+            // - 即使任务较晚执行，也不会借用跨帧会被修改的对话框存储。
             importBeatmapResource(source);
             // 最近浏览目录属于编辑器设置，不混入谱面元数据。
             auto& engine = Logic::EditorEngine::instance();
@@ -280,10 +318,14 @@ void SettingsView::importBeatmapResource(const std::filesystem::path& source)
             TR("ui.settings.beatmap.import_wrong_type").toString();
         return;
     }
+    // - 无锁工程投影只用于读取根和代次；可变会话随后使用明确的短锁检查。
+    // - 临时协作工程不可作为实际导入的用户项目。
     const auto project = Logic::ProjectController::instance().uiSnapshot();
     auto&      engine  = Logic::EditorEngine::instance();
     std::unique_lock sessionLock(engine.getSessionMutex(), std::try_to_lock);
-    const auto&      request = m_resourceImportSource;
+    // - 源身份属于发起选择时的上下文，不能在确认后改用现在的活动页。
+    // - 同一设置视图只跟踪一个导入任务，不用新请求覆盖仍可交付的旧 future。
+    const auto& request = m_resourceImportSource;
     // 文件池尚未接到任务前拒绝陈旧选择。会话锁忙时保留旧工程不变。
     if ( !sessionLock || m_pendingImport.valid() || !request || !project ||
          project->m_isTemporaryProject ||
@@ -300,18 +342,27 @@ void SettingsView::importBeatmapResource(const std::filesystem::path& source)
             TR("ui.settings.beatmap.import_context_changed").toString();
         return;
     }
+    // - 两处身份检查完成后即释放锁；文件池只接收路径、类型与工程代次。
+    // - 磁盘复制和解码探针可能阻塞，不能延长锁的持有范围。
+    // - 后续提交还要按代次复核，解锁后的切换不影响冻结输入的安全性。
     sessionLock.unlock();
+    // - 生命周期标记由设置视图持有；失效时文件任务不能把结果交给已关闭入口。
+    // - 正式提交之前的任务资源仍由工作者各自管理。
     m_pendingImportLifetime = std::make_shared<const bool>(true);
     m_pendingImport = Utils::queueProjectMediaImport(project->m_projectRoot,
                                                      source,
                                                      audio,
                                                      project->m_generation,
                                                      m_pendingImportLifetime);
+    // - 排队失败不会产生可轮询的结果，立刻反馈给用户。
+    // - 已有资源引用都仍然留在原位置，下一次可重新选择。
     if ( !m_pendingImport.valid() ) {
         m_beatmapResourceImportError =
             TR("ui.settings.beatmap.import_failed").toString();
         return;
     }
+    // - 冻结结果目标、媒体类型及代次，不能在下一帧从当前选择器状态读取。
+    // - 关闭选择器只结束询问阶段，后续回收依靠这些任务字段。
     m_pendingImportSource     = request;
     m_pendingImportGeneration = project->m_generation;
     m_pendingImportTarget     = m_beatmapResourceTarget;
@@ -323,6 +374,8 @@ void SettingsView::importBeatmapResource(const std::filesystem::path& source)
 /// @warning 每帧仅轮询，不等待文件任务或会话锁。
 void SettingsView::pollBeatmapResourceImport()
 {
+    // - 先确认 future 有效，再以零等待窗口检查就绪，避免普通帧阻塞。
+    // - 后台正在复制时已发布的 UI 仍可独立推进。
     if ( !m_pendingImport.valid() ||
          m_pendingImport.wait_for(std::chrono::seconds(0)) !=
              std::future_status::ready )
@@ -331,9 +384,15 @@ void SettingsView::pollBeatmapResourceImport()
     std::unique_lock sessionLock(engine.getSessionMutex(), std::try_to_lock);
     if ( !sessionLock ) return;
 
+    // - 就绪且成功获得锁才消费 future；锁忙则在下帧保留并重试。
+    // - get 之后 this 不再持有该轮任务的 pending 状态，成功失败都只消费一次。
     const auto operation = m_pendingImport.get();
+    // - 释放仅用于取消判断的任务令牌，状态保留在交付结果中。
+    // - 完成时间先于本轮提交；无需把令牌带进后续逻辑命令。
     m_pendingImportLifetime.reset();
-    const auto request  = std::move(m_pendingImportSource);
+    const auto request = std::move(m_pendingImportSource);
+    // - 本轮投影的工程代次与排队时一起比较，防止同目录重开后读取旧任务。
+    // - 与真实活动会话配合判断，项目路径相同不足以建立原对象的身份。
     const auto identity = Logic::ProjectController::instance().uiSnapshot();
     auto*      project  = engine.getCurrentProject();
     const auto session  = engine.getActiveSession();
@@ -346,10 +405,14 @@ void SettingsView::pollBeatmapResourceImport()
             TR("ui.settings.beatmap.import_context_changed").toString();
         return;
     }
+    // - 先区分上下文过期，再处理文件操作的实际失败。
+    // - 失败不解析不完整的路径，也不修改项目登记和谱面引用。
     if ( operation->m_error ) {
         m_beatmapResourceImportError = operation->m_error.message();
         return;
     }
+    // - 文件路径由 operation 所有，本次提交作用域内借用即可。
+    // - 提交命令对路径和更新值保留自己的副本，不跨帧保存观察指针。
     const auto imported = &operation->m_path;
     const bool audio    = m_pendingImportTarget == BeatmapResourceTarget::Audio;
     const bool video    = m_pendingImportVideo;
@@ -373,6 +436,8 @@ void SettingsView::pollBeatmapResourceImport()
         updatedMeta.song_file_hint = *imported;
         updatedMeta.main_audio_path.clear();
         updatedMeta.song_file_hint_cleared = false;
+        // - 封面入口只替换缩略图字段，不更改背景模式或其独立的路径。
+        // - 背景入口按请求时的媒体类别设置 renderer 需要的类型。
     } else if ( m_pendingImportTarget == BeatmapResourceTarget::Cover ) {
         updatedMeta.cover_path = *imported;
     } else {
@@ -406,6 +471,8 @@ void SettingsView::renderBeatmapResourceRename(float dpiScale)
         m_pendingRename = {};
         // 新请求不能继承上一轮复制授权，取消后重新打开也必须重新提示。
         m_resourceRenameCopyPending = false;
+        // - 清除上一轮名称，同时要求新请求重新通过共享预检。
+        // - 关闭后重开同一个资源也不能借用旧的写盘授权。
         m_resourceRenameCopyName.clear();
         FeedbackOpenPopup(title.c_str());
         m_openResourceRenamePopup = false;
@@ -420,10 +487,14 @@ void SettingsView::renderBeatmapResourceRename(float dpiScale)
                       { 420.0F * dpiScale, 0.0F }) )
         return;
     const bool renamed = pollBeatmapResourceRename();
+    // - 回收已完成的事务后关闭窗口；失败时保留当前缓冲和错误。
+    // - 没有关闭命令时仍可重新检查文件冲突或资源是否被其他动作更换。
     if ( renamed ) {
         m_renameResourceTarget = BeatmapResourceTarget::None;
         ImGui::CloseCurrentPopup();
     }
+    // - 执行期间不再次发同名任务，避免 UI 从同一个计划创建两份副本。
+    // - 弹窗关闭后的本帧也禁用控件，防止之前缓存的键盘事件重新触发。
     ImGui::BeginDisabled(m_pendingRename.valid() || renamed);
     ImGui::TextWrapped("%s", TR("ui.settings.beatmap.rename_hint").data());
     // 改名不会转码，提示保留扩展名；最终仍由逻辑入口强制验证。
@@ -491,6 +562,8 @@ void SettingsView::renderBeatmapResourceRename(float dpiScale)
 /// @warning 显式确认路径：持有会话注册表锁，只允许低频调用。
 bool SettingsView::renameBeatmapResource(bool confirmCopy)
 {
+    // - 确认分阶段提交，只有上一阶段结果回收后才能授权下一步。
+    // - 切换资源期间尝试获取短锁；竞争不通过时保留窗口和编辑内容。
     if ( m_pendingRename.valid() ) return false;
     auto&            engine = Logic::EditorEngine::instance();
     std::unique_lock lock(engine.getSessionMutex(), std::try_to_lock);
@@ -510,6 +583,8 @@ bool SettingsView::renameBeatmapResource(bool confirmCopy)
             TR("ui.settings.beatmap.import_context_changed").toString();
         return false;
     }
+    // - 结果对象携带一份冻结源身份及命令元数据，允许文件线程独立处理。
+    // - 先建立基准，再用该基准确定活动引用，避免计划围绕另一个实例生成。
     auto result = std::make_shared<Utils::ProjectMediaRenameResult>();
     result->m_sourceIdentity = request;
     result->m_generation     = identity->m_generation;
@@ -519,6 +594,8 @@ bool SettingsView::renameBeatmapResource(bool confirmCopy)
     const bool  audio = m_renameResourceTarget == BeatmapResourceTarget::Audio;
     const bool  cover = m_renameResourceTarget == BeatmapResourceTarget::Cover;
     const auto& live  = result->m_baseline;
+    // - 主音频兼容两种旧元数据引用，取当前实际有效优先级。
+    // - 和弹窗打开时采样的原路径比较，避免把独立导入的媒体当成旧名。
     const auto& current =
         audio ? (live.song_file_hint.empty() ? live.main_audio_path
                                              : live.song_file_hint)
@@ -534,16 +611,22 @@ bool SettingsView::renameBeatmapResource(bool confirmCopy)
     projectCopy.m_projectRoot    = project->m_projectRoot;
     projectCopy.m_audioResources = project->m_audioResources;
     projectCopy.m_beatmaps       = project->m_beatmaps;
+    // - 打开页可能有未保存的新链接，不能只检查磁盘工程列表。
+    // - 使用轻量的路径引用投影，后台不遍历活注册表。
     std::vector<Logic::OpenResourceReferenceSnapshot> openMaps;
     for ( const auto& entry : engine.getSessionEntries() )
         if ( !entry.isLogoPlaceholder && entry.session &&
              entry.session->getContext().currentBeatmap )
             openMaps.push_back(Logic::SharedResourceRenameService::capture(
                 *entry.session->getContext().currentBeatmap, audio));
+    // - 第一次预检没有文件复制授权，界面只拿共享计数。
+    // - 只有第二次确认仍使用同名输入时才允许工作者创建副本。
     const bool copyAuthorized = confirmCopy && m_resourceRenameCopyPending &&
                                 m_resourceRenameCopyName == result->m_newName;
     lock.unlock();
 
+    // - 文件池缺失时返回明确错误，不在界面线程回退执行磁盘预检。
+    // - 后台捕获项目表和会话投影的所有权，执行时不会引用会话锁。
     auto* worker = Runtime::AppThreadPool::instance().getFileThreadPool();
     if ( worker )
         m_pendingRename = worker->enqueue([result,
@@ -553,12 +636,16 @@ bool SettingsView::renameBeatmapResource(bool confirmCopy)
                                            audio,
                                            cover,
                                            copyAuthorized] {
+            // - 视觉资源入口已经持有路径，音频字段还可能是工程资源 ID。
+            // - 先用冻结项目表解析主音轨身份，实际查找不读取活动项目模型。
             auto source = current;
             if ( audio ) {
                 const auto* resource = Logic::ProjectResourceService::
                     findAudioResourceForReference(project,
                                                   result->m_baseline.map_path,
                                                   Config::pathToUtf8(current));
+                // - 无法确认为主音轨时不继续尝试同名文件。
+                // - 音效同名或旧路径悬空都不能凭扩展名猜测资源。
                 if ( !resource || resource->m_type != AudioTrackType::Main ) {
                     result->m_plan.m_error = "无法识别当前主音频";
                     return result;
@@ -574,6 +661,8 @@ bool SettingsView::renameBeatmapResource(bool confirmCopy)
                     result->m_newName,
                     result->m_audio ? &*result->m_audio : nullptr,
                     openMaps);
+            // - 后台真正复制前再查当前工程代次，降低退出或切工程后写盘的机会。
+            // - 结果即使已复制也要由 UI 回收边界重验会话。
             const auto active =
                 Logic::ProjectController::instance().uiSnapshot();
             if ( result->m_plan.m_error.empty() &&
@@ -592,6 +681,8 @@ bool SettingsView::renameBeatmapResource(bool confirmCopy)
 /// @brief 非阻塞回收预检或副本结果，复核绑定后才能应用。
 bool SettingsView::pollBeatmapResourceRename()
 {
+    // - 闲置帧或正在执行文件操作时返回，让弹窗持续显示进度状态。
+    // - 仅对同一有效 future 进行一次非阻塞就绪检测。
     if ( !m_pendingRename.valid() ||
          m_pendingRename.wait_for(std::chrono::seconds(0)) !=
              std::future_status::ready )
@@ -599,11 +690,15 @@ bool SettingsView::pollBeatmapResourceRename()
     auto&            engine = Logic::EditorEngine::instance();
     std::unique_lock lock(engine.getSessionMutex(), std::try_to_lock);
     if ( !lock ) return false;
+    // - 工作者不持有实时模型，回收时才进入短锁下的会话检查。
+    // - 所有会话访问局限在本次消费作用域，不将裸指针捕获到后续工作。
     auto        result   = m_pendingRename.get();
     const auto  identity = Logic::ProjectController::instance().uiSnapshot();
     auto*       project  = engine.getCurrentProject();
     const auto  session  = engine.getActiveSession();
     const auto& request  = result->m_sourceIdentity;
+    // - 目标字段、工程代次、活动对象及确认名称都仍需匹配。
+    // - 仅靠文件复制成功不能证明结果应交给当前打开的设置页。
     if ( m_renameResourceTarget == BeatmapResourceTarget::None || !identity ||
          identity->m_generation != result->m_generation ||
          identity->m_isTemporaryProject || !project || !session ||
@@ -623,14 +718,20 @@ bool SettingsView::pollBeatmapResourceRename()
             : (m_renameResourceTarget == BeatmapResourceTarget::Cover
                    ? live.cover_path
                    : live.main_cover_path);
+    // - 选定路径可能在项目代次不变时被另一个导入命令替换。
+    // - 执行前确认仍指向原资源，避免把结果写到更新后的引用。
     if ( current != m_resourceRenamePath ) {
         m_beatmapResourceImportError =
             TR("ui.settings.beatmap.import_context_changed").toString();
         return false;
     }
+    // - 错误文本属于此次预检或复制，成功前不会清掉当前资源。
+    // - 需要复制且未实际复制表示只完成预检，需要界面二次授权。
     const auto& plan             = result->m_plan;
     m_beatmapResourceImportError = plan.m_error;
     if ( !plan.m_error.empty() ) return false;
+    // - 保存此次授权相关名称而非仅保存一个布尔量。
+    // - 引用计数用于解释为何走副本，不能在普通帧重新扫描。
     if ( plan.m_requiresCopy && !result->m_copied ) {
         m_resourceRenameCopyPending    = true;
         m_resourceRenameCopyName       = result->m_newName;
@@ -647,6 +748,8 @@ bool SettingsView::pollBeatmapResourceRename()
                              [&](const auto& resource) {
                                  return resource.m_id == cloned.m_id;
                              });
+            // - 监视器可能已把副本登记在实时表中，接受前检查类型与规范路径。
+            // - 同名 ID 若已被其他实体占用，不能覆盖它的音轨设置。
             const bool discovered = existing != project->m_audioResources.end();
             if ( discovered &&
                  (existing->m_type != AudioTrackType::Main ||
@@ -657,15 +760,19 @@ bool SettingsView::pollBeatmapResourceRename()
             }
             // 目录监视可能先登记刚复制的路径。复用该条目并继承源配置，不插入重复
             // ID。
-            const auto previous         = discovered
-                                              ? std::optional<AudioResource>(*existing)
-                                              : std::nullopt;
+            const auto previous = discovered
+                                      ? std::optional<AudioResource>(*existing)
+                                      : std::nullopt;
+            // - 保存排除表作为事务回滚依据，注册时解除新文件的排除。
+            // - Project 保存不成功时恢复内存表的两个受影响部分。
             const auto previousExcluded = project->m_excludedAudioPaths;
             std::erase(project->m_excludedAudioPaths, cloned.m_path);
             if ( discovered )
                 *existing = cloned;
             else
                 project->m_audioResources.push_back(cloned);
+            // - 先恢复原登记或删除本次追加项，再恢复排除列表。
+            // - 副本留在磁盘以支持恢复，项目引用仍指向最后成功的版本。
             if ( !Logic::ProjectController::instance().saveProject() ) {
                 if ( previous )
                     *existing = *previous;
@@ -685,6 +792,8 @@ bool SettingsView::pollBeatmapResourceRename()
             if ( live.*field == result->m_baseline.*field )
                 updated.*field = result->m_updated.*field;
         };
+        // - 兼容主音频引用字段与两种视觉路径各按独立差量合并。
+        // - 多项同时指向同一媒体时，只刷新仍保持原值的字段。
         copyUnchanged(&BaseMapMeta::song_file_hint);
         copyUnchanged(&BaseMapMeta::song_file_hint_cleared);
         copyUnchanged(&BaseMapMeta::main_audio_path);
@@ -696,11 +805,15 @@ bool SettingsView::pollBeatmapResourceRename()
                 .baseMeta = updated,
                 .settingsBaseline =
                     std::make_shared<const BaseMapMeta>(live) });
+        // - 设置草稿更新的是此次托管字段；文本及其他用户未保存值继续保留。
+        // - 实际持久化仍由已排队的逻辑命令完成，保证与同会话编辑顺序一致。
         m_editingMeta.song_file_hint  = updated.song_file_hint;
         m_editingMeta.main_audio_path = updated.main_audio_path;
         m_editingMeta.cover_path      = updated.cover_path;
         m_editingMeta.main_cover_path = updated.main_cover_path;
-        m_resourceRenameCopyPending   = false;
+        // - 已成功提交该次复制后释放二次确认状态。
+        // - 再次打开须基于新引用重新计算是否共享。
+        m_resourceRenameCopyPending = false;
         return true;
     }
     const auto& newName = result->m_newName;
@@ -733,9 +846,13 @@ bool SettingsView::pollBeatmapResourceRename()
                 TR("ui.settings.beatmap.rename_missing_audio").toString();
             return false;
         }
+        // - 独占资源直接改名的命令会改变磁盘路径，先要求真实目标留在当前工程。
+        // - canonical 用于识别链接最终去向，不能以表面相对路径替代。
         std::error_code pathError;
         const auto      root =
             std::filesystem::canonical(project->m_projectRoot, pathError);
+        // - 工程根错误时不执行第二次解析，保持第一次失败原因。
+        // - 源路径为实际文件；词法相对比较只在取得两个路径后才有意义。
         const auto source =
             pathError ? std::filesystem::path{}
                       : std::filesystem::canonical(
@@ -762,6 +879,8 @@ bool SettingsView::pollBeatmapResourceRename()
         m_beatmapResourceImportError =
             engine.renameBeatmapVisualResource(current, newName);
     }
+    // - 错误处理由下层文件事务负责；非空失败说明使窗口保留原始输入供重试。
+    // - 只有真实事务成功后才刷新草稿字段。
     if ( !m_beatmapResourceImportError.empty() ) return false;
     // 逻辑层已经完成真实文件与引用事务，不再提交第二份完整元数据命令。
     // 额外命令可能重复提交，并覆盖并发刷新过的结构字段。

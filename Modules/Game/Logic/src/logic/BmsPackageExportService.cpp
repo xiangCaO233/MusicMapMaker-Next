@@ -98,6 +98,8 @@ bool safeRelative(const std::filesystem::path& path)
 bool readFile(const std::filesystem::path& path,
               std::vector<unsigned char>&  bytes)
 {
+    // 同一读取器处理已压缩音包和散装媒体，换行或文件中零字节不应有特殊含义。
+    // 输入容器由调用方复用；先打开新来源，失败时不能把上一个条目的内容登记为新来源。
     std::ifstream input(path, std::ios::binary);
     if ( !input ) return false;
     bytes.assign(std::istreambuf_iterator<char>(input), {});
@@ -140,6 +142,8 @@ bool alignTimeline(BeatMap& map, AudioSampleEvent* mainSample,
     if ( !std::isfinite(beatLength) || beatLength <= 0 ) return false;
     // 只移动一拍内的剩余量，长前导段不应导致整段音乐被无谓裁掉。
     // fmod 保留负时间的符号，所以负首红线会自然转成补静音计划。
+    // 相差整拍的候选是同一个对齐网格，所以后续可以按需要保留合法前导，不必改变
+    // BPM。
     double phase = std::fmod(first->m_timestamp, beatLength);
     // 事件模式只能后移，不能裁掉音乐中任何已经存在的内容。
     // 向后补到下一整拍，保证原首拍落在从零点开始的同一网格上。
@@ -148,6 +152,8 @@ bool alignTimeline(BeatMap& map, AudioSampleEvent* mainSample,
     double earliest = std::numeric_limits<double>::infinity();
     // 主音轨由音频内容承担位移；其他事件都必须保留在合法非负时间范围。
     // 若裁头会使早期物件变成负数，则改为补足整数拍静音，网格相位不变。
+    // 最小值按实际触发或物件起点计算。长条尾部随有效的长度迁移，
+    // 不能用独立尾部吸附补偿前导相位。
     const auto inspect = [&](double time) {
         if ( !std::isfinite(time) ) return false;
         earliest = std::min(earliest, time);
@@ -191,6 +197,7 @@ bool alignTimeline(BeatMap& map, AudioSampleEvent* mainSample,
     for ( auto& note : map.m_noteData.notes ) shift(note.m_timestamp);
     // 只移动长条头部，其时长保持原值，尾部因此随整条一起平移。
     for ( auto& hold : map.m_noteData.holds ) shift(hold.m_timestamp);
+    // 批注仍保有与目标物件的相对位置，后续格式决定是否能序列化它。
     for ( auto& annotation : map.m_annotations ) shift(annotation.m_timestamp);
     if ( Bms::usesMyO2Format(map.m_metadata) && phase != 0 ) {
         // 格式专用 FF/HE/SW/ED 与原生视频起点共用同一位移，保留亚毫秒相位。
@@ -263,6 +270,9 @@ bool BmsPackageExportService::validateMyO2KeySoundBank(
         /// @brief 释放 miniz 读取状态。
         ~ReaderEnd() { mz_zip_reader_end(&m_zip); }
     } reader{ zip };
+    // 这里模拟下载端的路径键而不重命名 ZIP
+    // 内容，两个原名映射到同一键时拒绝音包。 非 ASCII
+    // 字节原样保留，不能随运行电脑的区域设置改变匹配规则。
     const auto normalize = [](std::string name) {
         for ( auto& c : name ) c = c == '\\' ? '/' : toPackageLowerAscii(c);
         return name;
@@ -270,15 +280,22 @@ bool BmsPackageExportService::validateMyO2KeySoundBank(
     std::set<std::string> names;
     std::uint64_t         expanded = 0;
     for ( mz_uint i = 0; i < mz_zip_reader_get_num_files(&zip); ++i ) {
+        // 这一步只取中央目录信息，内容仍由归档原字节保存。算法编号限制到存储和
+        // DEFLATE，
+        // 因为目标端必须能直接读取；无法取得记录时也不能把条目当作可忽略的空目录。
+        // 预算用剩余量比较，以防损坏元数据的未压缩长度在累加时绕回。
         mz_zip_archive_file_stat stat{};
         if ( !mz_zip_reader_file_stat(&zip, i, &stat) || stat.m_is_encrypted ||
              (stat.m_method != 0 && stat.m_method != 8) ||
              stat.m_uncomp_size > budget - expanded )
             return false;
         expanded += stat.m_uncomp_size;
+        // 目录名不满足样本引用，因此只把文件加入查找集合；上方预算仍涵盖所登记的长度。
         if ( stat.m_is_directory ) continue;
         if ( !names.insert(normalize(stat.m_filename)).second ) return false;
     }
+    // 空采样绑定表示静音，不要求音包有空名条目；非空名字失败时保留它供 UI
+    // 定位。
     const auto contains = [&](const std::string& name) {
         if ( name.empty() || names.contains(normalize(name)) ) return true;
         error = "MyO2 KEY 音包缺少音源：" + name;
@@ -292,6 +309,8 @@ bool BmsPackageExportService::validateMyO2KeySoundBank(
         if ( hold.m_sampleBinding &&
              !contains(hold.m_sampleBinding->m_audioResourceId) )
             return false;
+    // 整曲模式的 BGM 通过外部音乐文件提供，自动采样中同路径的主曲不用再次在 KEY
+    // 查找。 STANDARD 则连自动音源也取自音包，所以没有这个豁免。
     const auto mainPath =
         map.m_baseMapMetadata.song_file_hint.lexically_normal();
     const bool wholeMusic =
@@ -339,6 +358,7 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
         result.errorMessage = "无法创建 BMS 临时目录";
         return result;
     }
+    // 时间戳只是区分目录候选。是否拥有目录取决于实际创建结果，冲突时不进入清理流程。
     const auto stamp =
         std::chrono::steady_clock::now().time_since_epoch().count();
     const auto workPath =
@@ -353,6 +373,8 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
     // selected 保持原始选择身份；entries 只保存最终确实引用的资源与生成文件。
     // 两个表分离，允许一份原音乐被多张谱面转换为不同偏移的独立副本。
     std::map<std::filesystem::path, std::filesystem::path> selected, entries;
+    // 同一源文件可同时出现在两个集合，例如一张难度裁切主曲，另一张仍按原始 Key
+    // 音引用。 只有从未被直接引用的替代源才能在最终归档中省略。
     std::set<std::filesystem::path> neededAudio, replacedAudio;
     for ( const auto& value : selectedPaths ) {
         const auto relative = Config::utf8ToPath(value).lexically_normal();
@@ -394,6 +416,8 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
         // 目标统一为 .bms，不根据键数把七轨强制改成 .bme 或长条改成 .bml。
         // 子目录与文件主体保留，关联媒体引用不会因为扁平化而产生重名。
         target.replace_extension(".bms");
+        // 按输出而非输入身份检查。例如同目录的同名 .mc 和 .mmm 会转换到同一个
+        // .bms。 此时必须报告冲突，否则第二张谱面或它的资源关系会被覆盖。
         if ( entries.contains(target) ) {
             result.errorMessage =
                 "多张谱面转换后同名：" + Config::pathToUtf8(target);
@@ -403,6 +427,8 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
         // 文件名相同的不同目录音效也依赖完整项目身份区分。
         const auto archivedSounds =
             Bms::bmsProperty(map.m_metadata, Bms::MYO2_KEYSOUND);
+        // KEY 音包里的名字属于内层归档。STANDARD 模式没有需要裁切的外部主曲，
+        // 即使该名字在项目资源索引中有同名候选也不使用它。
         const bool archiveOnly =
             myO2Grid && !archivedSounds.empty() &&
             Bms::bmsProperty(map.m_metadata, Bms::MYO2_AUDIO_MODE) ==
@@ -442,6 +468,8 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
             mainSample               = &sample;
         }
         // 选中的输出模式覆盖来源协议，且必须在首拍对齐前设置。
+        // 这是导出副本；标记只影响本次序列化及对齐，原谱面的 MyO2
+        // 设置仍由项目保存入口管理。
         auto& format = map.m_metadata.map_properties[MapMetadataType::BMS];
         format["myo2_grid"]    = myO2Grid ? "1" : "0";
         format["myo2_format"]  = myO2Grid ? "1" : "0";
@@ -453,6 +481,8 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
             myO2Grid ? Bms::bmsProperty(map.m_metadata, Bms::MYO2_KEYSOUND)
                      : std::string_view{};
         const bool hasBank = !bankValue.empty();
+        // 校验和重写须用同一来源文件。绝对名字先换成项目相对身份，既有相对名字以谱面定位。
+        // 项目选择范围不因原谱面记录了一个可访问的路径而扩大。
         if ( hasBank ) {
             // KEY 音包路径按来源谱面定位；ZIP 内部 WAV
             // 名字不能作为松散音频改写。
@@ -470,6 +500,8 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
             if ( !validateMyO2KeySoundBank(
                      map, selected.at(bank), result.errorMessage) )
                 return result;
+            // 只有外层 KEY ZIP
+            // 引用变成新谱面相对路径；压缩包内采样名字保留原文。
             format[std::string(Bms::MYO2_KEYSOUND)] =
                 Config::pathToUtf8Generic(bank.lexically_relative(chartFolder));
         }
@@ -479,6 +511,7 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
             // MP4；打包保留原文件名，部署时由歌曲库配置编号。
             const auto cover = map.m_baseMapMetadata.main_cover_path;
             auto video = (relative.parent_path() / cover).lexically_normal();
+            // 兼容旧工程直接写项目相对媒体路径；优先按谱面解释可以保留同目录同名资源。
             if ( !selected.contains(video) ) video = cover.lexically_normal();
             if ( !selected.contains(video) ||
                  !packageExtensionEquals(Config::pathToUtf8(video.extension()),
@@ -525,6 +558,8 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
                                       Config::pathToUtf8(generatedAudio);
                 return result;
             }
+            // 将包内逻辑名称投影到本轮工作目录。作业完成后以该名称入包，
+            // 渲染器或播放器无需知道宿主机临时目录的位置。
             const auto generatedPath = work.path / generatedAudio;
             std::filesystem::create_directories(generatedPath.parent_path(),
                                                 error);
@@ -557,6 +592,8 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
             // 空绑定表示静音判定，不能为了寻找文件而把它删除或当成缺失依赖。
             // 非空绑定才承担真实采样定位和入包检查。
             if ( reference.empty() ) return true;
+            // 跳过通用 ID
+            // 解析，因为生成文件不在项目索引里，只存在于本轮的归档条目集合中。
             if ( generatedMain && !generatedAudio.empty() ) {
                 reference =
                     Config::pathToUtf8Generic(generatedAudio.lexically_relative(
@@ -586,6 +623,8 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
                                              : target.parent_path()));
             return true;
         };
+        // ZIP
+        // 音源名已由独立的内层验证覆盖，按项目路径再次解释会把它错误绑定到散装文件。
         if ( !hasBank ) {
             for ( auto& note : map.m_noteData.notes )
                 if ( note.m_sampleBinding &&
@@ -597,11 +636,14 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
                     return result;
         }
         for ( auto& sample : map.m_audioSamples ) {
+            // 比较实际事件身份，不能单看文件名。只有被选为主曲的这次触发改用移相副本。
             const bool isMain = &sample == mainSample;
             if ( (!hasBank || isMain) &&
                  !remap(sample.m_audioResourceId, isMain) )
                 return result;
         }
+        // MyO2
+        // 写出器同时读取歌曲提示和实际触发；两处必须指向同一个最终包内路径。
         if ( myO2Grid && mainSample )
             map.m_baseMapMetadata.song_file_hint =
                 Config::utf8ToPath(mainSample->m_audioResourceId);
@@ -627,6 +669,7 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
                     result.errorMessage = "MyO2 静音音源名称与包内文件冲突";
                     return result;
                 }
+                // 复用前一张谱面已记录的同目录静音文件，归档中同一名字只保留一个条目。
                 entries.try_emplace(relativeSilence, silence);
             }
             error.clear();
@@ -652,6 +695,7 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
              replacedAudio.contains(relative) &&
              !neededAudio.contains(relative) )
             continue;
+        // 若普通资源与准备结果发生名称冲突则整个包失败，不能让后加入的媒体遮蔽谱面引用。
         if ( !entries.emplace(relative, source).second ) {
             result.errorMessage = "包内资源重名";
             return result;
@@ -661,6 +705,8 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
     // 按排序后的路径写入，重复选择不会导致条目出现两次。
     // 普通媒体保留字节，新的主音乐与 BMS 读取工作目录中的准备结果。
     ArchiveWriter zip;
+    // writer 保存压缩结果，工作副本仍由目录守卫管理，初始化失败不会留下目标
+    // ZIP。
     zip.initialized = mz_zip_writer_init_heap(&zip.value, 0, 0) != 0;
     if ( !zip.initialized ) {
         result.errorMessage = "无法初始化 BMS ZIP";
@@ -685,8 +731,10 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
     }
     // finalize 转交归档缓冲所有权，成功后需要单独调用 mz_free。
     // writer 的内部状态仍由上方守卫结束，二者生命周期不能混为一谈。
-    void*  buffer = nullptr;
-    size_t size   = 0;
+    void* buffer = nullptr;
+    // miniz
+    // 返回的归档大小用于下一次整块写入，不可用最后一个输入条目的长度代替。
+    size_t size = 0;
     if ( !mz_zip_writer_finalize_heap_archive(&zip.value, &buffer, &size) ) {
         result.errorMessage = "无法完成 BMS ZIP";
         return result;
@@ -699,6 +747,7 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
     std::ofstream output(outputPath, std::ios::binary);
     output.write(static_cast<const char*>(buffer),
                  static_cast<std::streamsize>(size));
+    // 检查放在 close 之后，磁盘耗尽等延迟报告的错误不能作为可发布文档交给平台。
     output.close();
     mz_free(buffer);
     result.success = !output.fail();

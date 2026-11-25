@@ -602,11 +602,16 @@ struct ToolPluginView::Impl {
         const sol::table& request)
     {
         Audio::AudioSpeedExportOptions options;
+        // - 未填速度和音高参数时保持原音频时间与调性，脚本可以只选择目标容器。
+        // - 采样率及码率为零时由导出服务确定，不在 Lua
+        // 桥接层定义第二套默认编码器配置。
         options.speed          = request["speed"].get_or(1.0);
         options.pitchSemitones = request["pitch_semitones"].get_or(0.0);
         options.outputSampleRate =
             request["sample_rate"].get_or(std::uint32_t{ 0 });
-        options.bitrate       = request["bitrate"].get_or(std::uint64_t{ 0 });
+        options.bitrate = request["bitrate"].get_or(std::uint64_t{ 0 });
+        // - 统一使用保调速度模式；额外的音高移动由 semitones 独立控制。
+        // - 批量和单文件都复用此返回值，避免同一参数名在两种任务中含义不同。
         options.preservePitch = true;
         return options;
     }
@@ -616,17 +621,29 @@ struct ToolPluginView::Impl {
     template<typename Work>
     static std::string submitAudioTask(Plugin& plugin, Work work)
     {
+        // - 声明式 build 没有导出权限，脚本加载和状态变化不会隐式触发文件写入。
+        // - 用户动作和完成回调是两条明确的入口，后者允许串接批次。
         if ( !plugin.actionActive && !plugin.audioCompletionActive )
             return "仅可由用户动作或音频完成回调启动导出";
+        // - 同一插件一次保留一个活跃编码任务，不能覆盖尚未发布的结果。
+        // -
+        // 读取完成位后才允许关联合适的后续任务，任务对象本身仍由工作线程持有。
         if ( plugin.audioTask &&
              !plugin.audioTask->done.load(std::memory_order_acquire) )
             return "已有音频导出任务正在运行";
+        // - 没有文件池时向脚本报错；不得将编解码挪到当前 UI 调用执行。
+        // - 可能阻塞的文件路径由捕获的值传入，不借用 Lua 临时表或 UI 组件。
         auto* pool = Runtime::AppThreadPool::instance().getFileThreadPool();
         if ( !pool ) return "文件任务线程池尚未初始化";
 
+        // -
+        // 任务结果和可见插件分别持有批次，不要求插件窗口在整个编码过程保持打开。
+        // - 新任务替换可见指针时重置一次性回调状态。
         auto task                   = std::make_shared<AudioTask>();
         plugin.audioTask            = task;
         plugin.audioCompletionShown = false;
+        // - 捕获只包括任务共享句柄和可调用对象，插件重载不会使工作者悬挂。
+        // - 所有写入局限在传入的任务结果槽，Lua 完成回调由回收端执行。
         pool->enqueue_void([task, work = std::move(work)]() mutable {
             work(*task);
             // 先完整写入结果，再发布完成位；无须让 UI 等待线程或互斥锁。
@@ -638,13 +655,20 @@ struct ToolPluginView::Impl {
     /// @brief 生成一次 Lua 状态快照，只有已完成任务才读取工作线程结果。
     static sol::table audioStatus(Plugin& plugin)
     {
+        // - 每次请求创建归属当前 VM 的值表，不把 C++ 音频任务指针交给脚本。
+        // - 空任务、运行中及完成三种状态有各自可用的字段。
         auto        status = plugin.lua.create_table();
         const auto* task   = plugin.audioTask.get();
         if ( !task ) {
             status["state"] = "idle";
+            // - 编码中只读宽松进度原子，不能读取未完成的普通结果成员。
+            // - 结果发布顺序与完成回调采用同一个同步点。
         } else if ( !task->done.load(std::memory_order_acquire) ) {
             status["state"]    = "running";
             status["progress"] = task->progress.load(std::memory_order_relaxed);
+            // -
+            // 批次可同时导出一部分文件并报告其余失败，成功数与错误清单同时返回。
+            // - 使用独立分支避免将单文件的帧数和时长误报为整批指标。
         } else if ( task->batchResult ) {
             // 结果含失败清单，即使部分失败仍返回成功写出的文件数。
             const auto& batch = *task->batchResult;
@@ -654,6 +678,8 @@ struct ToolPluginView::Impl {
             status["charts_unchanged"] = batch.m_chartsUnchanged;
             if ( !batch.m_errors.empty() )
                 status["error"] = batch.m_errors.front();
+            // - 按产生顺序拷贝错误，脚本无需解析拼接日志就能呈现逐项提示。
+            // - 预分配 Lua 数组槽，错误不会写入同一表的固定状态键。
             auto errors = plugin.lua.create_table(
                 static_cast<int>(batch.m_errors.size()), 0);
             for ( const auto& message : batch.m_errors ) errors.add(message);
@@ -671,14 +697,20 @@ struct ToolPluginView::Impl {
     static bool readPathList(const sol::object&                  value,
                              std::vector<std::filesystem::path>& paths)
     {
+        // - 可选谱面路径列表可省略，显式提供时才要求是 Lua 表。
+        // - 调用者另行要求输入音频列表非空，不能把通用路径解码硬绑到一种参数。
         if ( value.get_type() == sol::type::lua_nil ) return true;
         if ( !value.is<sol::table>() ) return false;
         const auto list = value.as<sol::table>();
+        // - 预留的路径仅在当前 Lua 调用中收集，工作者拿到的是 C++ 值。
+        // - 逐项校验 1 起始的序列，不用 table 迭代重新排序。
         paths.reserve(list.size());
         for ( std::size_t index = 1; index <= list.size(); ++index ) {
             const sol::object item = list[index];
             if ( !item.is<std::string>() ) return false;
             auto path = Config::utf8ToPath(item.as<std::string>());
+            // - 批量工作线程无法依赖脚本调用时的当前目录，路径须在提交前明确。
+            // - 遇到坏项时整份请求被调用者放弃，即使前面的路径已经收集。
             if ( !path.is_absolute() ) return false;
             paths.push_back(std::move(path));
         }
@@ -1195,6 +1227,10 @@ struct ToolPluginView::Impl {
             });
         plugin.api.set_function(
             "audio_export", [&plugin](const sol::table& request) {
+                // -
+                // 输入与输出属于这次调用，不默认使用编辑器的活动工程或处于焦点的音轨。
+                // - 返回给 Lua
+                // 的字符串只代表排队或立即校验结果，正式导出结果另行发布。
                 auto options = audioOptions(request);
                 options.inputPath =
                     Config::utf8ToPath(request["input"].get_or(std::string{}));
@@ -1204,6 +1240,10 @@ struct ToolPluginView::Impl {
                     return std::string("请选择输入和输出文件");
                 return submitAudioTask(
                     plugin,
+                    // -
+                    // 把编码选项转移给后台调用，工作期间脚本可以重新选择文件。
+                    // -
+                    // 进度回调借用其对应的任务，只有同一个工作者持有这份选项。
                     [options = std::move(options)](AudioTask& task) mutable {
                         options.progressCallback =
                             [&task](const auto& progress) {
@@ -1216,16 +1256,25 @@ struct ToolPluginView::Impl {
             });
         plugin.api.set_function(
             "audio_export_batch", [&plugin](const sol::table& request) {
+                // -
+                // 批处理将音频来源和可选谱面引用交给统一服务检查，宿主不提前改动谱面文件。
+                // - 路径、容器和 DSP 参数在调用边界转为值，再交给文件池。
                 Logic::AudioBatchExportRequest batch;
                 if ( !readPathList(request["inputs"], batch.m_inputs) ||
                      !readPathList(request["charts"], batch.m_charts) ||
                      batch.m_inputs.empty() )
                     return std::string("请选择输入音频并传入绝对文件路径");
+                // - 输出目录必须和文件列表用相同的绝对路径契约。
+                // - 后缀保留脚本所选值，具体可用编码格式由服务按数据类型校验。
                 batch.m_directory = Config::utf8ToPath(
                     request["directory"].get_or(std::string{}));
                 batch.m_extension = request["extension"].get_or(std::string{});
                 if ( !batch.m_directory.is_absolute() )
                     return std::string("请选择输出目录");
+                // -
+                // 保持与单文件相同的音频选项解释，避免更换按钮入口改变输出质量。
+                // - 额外的谱面引用约束由批处理检查，不能只在 Lua 脚本做 UI
+                // 警告。
                 batch.m_options = audioOptions(request);
                 return submitAudioTask(
                     plugin,
@@ -1235,6 +1284,8 @@ struct ToolPluginView::Impl {
                                 task.progress.store(progress.progress,
                                                     std::memory_order_relaxed);
                             };
+                        // - 工作者只设置批处理结果槽，完成位由外层统一发布。
+                        // - 任务读取者据此选择包含谱面计数的结果格式。
                         task.batchResult =
                             Logic::exportAudioBatch(std::move(batch));
                     });
@@ -1249,12 +1300,17 @@ struct ToolPluginView::Impl {
                       sol::optional<std::string>
                           extensions) {
                 auto result = plugin.lua.create_table();
+                // -
+                // 只允许明确用户动作打开多选框，发现未授权调用时返回空结果表。
+                // - 用途键将输入媒体及谱面来源各自的浏览历史隔离。
                 if ( !plugin.actionActive || purpose.empty() ) return result;
                 const auto  recent    = plugin.recent.find(purpose);
                 const auto* directory = recent == plugin.recent.end()
                                             ? nullptr
                                             : recent->second.c_str();
-                const auto  filter    = extensions.value_or(std::string{});
+                // - 扩展名只控制选择器的可见过滤，不承担路径和实际容器校验。
+                // - 无过滤时传空类型列表，避免创建语义不明确的空过滤项。
+                const auto filter = extensions.value_or(std::string{});
                 const nfdu8filteritem_t  types{ "Files", filter.c_str() };
                 std::vector<std::string> paths;
                 const auto selection = NativeFileDialog::openFiles(
@@ -1262,14 +1318,22 @@ struct ToolPluginView::Impl {
                     filter.empty() ? nullptr : &types,
                     filter.empty() ? 0 : 1,
                     directory);
+                // -
+                // 系统选择器失败有可见错误，正常取消保留空表而不修改最近目录。
+                // - 复制 NFD 诊断后不向脚本暴露由选择器管理的原始指针。
                 if ( selection == NFD_ERROR ) {
                     const auto* error = NFD_GetError();
                     result["error"]   = error ? error : "无法打开文件多选框";
                 }
                 if ( selection != NFD_OKAY || paths.empty() ) return result;
+                // -
+                // 多选结果只用首个文件的父目录更新历史；各路径仍按选择顺序返回。
+                // - 历史保存失败不能回滚已经完成的交互。
                 plugin.recent[purpose] = Config::pathToUtf8(
                     Config::utf8ToPath(paths.front()).parent_path());
                 (void)saveRecent(plugin.info.id, plugin.recent);
+                // - Lua 返回表可直接作为后续批处理的 1 起始输入列表。
+                // - 字符串均由本次对话框结果生成，不要求脚本借用 C++ 向量。
                 for ( const auto& path : paths ) result.add(path);
                 return result;
             });
@@ -1282,11 +1346,16 @@ struct ToolPluginView::Impl {
                                              ? nullptr
                                              : recent->second.c_str();
                 nfdu8char_t* selected  = nullptr;
-                const auto   result =
+                // - 目录选择用于批量输出，不在对话框入口创建目标媒体。
+                // - 目的路径的实际存在性和写入权限在文件任务中复查。
+                const auto result =
                     NativeFileDialog::pickFolder(&selected, directory);
                 if ( result != NFD_OKAY || !selected ) return std::string{};
                 std::string path(selected);
                 NFD_FreePathU8(selected);
+                // -
+                // 目录选择保存所选目录本身，和单文件选择只保存父目录的约定不同。
+                // - 拷贝字符串后才释放 NFD 缓冲区，历史保留独立数据。
                 plugin.recent[purpose] = path;
                 (void)saveRecent(plugin.info.id, plugin.recent);
                 return path;
@@ -1419,6 +1488,8 @@ struct ToolPluginView::Impl {
         }
         plugin->build    = build.as<sol::protected_function>();
         plugin->onAction = onAction.as<sol::protected_function>();
+        // - 完成回调为可选扩展，旧插件未实现时仍可主动读取结果。
+        // - 提供字段时必须是函数，避免在任务完成后的回收帧才报告类型错误。
         const sol::object onAudioComplete =
             definition["on_audio_export_complete"];
         if ( onAudioComplete.is<sol::protected_function>() )
@@ -1551,12 +1622,16 @@ void ToolPluginView::update(UIManager* sourceManager)
              plugin.audioTask->done.load(std::memory_order_acquire) ) {
             // acquire 保证后台结果完整发布；标记先于 rebuild 防止重复执行。
             plugin.audioCompletionShown = true;
+            // - 无回调的插件仍需刷新控件缓存以展示任务最终状态。
+            // - 动作引发的任务替换不能重复派发旧结果，先标记交付再调用 Lua。
             if ( plugin.onAudioExportComplete.valid() ) {
                 // 先为旧任务构造结果，回调随后可替换当前任务并登记下一次完成。
                 auto status                  = Impl::audioStatus(plugin);
                 plugin.audioCompletionActive = true;
                 const auto response =
                     plugin.onAudioExportComplete(status, plugin.api);
+                // - 完成调用返回后立刻撤销发起下一任务的临时权限。
+                // - Lua 错误只更新本插件诊断，其余插件和文件线程不被中断。
                 plugin.audioCompletionActive = false;
                 if ( !response.valid() ) {
                     const sol::error error = response;
@@ -1566,6 +1641,8 @@ void ToolPluginView::update(UIManager* sourceManager)
             }
             (void)Impl::rebuild(plugin);
         }
+        // - 后台结果回收在窗口可见性之前处理，关闭窗口不挂起脚本的批处理链。
+        // - 普通关闭帧只保留长期插件状态，不构建新的控件内容。
         if ( !plugin.open ) continue;
         // 关闭窗口时跳过所有 ImGui 控件，后台任务仍可继续执行。
         // 标题在加载时缓存，避免逐帧拼接字符串和生成新的停靠 ID。
@@ -1593,6 +1670,8 @@ void ToolPluginView::update(UIManager* sourceManager)
         // 多视口模式会把未停靠面板提升为独立系统窗口；工具插件始终留在
         // 主视口内，允许作为普通 ImGui 面板停靠、拆分或临时浮动。
         ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
+        // - 缓存窗口打开状态用于统一关闭反馈，Lua 无需监听 ImGui 内部状态。
+        // - 窗口生命周期保持在当前帧，结束绘制之后才调用动作。
         const bool wasOpen = plugin.open;
         const bool visible =
             ImGui::Begin(plugin.windowTitle.c_str(), &plugin.open);
@@ -1602,6 +1681,8 @@ void ToolPluginView::update(UIManager* sourceManager)
         FeedbackCurrentWindowCloseButton(wasOpen, &plugin.open);
         // 一个窗口本帧最多提交一次动作，所有控件先完成绘制后才进入 Lua。
         // 这样回调重建控件树不会让当前 for 遍历的 Widget 引用失效。
+        // - 帧内先收集动作身份和值副本，不能让回调重新分配正在遍历的 Widget。
+        // - 静态帧没有用户事件时不会为字段内容创建额外副本。
         std::string actionId;
         std::string actionValue;
         if ( visible ) {
@@ -1713,6 +1794,8 @@ void ToolPluginView::update(UIManager* sourceManager)
                 // row ID 隔离表格和子控件；每列有最小宽度，窄面板纵排。
                 // 阈值只读取当前内容区域，窗口停靠尺寸变化会即时生效。
                 ImGui::PushID(widget.id.c_str());
+                // - 估算横排空间时要包含列间距，窄窗口先走纵排避免不可达按钮。
+                // - 重新计算使用当前可用区域，窗口缩放不会遗留旧的布局判断。
                 const float neededWidth =
                     widget.minColumnWidth * widget.children.size() +
                     ImGui::GetStyle().ItemSpacing.x *
@@ -1734,6 +1817,9 @@ void ToolPluginView::update(UIManager* sourceManager)
                 } else {
                     // 不创建横向滚动；所有控件按声明顺序可见且可操作。
                     // 纵排没有缓存状态，重新拉宽窗口会立即回到横排。
+                    // - 以同一个绘制入口处理子控件，排列方向不改变控件 ID
+                    // 和操作回调。
+                    // - 纵排无额外临时表格状态，下一帧可按尺寸切回横排。
                     for ( auto& child : widget.children ) drawLeaf(child);
                 }
                 ImGui::PopID();
@@ -1743,6 +1829,9 @@ void ToolPluginView::update(UIManager* sourceManager)
         // 退出当前 ImGui 窗口后才允许 Lua 改变控件树。
         if ( actionId.empty() ) continue;
         // actionActive 只覆盖当前同步回调，不传到音频后台任务。
+        // - 动作只在当前同步调用期间得到文件选择权限，结束后 build
+        // 仍保持声明式。
+        // - 动作值为独立字符串，Lua 回调不接触控件向量内部地址。
         plugin.actionActive = true;
         // 回调期间允许打开文件对话框；它由明确用户动作触发。
         const auto result = plugin.onAction(actionId, actionValue, plugin.api);

@@ -685,86 +685,11 @@
 
   - Linux 上临时谱包、Unicode 路径、IMD/BMS 导出、保存反馈及会话流程共 8 项 CTest 通过。Android 的默认栈大小依据 [AOSP Bionic 源码](https://android.googlesource.com/platform/bionic/+/d4c94194416f0c3727bdae51163932694dccca24/libc/bionic/pthread_internal.h)。
 
-## 注释率逐文件待办
+## 注释率逐文件验收
 
-以下使用 cloc 2.08 的 comment / (comment + code)，按文件独立计算。比例只用于检查项目门槛。长期任务应按职责分批补充实现约束，避免用逐句翻译提高比例。
+基于主仓 `a15f6c04` 加本批注释修订及 ICE `8202340`，使用 cloc 2.08 按文件独立计算 `comment / (comment + code)`。主仓和 ICE 共 1,566 个有效自维护文件，全部达到 30%，另有 5 个空文件不适用。
 
-以主仓 `081b8e7b` 加 R30 注释修改及 ICE `568bc7f` 为基线，有效计数 1537 项，低于 30% 的 72 项如下。保留原有翻译 Lua 统计口径，外部谱面样例脚本排除。
-
-| 待办文件 | 注释行 | 代码行 | 比例 |
-|---|---:|---:|---:|
-| `3rdpty/cmake/modules/FindEnTT.cmake` | 1 | 13 | 7.14% |
-| `3rdpty/cmake/modules/FindImGuiFileDialog.cmake` | 1 | 44 | 2.22% |
-| `3rdpty/cmake/modules/FindOpenAL.cmake` | 3 | 54 | 5.26% |
-| `3rdpty/cmake/modules/FindSDL3Static.cmake` | 2 | 57 | 3.39% |
-| `3rdpty/cmake/modules/Findclay.cmake` | 1 | 8 | 11.11% |
-| `3rdpty/cmake/modules/Findconcurrentqueue.cmake` | 4 | 13 | 23.53% |
-| `3rdpty/cmake/modules/Findcurl.cmake` | 5 | 59 | 7.81% |
-| `3rdpty/cmake/modules/Findfftw.cmake` | 1 | 34 | 2.86% |
-| `3rdpty/cmake/modules/Findfmt.cmake` | 1 | 37 | 2.63% |
-| `3rdpty/cmake/modules/Findfreetype.cmake` | 2 | 49 | 3.92% |
-| `3rdpty/cmake/modules/Findglfw.cmake` | 2 | 49 | 3.92% |
-| `3rdpty/cmake/modules/Findglm.cmake` | 1 | 13 | 7.14% |
-| `3rdpty/cmake/modules/Findimgui.cmake` | 2 | 47 | 4.08% |
-| `3rdpty/cmake/modules/Findimplot.cmake` | 2 | 37 | 5.13% |
-| `3rdpty/cmake/modules/Findlame.cmake` | 1 | 31 | 3.12% |
-| `3rdpty/cmake/modules/Findlibdatachannel.cmake` | 1 | 53 | 1.85% |
-| `3rdpty/cmake/modules/Findlibjuice.cmake` | 1 | 39 | 2.50% |
-| `3rdpty/cmake/modules/Findlibsamplerate.cmake` | 1 | 37 | 2.63% |
-| `3rdpty/cmake/modules/Findluajit.cmake` | 1 | 47 | 2.08% |
-| `3rdpty/cmake/modules/Findlunasvg.cmake` | 1 | 78 | 1.27% |
-| `3rdpty/cmake/modules/Findmbedtls.cmake` | 1 | 136 | 0.73% |
-| `3rdpty/cmake/modules/Findminiz.cmake` | 1 | 31 | 3.12% |
-| `3rdpty/cmake/modules/Findnfd.cmake` | 3 | 56 | 5.08% |
-| `3rdpty/cmake/modules/Findnlohmann_json.cmake` | 1 | 15 | 6.25% |
-| `3rdpty/cmake/modules/Findrubberband.cmake` | 1 | 52 | 1.89% |
-| `3rdpty/cmake/modules/Findsol2.cmake` | 1 | 13 | 7.14% |
-| `3rdpty/cmake/modules/Findspdlog.cmake` | 2 | 43 | 4.44% |
-| `3rdpty/cmake/modules/Findstb.cmake` | 1 | 8 | 11.11% |
-| `3rdpty/cmake/modules/Findusrsctp.cmake` | 2 | 44 | 4.35% |
-| `3rdpty/cmake/modules/Findzlib.cmake` | 1 | 38 | 2.56% |
-| `3rdpty/cmake/modules/PrebuiltLayout.cmake` | 33 | 430 | 7.13% |
-| `3rdpty/sources/IonCachyEngine/tests/StreamingDecoderLengthTest.cpp` | 90 | 225 | 28.57% |
-| `3rdpty/sources/cmake/GLFW.cmake` | 5 | 17 | 22.73% |
-| `3rdpty/sources/cmake/ImGuiFileDialog.cmake` | 2 | 24 | 7.69% |
-| `3rdpty/sources/cmake/PatchLuaJITMsvcRuntime.cmake` | 1 | 25 | 3.85% |
-| `3rdpty/sources/cmake/clay.cmake` | 0 | 5 | 0.00% |
-| `3rdpty/sources/cmake/entt.cmake` | 0 | 3 | 0.00% |
-| `3rdpty/sources/cmake/freetype.cmake` | 15 | 47 | 24.19% |
-| `3rdpty/sources/cmake/glm.cmake` | 0 | 17 | 0.00% |
-| `3rdpty/sources/cmake/implot.cmake` | 4 | 19 | 17.39% |
-| `3rdpty/sources/cmake/libdatachannel.cmake` | 6 | 26 | 18.75% |
-| `3rdpty/sources/cmake/mbedtls.cmake` | 3 | 33 | 8.33% |
-| `3rdpty/sources/cmake/miniz.cmake` | 1 | 21 | 4.55% |
-| `3rdpty/sources/cmake/nlohmann_json.cmake` | 0 | 3 | 0.00% |
-| `3rdpty/sources/cmake/sol2.cmake` | 7 | 24 | 22.58% |
-| `3rdpty/sources/cmake/stb.cmake` | 0 | 2 | 0.00% |
-| `Modules/Config/tests/PastePositionConfigTest.cpp` | 3 | 27 | 10.00% |
-| `Modules/Game/Logic/src/logic/AudioBatchExportService.cpp` | 43 | 468 | 8.41% |
-| `Modules/Game/Logic/src/logic/BmsPackageExportService.cpp` | 180 | 522 | 25.64% |
-| `Modules/Game/Logic/src/logic/ProjectResourceService.cpp` | 867 | 2090 | 29.32% |
-| `Modules/Game/Logic/tests/AudioBatchExportServiceTest.cpp` | 10 | 153 | 6.13% |
-| `Modules/Game/Logic/tests/BmsPackageExportServiceTest.cpp` | 299 | 776 | 27.81% |
-| `Modules/Game/Logic/tests/CanvasCameraTest.cpp` | 2601 | 6219 | 29.49% |
-| `Modules/Game/UI/src/ui/imgui/audio/AudioSpectrumView.cpp` | 462 | 1079 | 29.98% |
-| `Modules/Game/UI/src/ui/imgui/manager/BuiltinSettingsSearch.h.in` | 2 | 5 | 28.57% |
-| `Modules/Game/UI/src/ui/imgui/manager/SettingsView.cpp` | 396 | 925 | 29.98% |
-| `Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp` | 147 | 615 | 19.29% |
-| `Modules/Game/UI/src/ui/imgui/menu/actions/file/PackBeatmapAction.cpp` | 860 | 2032 | 29.74% |
-| `Modules/Game/UI/src/ui/plugin/BuiltinToolPlugins.h.in` | 2 | 7 | 22.22% |
-| `Modules/Game/UI/src/ui/plugin/ToolPluginView.cpp` | 483 | 1287 | 27.29% |
-| `Modules/Game/UI/tests/SettingsResourceRenameTest.cpp` | 188 | 496 | 27.49% |
-| `Modules/MMM/src/beatmap/BeatMap.cpp` | 119 | 280 | 29.82% |
-| `Modules/MMM/src/beatmap/BmsFormat.hpp` | 138 | 416 | 24.91% |
-| `Modules/MMM/src/beatmap/LoadMMMMap.hpp` | 318 | 748 | 29.83% |
-| `Modules/MMM/src/beatmap/SaveBmsMap.hpp` | 137 | 520 | 20.85% |
-| `Modules/MMM/src/beatmap/SaveOSUMap.hpp` | 130 | 305 | 29.89% |
-| `Modules/MMM/tests/BmsFormatTest.cpp` | 254 | 746 | 25.40% |
-| `Modules/MMM/tests/MetadataCompatibilityTest.cpp` | 496 | 1188 | 29.45% |
-| `assets/plugins/tools/audio.lua` | 97 | 297 | 24.62% |
-| `assets/translations/en_us.lua` | 20 | 1824 | 1.08% |
-| `assets/translations/zh_cn.lua` | 20 | 1824 | 1.08% |
-| `docs/plugin/examples/ivm.lua` | 12 | 111 | 9.76% |
+本次复查报告中的 69 个低比例文件中，67 个补齐了各自的接口约束、状态边界、维护说明或测试意图。其余两份翻译 Lua 经检查仅返回键和值均为字面量的数据表，按 AGENTS 的纯数据口径排除。实际参与插件执行的资源 Lua 和文档中的 Lua 示例仍计入统计。外部谱面样例、第三方源码、预编译内容和生成文件按既有范围排除。
 
 ## 2026-11-24 复查追加待办
 
@@ -1008,9 +933,9 @@
 
 - [x] 补齐以下三个文件的实现约束并逐文件复算。
 
-  已验证。Linux RelWithDebInfo 全量构建和 4 项音频、渲染相关 CTest 通过。三个文件仅修改注释，逐文件复算均达到 30%。已按 cloc 2.08 刷新 1,537 个有效文件的统计，欠项表保留 72 个低于 30% 的文件。
+  已验证。Linux RelWithDebInfo 全量构建和 4 项音频、渲染相关 CTest 通过。三个文件仅修改注释，逐文件复算均达到 30%。当时按 cloc 2.08 统计 1,537 个有效文件，其中 72 个低于 30%。当前结果见上面的逐文件验收。
 
-本项补充上次复查新增的三个注释率欠项，并按同一范围刷新上面的逐文件待办表。统计自维护构建和打包脚本、头模板、资源脚本与文档中的 Lua 示例，排除外部谱面样例、预编译内容、生成的 SPIR-V 及未计入分母的空文件。
+本项补充上次复查新增的三个注释率欠项，并按当时的范围刷新逐文件统计。统计自维护构建和打包脚本、头模板、资源脚本与文档中的 Lua 示例，排除外部谱面样例、预编译内容、生成的 SPIR-V 及未计入分母的空文件。
 
 - `Modules/Audio/src/AudioTimelineMixerNode.cpp`，434 行注释、1012 行代码，30.01%。
 - `Modules/Audio/tests/AudioOriginAlignmentServiceTest.cpp`，60 行注释、137 行代码，30.46%。

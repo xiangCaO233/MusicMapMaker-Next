@@ -796,6 +796,7 @@ bool SettingsView::needsParallelUiPrepare(const UiFrameSnapshot& snapshot) const
 void SettingsView::prepareUiFrameData(const UiFrameSnapshot& snapshot)
 {
     // 使用调用方捕获的同一帧快照，避免准备中再次读取全局状态。
+    // 工作线程只构造独立缓存，界面线程继续用已经提交的布局直至帧边界切换。
     m_preparedLayoutMetricsCache = buildLayoutMetrics(snapshot, m_currentTab);
     // 标志发布完整结果；交换函数不会读取未准备的数据。
     m_hasPreparedLayoutMetrics = true;

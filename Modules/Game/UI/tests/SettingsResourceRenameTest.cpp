@@ -131,6 +131,8 @@ struct SettingsResourceRenameTestAccess {
                   : SettingsView::BeatmapResourceTarget::Cover;
         view.m_resourceRenameProjectRoot =
             engine.getCurrentProject()->m_projectRoot;
+        // 快照中的两个弱身份允许旧选择保留至重载测试，同时不延长旧谱面寿命。
+        // 不能只记录显示名，否则同一路径重新打开时缺少真正的失效边界。
         auto identity = std::make_shared<Logic::BeatmapSettingsSnapshot>();
         identity->projectRoot = view.m_resourceRenameProjectRoot;
         identity->session     = engine.getActiveSession();
@@ -142,6 +144,8 @@ struct SettingsResourceRenameTestAccess {
             audio ? meta.song_file_hint : meta.cover_path;
         view.m_editingMeta       = meta;
         view.m_editingMeta.title = "Unsaved title draft";
+        // 重复场景在同一视图上写入不同长度的名称；清掉上一轮尾部，
+        // 保持缓冲语义与用户重新输入一致。
         view.m_resourceRenameBuffer.fill('\0');
         std::memcpy(
             view.m_resourceRenameBuffer.data(), name, std::strlen(name));
@@ -150,6 +154,9 @@ struct SettingsResourceRenameTestAccess {
     }
 
     /// @brief 仅测试驱动模拟文件任务完成后的下一帧。
+    /// @param view 已经提交生产文件任务的视图。
+    /// @return 已完成文件任务并且通过生产回收校验时返回真。
+    /// @note 只有测试主动等待 future，业务界面下一帧使用非阻塞轮询。
     static bool finishRename(SettingsView& view)
     {
         if ( view.m_pendingRename.valid() ) view.m_pendingRename.wait();
@@ -159,6 +166,8 @@ struct SettingsResourceRenameTestAccess {
     /// @brief 业务入口先入队，只有下一轮消费才能观察最终结果。
     static bool rename(SettingsView& view, bool confirmed = false)
     {
+        // 忽略入队调用的即时布尔值，结果必须来自文件任务完成后的回收。
+        // 共享提示也由真实预检交付，而不是由测试预先设置。
         view.renameBeatmapResource(confirmed);
         return finishRename(view);
     }
@@ -213,6 +222,8 @@ struct SettingsResourceRenameTestAccess {
             // 找不到生产模态窗口必须立即失败，不能继续点击旧坐标。
             // 固定内部 ID 排除本地化标题不同导致误认窗口的情况。
             if ( !window ) return false;
+            // 按当前文案测量，包括复制提示出现后被替换的确认文字。
+            // 同一个布局函数被两步复用，但每一步读取自己当时的模态状态。
             const auto primary =
                 TR(view.m_resourceRenameCopyPending
                        ? "ui.settings.beatmap.rename_copy_confirm"
@@ -257,6 +268,7 @@ struct SettingsResourceRenameTestAccess {
             // 提示可能使窗口增高，第二次点击前已重新布局和重新计算坐标。
             // 确认或取消结束后都应关闭模态，不留下会重复触发的打开请求。
             click(!copy) && ImGui::GetCurrentContext()->OpenPopupStack.empty();
+        // 确认与取消都关闭界面；目的文件存在性是区分两条动作路径的独立证据。
         passed &= std::filesystem::exists(destination) == copy;
         ImGui::DestroyContext();
         return passed;
@@ -394,11 +406,15 @@ struct SettingsResourceRenameTestAccess {
         // 音乐同样经过提示和二次确认，副本保留原有主轨配置。
         // 源音频使用有效 WAV 字节，不依靠虚假文件名满足播放资源解析。
         // 曾被排除的路径在用户显式创建副本后也应恢复正常登记和目录扫描。
+        // 先将新名放入排除表，再由显式副本事务解除。这样可区分正确回收
+        // 和测试目录一开始没有这一排除项时的偶然通过。
         project->m_excludedAudioPaths.push_back("renamed.wav");
         request(view, true, "renamed.wav");
         check(popup(view, root / "renamed.wav", true),
               "real audio copy confirmation",
               passed);
+        // 界面完成文件复制后才有设置命令，推进生产逻辑更新后再检查绑定。
+        // 否则可能只验证了正在渲染的草稿值，没有触及播放模型。
         session->update(0, engine.getEditorConfig(), true);
         check(live.song_file_hint == "renamed.wav",
               "current music rebound",
@@ -447,6 +463,8 @@ struct SettingsResourceRenameTestAccess {
         // 未保存的其他会话同样计入引用，不能只看磁盘旧元数据。
         // 该来源没有落盘也未登记，只在内存中共享文件。
         // 以观察指针提供给生产预检，验证磁盘与内存证据会合并处理。
+        // 内存谱面使用不同的显式文件名，避免预检将它归并为当前谱面。
+        // 其内容只在提取只读引用快照时参与，不能靠磁盘同名文件来模拟。
         auto open                          = std::make_shared<BeatMap>();
         open->m_baseMapMetadata.map_path   = root / "unsaved.mmm";
         open->m_baseMapMetadata.cover_path = "renamed.png";
@@ -491,6 +509,7 @@ struct SettingsResourceRenameTestAccess {
         check(session->flushPendingMetadataAutoSave(),
               "persist copied resource selection",
               passed);
+        // 重新加载使用正常文件入口，校验提交给磁盘的路径能被其他编辑会话读取。
         const auto saved = BeatMap::loadFromFile(root / "current.mmm");
         check(saved.m_baseMapMetadata.song_file_hint == "renamed.wav" &&
                   saved.m_baseMapMetadata.cover_path == "renamed.png" &&
@@ -537,6 +556,8 @@ struct SettingsResourceRenameTestAccess {
         std::ofstream(root / "Fresh.png") << "cover import fixture";
         // 占满文件池以确定性模拟慢盘。资源提交后，逻辑仍能消费已经排队的标题。
         std::latch occupied(4);
+        // 两个门闩分别观察工作者都已进入阻塞和允许它们退出，
+        // 不依赖计时器推测任一阶段到达。
         std::latch releaseFiles(1);
         auto* files = Runtime::AppThreadPool::instance().getFileThreadPool();
         std::vector<std::future<void>> blocked;
@@ -557,6 +578,8 @@ struct SettingsResourceRenameTestAccess {
                     newerMeta.title,
             "pending file work does not delay a logic update",
             passed);
+        // 先放行再等待，保证所有捕获本地引用的文件任务都能安全离开作用域。
+        // 提交后再次推进逻辑更新，确认先前已应用的标题不会被副本覆盖。
         releaseFiles.count_down();
         for ( auto& job : blocked ) job.wait();
         if ( view.m_pendingImport.valid() ) view.m_pendingImport.wait();
@@ -598,6 +621,7 @@ struct SettingsResourceRenameTestAccess {
         // 选择资源仍走公开文件路径，不依赖鼠标或桌面文件对话框。
         const auto beforeStaleImport =
             session->getContext().currentBeatmap->m_baseMapMetadata.cover_path;
+        // 对已经就绪的结果单独执行回收，减少把失败误归因于工作者还未完成的可能。
         view.pollBeatmapResourceImport();
         session->update(0, engine.getEditorConfig(), true);
         check(!view.m_beatmapResourceImportError.empty() &&
@@ -684,6 +708,8 @@ int main(int argc, char** argv)
         std::make_shared<MMM::BeatMap>(
             MMM::BeatMap::loadFromFile(root / "current.mmm")),
         "Current resource rename");
+    // 让设置页和资源命令都按正式的活动会话解析；源文件必须经加载命令发布
+    // 后才对行按钮的身份快照可见。
     engine.setActiveSessionIndex(index);
     engine.getActiveSession()->update(0, engine.getEditorConfig(), true);
     // 生产资源任务走独立文件池；逻辑更新由测试显式驱动。
