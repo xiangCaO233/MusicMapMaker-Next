@@ -274,14 +274,15 @@ void tap(Canvas::TimelineCanvas& canvas, ImVec2 point)
 }
 
 /// @brief 推进一次有未处理表格请求的逻辑帧。
-/// @note 夹具直接填 Registry，故固定为 VSync，避免真实空闲节流影响检查时序。
+/// @note 夹具直接填 Registry，需显式推进到下一次空闲刷新边界。
 /// @param session 正常接收表格请求的活动会话。
-/// @param config 本次测试独占的配置副本，替代帧节流不影响用户设置。
-void advanceTablePublication(Logic::BeatmapSession& session,
-                             Config::EditorConfig   config)
+/// @param config 正式会话配置，保持原有帧限制设置。
+void advanceTablePublication(Logic::BeatmapSession&      session,
+                             const Config::EditorConfig& config)
 {
-    // 固定逻辑边界，测试不等待系统时间跨过空闲节流窗口。
-    config.settings.frameLimit = Config::FrameLimitPreference::VSync;
+    // 使本轮实际执行滚动缓存维护。直接填充夹具不会产生正常编辑命令的忙碌边沿，
+    // 上次维护时间足够早时便可确定地推进一轮，无需休眠或依赖 VSync。
+    session.getContextMutable().lastSnapshotTime = -1.0;
     session.update(0.0, config, true);
 }
 
