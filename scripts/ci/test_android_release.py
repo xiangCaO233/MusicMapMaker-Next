@@ -38,6 +38,7 @@ class AndroidReleaseTest(unittest.TestCase):
         root = Path(os.environ.get("MMM_TEST_OUTPUT_DIR", Path(__file__).resolve().parents[2] / "build/test_output/android-release"))
         root.mkdir(parents=True, exist_ok=True)
         self.m_temp = tempfile.TemporaryDirectory(dir=root)
+        # 测试中途断言失败时 unittest 仍执行清理，避免残留包影响下一轮聚合。
         self.addCleanup(self.m_temp.cleanup)
         self.m_root = Path(self.m_temp.name)
 
@@ -49,12 +50,14 @@ class AndroidReleaseTest(unittest.TestCase):
         ELF 头只覆盖本工具读取的架构字段，不冒充可运行的 Android 应用。
         """
         root = self.m_root / name
+        # 每个 APK 夹具使用独立目录，制造 ZIP 或元数据反例不改动其他案例。
         root.mkdir()
         version = "0.6.4" + (f"-hotfix.{revision}" if revision else "")
         apk = root / f"MusicMapMaker-Next-{version}-android-arm64.apk"
         with zipfile.ZipFile(apk, "w") as archive:
             archive.writestr(f"lib/{abi}/libmain.so", b"\x7fELF" + bytes(14) + (183).to_bytes(2, "little"))
             archive.writestr("assets/example", b"resource")
+        # 摘要在 ZIP 关闭之后计算，确保中央目录也参与字节校验。
         record = dict(source=SOURCE, abi="arm64-v8a", variant="release", versionName=version,
                       baseVersion="0.6.4", hotfix_revision=revision,
                       bytes=apk.stat().st_size, sha256=hashlib.sha256(apk.read_bytes()).hexdigest())
@@ -86,6 +89,7 @@ class AndroidReleaseTest(unittest.TestCase):
         # 按真实目录关系拒绝祖先、同一路径和后代，检查拒绝发生在创建事务前。
         destinations = [candidate, root, root / "output"]
         # POSIX 可无额外权限创建目录别名，用它覆盖路径文本看似分离的情况。
+        # 目录链接反例依赖操作系统对非提权创建链接的支持，不强制 CI 在 Windows 开发者模式下执行。
         if os.name == "posix":
             alias = self.m_root / "alias"
             alias.symlink_to(self.m_root, target_is_directory=True)
@@ -93,6 +97,7 @@ class AndroidReleaseTest(unittest.TestCase):
         for destination in destinations:
             with self.subTest(destination=destination), self.assertRaisesRegex(ValueError, "separate"):
                 RELEASE.stage_delivery(root, destination, SOURCE)
+        # 拒绝目标还必须保留相邻文件，不能只靠读取输入包确认未误删祖先。
         self.assertEqual(sibling.read_text(), "keep")
         RELEASE.verify_delivery(root, SOURCE)
         self.assertFalse((root / "output").exists())

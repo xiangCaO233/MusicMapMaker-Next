@@ -951,6 +951,7 @@ void AudioSpectrumView::reloadTextures(vk::PhysicalDevice& physicalDevice,
     }
 
     // 每帧上传量受常量限制，避免长频谱造成单帧卡顿。
+    // 配额按左右声道分块对计数，使同一时间范围不会一侧先显示而另一侧仍使用旧纹理。
     std::size_t uploadedThisFrame = 0;
     while ( m_nextChunkUploadIndex < m_pendingChunksL.size() &&
             uploadedThisFrame < MAX_UPLOAD_CHUNK_PAIRS_PER_FRAME ) {
@@ -1484,6 +1485,7 @@ bool AudioSpectrumView::backgroundRecalculate(
 void AudioSpectrumView::prepareFullGlobalTextures()
 {
     // 没有左声道缓存表示后台计算未产生可提交结果。
+    // 分块重建依赖完整强度缓存，换轨撤销缓存后应等待新分析任务完成。
     if ( m_cachedIntensityL.empty() ) return;
 
     // 纹理总宽等于时间段数，高度等于当前活动频率箱数。

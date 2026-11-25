@@ -795,7 +795,9 @@ void to_json(nlohmann::json& json, const PastePosition& position)
 /// @brief 读取粘贴锚点，缺失、错误类型和未知值均沿用旧行为。
 void from_json(const nlohmann::json& json, PastePosition& position)
 {
+    // 判定线是旧版没有锚点字段时的行为；未知枚举也保持该行为。
     position = PastePosition::JudgmentLine;
+    // 仅接受已知字面量；旧版恢复配置时无需理解未来新增的枚举值。
     if ( json.is_string() && json.get<std::string>() == "MouseCursor" )
         position = PastePosition::MouseCursor;
 }
@@ -1401,6 +1403,7 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     // 粘贴时间基准与时间线 BPM 选择范围分别控制两种编辑语义。
     settings.copyPasteTimeBasis = readConfigValue(
         json, "copyPasteTimeBasis", CopyPasteTimeBasis::Timestamp);
+    // 锚点决定整批粘贴的起点，时间基准仍由独立选项决定对象间距。
     settings.pastePosition =
         readConfigValue(json, "pastePosition", PastePosition::JudgmentLine);
     settings.timelineSelectionIncludesBpm =

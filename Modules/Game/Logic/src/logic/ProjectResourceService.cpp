@@ -812,11 +812,14 @@ std::optional<std::filesystem::path> resolveProjectedImdAudioAfterMove(
     const std::filesystem::path& absoluteOldPath,
     const std::filesystem::path& absoluteNewPath)
 {
+    // 新文件名未必保留旧曲名前缀，投影以最终谱面位置模拟隐式音频发现。
     const auto prefix = imdAudioPrefix(mapPathAfterMove);
     if ( prefix.empty() ) return std::nullopt;
 
     // 保持同一候选顺序，仅把存在性检查替换为移动投影，才能比较移动是否改变歌曲选择。
     for ( const auto extension : RM_AUDIO_EXTENSIONS ) {
+        // 候选绝对路径与移动源、目标使用相同规范化规则，
+        // 避免目录别名使移动投影与当前文件系统的结果不一致。
         const auto candidate = weaklyCanonicalAbsolutePath(
             mapPathAfterMove.parent_path() /
             Config::utf8ToPath(prefix + std::string(extension)));
@@ -1085,6 +1088,7 @@ bool rewriteOsuAudioReferences(
     while ( offset < source.size() ) {
         // 每行独立保留 CRLF/LF
         // 与末行是否有换行，避免局部路径替换改变整份文件格式。
+        // 行边界先从源文本取得，再操作当前行副本，替换长度不影响下一行的索引。
         const auto newline = source.find('\n', offset);
         const auto lineEnd =
             newline == std::string::npos ? source.size() : newline;
@@ -1096,6 +1100,8 @@ bool rewriteOsuAudioReferences(
         std::size_t contentEnd   = line.size();
         trimAsciiRange(line, contentBegin, contentEnd);
         // 去空白只用于识别，原行仍保留缩进；节名按原文精确比较。
+        // 只在合法闭合节头切换解释规则。未闭合内容仍是当前节的普通文本，
+        // 坐标边界仍以未经裁切的原始行计算。
         if ( contentEnd > contentBegin + 1U && line[contentBegin] == '[' &&
              line[contentEnd - 1U] == ']' ) {
             currentSection =
@@ -1106,6 +1112,8 @@ bool rewriteOsuAudioReferences(
             std::size_t referenceEnd   = std::string::npos;
             // 只识别明确支持的音频字段；其他节及无法识别的物件行原样传递。
             if ( currentSection == "General" ) {
+                // General
+                // 每行只匹配首个键值分隔符，未知键即使值像音频路径也必须保留。
                 const auto separator = line.find(':');
                 if ( separator != std::string::npos ) {
                     std::size_t keyBegin = 0U;
@@ -1118,6 +1126,9 @@ bool rewriteOsuAudioReferences(
                         referenceEnd   = line.size();
                     }
                 }
+                // 同一文件路径在 General 与 Events
+                // 中的边界不同，不能复用冒号分隔逻辑。
+                // 事件前缀完整并且类型明确后，才把后面的字段交给引用解析器。
             } else if ( currentSection == "Events" ) {
                 // Storyboard 样本的文件名是第四个 CSV
                 // 字段，带引号时可包含逗号。
@@ -1128,9 +1139,14 @@ bool rewriteOsuAudioReferences(
                     const auto type =
                         line.substr(contentBegin, typeEnd - contentBegin);
                     const auto second = line.find(',', first + 1);
-                    const auto third  = second == std::string::npos
-                                            ? second
-                                            : line.find(',', second + 1);
+                    // 第二个逗号之前是事件时间，第三个逗号之前是图层；缺列时保留原行，
+                    // 不能将图层数字当成相对路径查询。
+                    const auto third = second == std::string::npos
+                                           ? second
+                                           : line.find(',', second + 1);
+                    // Storyboard
+                    // 同时允许命名和数字形式。图片及视频行也可能有四个字段，
+                    // 以类型过滤后才可把第四列作为音频引用，避免把封面误改为相对音频路径。
                     if ( (type == "Sample" || type == "5") &&
                          third != std::string::npos ) {
                         referenceBegin = third + 1;
@@ -1140,6 +1156,7 @@ bool rewriteOsuAudioReferences(
                              line[referenceBegin] == '"' ) {
                             ++referenceBegin;
                             referenceEnd = line.find('"', referenceBegin);
+                            // 未闭合的引号无法确定路径结尾，不能用整行剩余内容代替合法路径。
                             if ( referenceEnd == std::string::npos )
                                 referenceBegin = std::string::npos;
                         } else if ( const auto end =
@@ -1190,6 +1207,8 @@ bool rewriteOsuAudioReferences(
                         for ( std::size_t index = 0U;
                               index < requiredSeparators;
                               ++index ) {
+                            // 按成功定位的字段逐级推进，任何未找到的分隔符都不参与位置运算。
+                            // 此处只理解字段边界，音色、音量、样本集合数值仍由谱面读取器解释。
                             const auto separator = line.find(':', cursor);
                             if ( separator == std::string::npos ) {
                                 // 不完整采样字段保持原文，不能猜一个偏移后误替换数值。
@@ -1214,6 +1233,8 @@ bool rewriteOsuAudioReferences(
                     const auto reference = line.substr(
                         referenceBegin, referenceEnd - referenceBegin);
                     const auto replacement = resolve(reference);
+                    // 解析器有三种结果：未命中表示保留，非空表示替换，空字符串表示
+                    // 命中但无法生成有效路径，需要取消整个批次而非把音频引用写成空。
                     if ( replacement && replacement->empty() ) return false;
                     if ( replacement && *replacement != reference ) {
                         // 两侧空白不属于替换范围，同值替换也不将 changed 置为
@@ -1229,6 +1250,7 @@ bool rewriteOsuAudioReferences(
 
         // 仅路径片段经过 replace，数值字段、注释和未知行均沿用原始文本。
         output += line;
+        // 被剥离的 CR 按原行还原，因而同一文件混用 LF 与 CRLF 也无需统一。
         if ( hasCarriageReturn ) output.push_back('\r');
         if ( newline != std::string::npos ) output.push_back('\n');
         offset = newline == std::string::npos ? source.size() : newline + 1U;
@@ -1272,6 +1294,7 @@ bool readBinaryTextFile(const std::filesystem::path& path, std::string& output)
     // 二进制模式绕过平台文本换行转换，供无损局部替换使用。
     std::ifstream stream(path, std::ios::binary);
     if ( !stream.is_open() ) return false;
+    // 此处供局部文本替换使用，读出对象不经 Unicode 转码或整份语法重写。
     output.assign(std::istreambuf_iterator<char>(stream),
                   std::istreambuf_iterator<char>());
     // 空文件也是合法读取结果；正常 EOF 与底层读取错误不能混为一谈。
@@ -1304,6 +1327,8 @@ bool stageTextFileReplacement(const std::filesystem::path& path,
                               const std::string&           content,
                               PendingTextFileReplacement&  replacement)
 {
+    // 先只登记目标与旁路路径。直到临时流完整关闭，调用者不能把记录加入待提交队列。
+    // 旧目标由提交阶段统一备份，此处失败不会要求恢复原路径。
     replacement.m_targetPath    = path;
     replacement.m_temporaryPath = path;
     replacement.m_temporaryPath += ".mmm-audio-remap.tmp";
@@ -1317,6 +1342,8 @@ bool stageTextFileReplacement(const std::filesystem::path& path,
         std::filesystem::exists(replacement.m_temporaryPath, filesystemError);
     if ( filesystemError || temporaryExists ) return false;
     filesystemError.clear();
+    // 备份优先用于恢复旧文件，发现遗留备份时让调用者处理现有状态，
+    // 不能复用后缀并在清理时失去唯一的原始副本。
     const bool backupExists =
         std::filesystem::exists(replacement.m_backupPath, filesystemError);
     if ( filesystemError || backupExists ) return false;
@@ -1325,10 +1352,13 @@ bool stageTextFileReplacement(const std::filesystem::path& path,
     std::ofstream stream(replacement.m_temporaryPath,
                          std::ios::binary | std::ios::trunc);
     if ( !stream.is_open() ) return false;
+    // 替换字符串可能比原路径长，调用者已组合完整正文；磁盘暂存只写最终字节。
+    // 不对单行重复定位旧文件，避免长路径使后续字段发生就地覆盖。
     stream.write(content.data(), static_cast<std::streamsize>(content.size()));
     // 按显式字节长度写出，内容中的零字节不会被当作 C 字符串结束标记。
     // 关闭后检查状态，覆盖缓冲区最终写出时才发生的错误。
     stream.close();
+    // 成功写入只是提交准备完成，原路径仍由后续批量替换阶段一次处理。
     if ( stream.good() ) return true;
 
     filesystemError.clear();

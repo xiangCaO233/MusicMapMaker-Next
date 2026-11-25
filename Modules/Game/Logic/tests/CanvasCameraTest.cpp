@@ -150,6 +150,8 @@ bool near(double lhs, double rhs)
 void configureObjectEditingCanvas(MMM::Logic::SessionContext& context)
 {
     // 调用方可预先提供 BeatMap；空上下文才创建最小领域对象。
+    // 辅助配置保留调用方已装入的物件与时间线，只为缺省场景补空谱。
+    // 因此依赖真实导入数据的用例可以复用同一投影基线，不丢失准备的内容。
     if ( !context.currentBeatmap ) {
         context.currentBeatmap = std::make_shared<MMM::BeatMap>();
     }
@@ -180,6 +182,8 @@ void configureObjectEditingCanvas(MMM::Logic::SessionContext& context)
         cache = &context.timelineRegistry.ctx()
                      .emplace<MMM::Logic::System::ScrollCache>();
     }
+    // 缓存以当前 Registry 与领域元数据共同建立，不能借用其他会话的时间投影。
+    // 后续坐标断言固定使用这个版本；用例改时间线时需要显式更新缓存。
     cache->rebuild(context.timelineRegistry,
                    // 空 Timeline 配合当前配置建立确定的线性时间投影。
                    context.lastConfig,
@@ -676,6 +680,9 @@ bool testWalkthroughStandalonePlacement()
 /// 本用例只检查领域行为；导航回调消费由 Spotlight 测试单独覆盖。
 bool testWalkthroughPlacementRollback()
 {
+    // 每种类型分别跑已撤销和未撤销路径，两者都要求令牌回退保持幂等。
+    // 内层新建上下文隔离动作栈，避免上一种物件的教学身份污染当前请求。
+    // 这组排列还确保回退语义不依赖某一种画笔手势。
     for ( const auto type :
           { MMM::NoteType::NOTE, MMM::NoteType::FLICK, MMM::NoteType::HOLD } ) {
         for ( const bool alreadyUndone : { false, true } ) {
@@ -770,6 +777,9 @@ bool testWalkthroughPlacementRollback()
             if ( notes.size() != 2U || !context.noteRegistry.valid(unrelated) ||
                  !context.noteRegistry.valid(otherStep) )
                 return false;
+            // 深度基线取自首次回退之后，允许首次创建必要补偿动作。
+            // 重复和未知令牌只检查相对变化，避免把合法补偿错误约束为永远零历史。
+            // 同一时刻还检查存活对象数量，防止栈未变但 ECS 被再次修改。
             const auto depth = context.actionStack.getUndoStackSize();
             // 首次有效回退可以新增补偿历史；之后的重复请求必须保持深度。
             // 已手动撤销分支从一开始就不应产生补偿记录。
@@ -1478,8 +1488,8 @@ bool testBrushAudioResourcePlacementRules()
     for ( const auto entity : samples ) {
         const auto& sample = samples.get<MMM::Logic::SampleComponent>(entity);
         foundMain          = foundMain || (sample.m_track == 5 &&
-                                           sample.m_audioResourceId == "main" &&
-                                           near(sample.m_volume, 0.7));
+                                  sample.m_audioResourceId == "main" &&
+                                  near(sample.m_volume, 0.7));
     }
     if ( !foundMain ) return false;
 
@@ -2901,7 +2911,7 @@ bool testPerBeatmapDraftLaneSharingAndIsolation()
     entt::entity concurrentOuter = entt::null;
     entt::entity concurrentStale = entt::null;
     const auto   concurrentView  = afterConcurrentGrowth.noteRegistry
-                                       .view<const MMM::Logic::NoteComponent>();
+                                    .view<const MMM::Logic::NoteComponent>();
     for ( const auto entity : concurrentView ) {
         const auto& note =
             concurrentView.get<const MMM::Logic::NoteComponent>(entity);
@@ -3062,25 +3072,25 @@ bool testAlignCommonBeatsPreservesEmbeddedPolylineNodes()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-            .type       = MMM::NoteType::HOLD,
-            .timestamp  = 1.013,
-            .duration   = 0.241,
-            .trackIndex = 0,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::HOLD,
+              .timestamp  = 1.013,
+              .duration   = 0.241,
+              .trackIndex = 0,
+              .dtrack     = 0,
         },
         {
-            .type       = MMM::NoteType::FLICK,
-            .timestamp  = 1.254,
-            .duration   = 0.0,
-            .trackIndex = 0,
-            .dtrack     = 1,
+              .type       = MMM::NoteType::FLICK,
+              .timestamp  = 1.254,
+              .duration   = 0.0,
+              .trackIndex = 0,
+              .dtrack     = 1,
         },
         {
-            .type       = MMM::NoteType::HOLD,
-            .timestamp  = 1.254,
-            .duration   = 0.246,
-            .trackIndex = 1,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::HOLD,
+              .timestamp  = 1.254,
+              .duration   = 0.246,
+              .trackIndex = 1,
+              .dtrack     = 0,
         },
     };
 
@@ -3477,6 +3487,8 @@ bool testSessionSelectsKeyCountLayout()
         return false;
     }
 
+    // 显式重新提交通用配置，确保 fallback 比较对象是原始配置而非七键物化结果。
+    // 同帧再改变键数，检查命令排序后仍按最终五键状态选择布局。
     session.pushCommand(MMM::Logic::LogicCommand{
         MMM::Logic::CmdUpdateEditorConfig{ .config = config },
     });
@@ -3612,6 +3624,9 @@ bool testUnprojectedMouseSessionBoundary()
     MMM::Logic::BeatmapSession session;
     auto&                      context = session.getContextMutable();
     configureObjectEditingCanvas(context);
+    // Preview 与主画布同属这个会话，后面的拖动归属断言不涉及全局窗口切换。
+    // 两个相机尺寸一致，使行为差异只来自相机身份与输入标志。
+    // 相机先登记再投递命令，排除未知 ID 拒绝掩盖坐标边界校验。
     context.cameras.emplace(
         "Preview", MMM::Logic::CameraInfo{ "Preview", 1000.0F, 600.0F });
     // 固定同一配置快照，避免输入检查混入轨道布局切换。
@@ -3643,6 +3658,8 @@ bool testUnprojectedMouseSessionBoundary()
     }
 
     // 同一坐标关闭标志后必须恢复原二维越界行为，不能扩大旧调用者的范围。
+    // 对照命令复用完全相同的平面像素，只改变解释坐标的标志。
+    // 若两个分支都通过，说明旧二维调用者也被意外放宽；都拒绝则未支持逆投影。
     command.isUnprojected = false;
     sendMouse(command);
     if ( context.isMouseInCanvas || !context.mouseCameraId.empty() ) {
@@ -3672,7 +3689,9 @@ bool testUnprojectedMouseSessionBoundary()
     // 尺寸先恢复有效，确保下面的拒绝仅由鼠标 NaN 引起。
     command.viewportWidth  = 1000.0F;
     command.viewportHeight = 600.0F;
-    command.mouseX         = invalid;
+    // 尺寸恢复后才污染 X，避免命令仅因无效视口而早退。
+    // 拒绝同时检查已保存位置有限，不能只清除悬停却把 NaN 留给后续绘制。
+    command.mouseX = invalid;
     sendMouse(command);
     if ( context.isMouseInCanvas || !std::isfinite(context.lastMousePos.x) ) {
         XERROR("Unprojected session mouse accepted a non-finite position");
@@ -3683,6 +3702,9 @@ bool testUnprojectedMouseSessionBoundary()
     MMM::Logic::BeatmapSession otherSession;
     auto&                      otherContext = otherSession.getContextMutable();
     configureObjectEditingCanvas(otherContext);
+    // 第二个主相机 ID 只存在另一会话，可捕获通过全局相机表进行误路由。
+    // 前一会话已经失去悬停但保留有效位置，正好充当跨会话写入哨兵。
+    // 命令仍由其自身队列消费，不通过直接写状态伪造输入归属。
     otherContext.cameras.emplace(
         "Canvas_42", MMM::Logic::CameraInfo{ "Canvas_42", 1000.0F, 600.0F });
     // 新会话采用另一个负横坐标，既验证越界许可，也区分两个位置哨兵。
@@ -3698,10 +3720,12 @@ bool testUnprojectedMouseSessionBoundary()
         return false;
     }
 
-    command.cameraId                  = "Preview";
-    command.mouseX                    = 500.0F;
-    command.mouseY                    = -60.0F;
-    command.isDragging                = true;
+    command.cameraId   = "Preview";
+    command.mouseX     = 500.0F;
+    command.mouseY     = -60.0F;
+    command.isDragging = true;
+    // 预置非零值让停止自动滚动成为必须发生的状态转换。
+    // 若只使用默认零值，即使逆投影分支完全遗漏清理也会错误通过。
     context.previewEdgeScrollVelocity = 17.0;
     // 平面 Y 接近旧视口边缘不代表屏幕接近边缘，必须停止旧自动滚动速度。
     sendMouse(command);
@@ -3731,6 +3755,8 @@ bool testUnprojectedMouseSessionBoundary()
         return false;
     }
     // 无效视口不能通过活动拖动的续拖分支写入位置，但释放仍必须可靠收尾。
+    // 位置哨兵先取一个与上次不同的有限值，便于确认无效尺寸没有写入它。
+    // 随后复用同一无效命令释放，专门验证清理事件不依赖有效坐标。
     command.mouseX        = 1700.0F;
     command.viewportWidth = 0.0F;
     sendMouse(command);
@@ -3752,9 +3778,11 @@ bool testUnprojectedMouseSessionBoundary()
     command.isUnprojected = false;
     command.viewportWidth = 1000.0F;
     command.mouseX        = 500.0F;
-    command.mouseY        = 5.0F;
-    command.isHovering    = true;
-    command.isDragging    = true;
+    // 普通二维对照落在物理窗口顶部，边缘速度应该重新变为正值。
+    // 这能区分有条件关闭逆投影滚动与无条件删除所有预览边缘滚动。
+    command.mouseY     = 5.0F;
+    command.isHovering = true;
+    command.isDragging = true;
     sendMouse(command);
     return context.isDragging && context.previewEdgeScrollVelocity > 0.0;
 }
@@ -3808,7 +3836,10 @@ bool testPlaneCoordinatesReuseMarqueeAndDrag()
         outside,
         MMM::Logic::NoteComponent{ .m_timestamp = 1.0, .m_trackIndex = 3 });
     context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(outside);
-    context.sortedNoteEntities     = { entity, outside };
+    context.sortedNoteEntities = { entity, outside };
+    // 索引顺序与准备的两个实体一致，前缀终点同时包含同刻哨兵。
+    // 框选测试因此使用正常候选过滤路径，不靠遍历整个 Registry 找到目标。
+    // 横向范围必须排除第四轨，单独按时间命中两个对象会失败。
     context.sortedNoteMaxEndPrefix = { 1.0, 1.0 };
     auto* cache =
         context.timelineRegistry.ctx().find<MMM::Logic::System::ScrollCache>();
@@ -3834,6 +3865,9 @@ bool testPlaneCoordinatesReuseMarqueeAndDrag()
         return false;
     }
 
+    // 拖动目标时间先由同一缓存投影成像素，避免把固定 Y 差当作固定秒数。
+    // 当前相机横移只作用于 X；Y 仍遵守谱面世界时间的独立换算。
+    // 最终以明确的 1.5 秒断言，防止手势在窗口外被原二维边界提前截断。
     const float targetY =
         300.0F - static_cast<float>(cache->getAbsY(1.5) - currentAbsY);
     controller.handleCommand(MMM::Logic::CmdStartDrag{
@@ -4437,8 +4471,8 @@ bool testComposeLessonSegmentReplacement()
         context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
             entity,
             MMM::Logic::NoteComponent{ .m_type       = MMM::NoteType::NOTE,
-                                       .m_timestamp  = time,
-                                       .m_trackIndex = track });
+                                         .m_timestamp  = time,
+                                         .m_trackIndex = track });
     };
     addActual(0.5, 0);   // 前一段的用户成果。
     addActual(1.5, 1);   // 返回目标段内的错误物件。
@@ -5296,6 +5330,9 @@ bool testSamplePropertyEditValidationAndAction()
     };
 
     // 相对 BGM 轨 2 在四键谱面中编码为绝对轨 6。
+    // 解析结果按值返回，before 继续作为后续动作撤销所需的完整前态。
+    // 负 offset 属于合法字段，不能因为事件时间为正就统一夹到零。
+    // 相对轨号转换只使用玩家键数，不能把已有 BGM 轨数再次加到绝对轨号。
     auto mainEdit = MMM::Logic::resolveSamplePropertyEdit(
         before, 4, &mainResource, 2, -125, 0.75F);
     if ( !mainEdit.m_sample ||
@@ -5309,8 +5346,13 @@ bool testSamplePropertyEditValidationAndAction()
         return false;
     }
 
+    // Effect 也可作为自动采样资源，不能把属性编辑限制为 Main。
+    // 这一对照使用第零条相对 BGM 轨，覆盖转换后恰为第一条绝对音频轨的边界。
+    // 音量大于一是合法增益，与下面的非有限音量拒绝不是同一约束。
     const auto effectEdit = MMM::Logic::resolveSamplePropertyEdit(
         before, 4, &effectResource, 0, 80, 1.25F);
+    // 先复制有效 Effect 再只污染类型，确保失败不会被缺少资源 ID 抢先触发。
+    // 这是一份类型契约探针，不要求资源文件已经存在于磁盘。
     MMM::AudioResource unsupportedResource = effectResource;
     unsupportedResource.m_type = static_cast<MMM::AudioTrackType>(99);
     // 集中验证所有无效输入，确保解析器不会以默认 Sample 掩盖错误。
@@ -5345,8 +5387,11 @@ bool testSamplePropertyEditValidationAndAction()
     MMM::Logic::SessionContext context;
     context.currentBeatmap = std::make_shared<MMM::BeatMap>();
     context.trackCount     = 4;
-    context.bgmTrackCount  = 1;
-    const auto entity      = context.sampleRegistry.create();
+    // 动作从仅有一条 BGM 轨开始，目标第三条轨必须连同属性编辑一起扩展。
+    // 若解析层提前修改上下文，Undo 将无法恢复原轨数，因此这里重新建立独立会话。
+    // 该动作直接接受已经验证的 after 值，不在执行阶段重新猜测 UI 输入。
+    context.bgmTrackCount = 1;
+    const auto entity     = context.sampleRegistry.create();
     context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(entity, before);
     context.actionStack.pushAndExecute(
         std::make_unique<MMM::Logic::SampleAction>(
@@ -5378,6 +5423,8 @@ bool testSamplePropertyEditValidationAndAction()
 
     // Redo 应用完整 after 快照，而不是只重复最后一次字段赋值。
     context.actionStack.redo(context);
+    // Redo 后继续核对资源、偏移、音量与扩轨结果，不能只验证实体仍存在。
+    // 同一个 entity 在更新动作中保持有效，故这里无需重新查找或分配对象。
     const auto& redone =
         context.sampleRegistry.get<MMM::Logic::SampleComponent>(entity);
     return redone.m_track == 6 && redone.m_audioResourceId == "main.wav" &&
@@ -5658,6 +5705,9 @@ bool testObjectTimestampCommand()
                                             .dtrack     = 1 },
     };
     context.noteRegistry.emplace<MMM::Logic::NoteComponent>(rootEntity, root);
+    // 子实体显式引用父实体和内嵌下标，两个表示必须在同一时间命令中更新。
+    // 构造时从父快照取值，确保随后发现的不一致来自修改过程而非准备阶段。
+    // 时间和类型同时取自同一节点，避免 Flick 子节点退化成普通 Note。
     const auto addChild = [&](entt::entity entity, std::size_t index) {
         const auto& sub = root.m_subNotes[index];
         context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
@@ -5696,6 +5746,9 @@ bool testObjectTimestampCommand()
         } });
     const auto config = context.lastConfig;
     session.update(0.0, config, false);
+    // 整个折线移动保持相邻节点半秒间隔，不独立吸附每一个子节点。
+    // 同时检查父内嵌数组与两颗独立子实体，任何一侧遗漏都会导致渲染或保存分歧。
+    // 单个历史项则约束这份同步闭包不能拆成几个可部分撤销的操作。
     const auto& movedRoot =
         context.noteRegistry.get<MMM::Logic::NoteComponent>(rootEntity);
     if ( !near(movedRoot.m_timestamp, 2.25) ||
@@ -5720,6 +5773,9 @@ bool testObjectTimestampCommand()
             .timestamp = 3.125,
         } });
     session.update(0.0, config, false);
+    // Sample 的 offset 是相对锚点的独立整数毫秒，不能随 timestamp 再次换算。
+    // 第二个历史项与前一个折线动作分离，验证跨域命令没有互相合并或覆盖。
+    // 后面的两次 Undo 用相反顺序检查这两个事务各自的前态。
     const auto& movedSample =
         context.sampleRegistry.get<MMM::Logic::SampleComponent>(sampleEntity);
     if ( !near(movedSample.m_timestamp, 3.125) ||
@@ -5737,6 +5793,8 @@ bool testObjectTimestampCommand()
             .timestamp = -1.0,
         } });
     session.update(0.0, config, false);
+    // 无效请求发生在两项合法编辑之后，能明确检查它没有增加历史或回退已有状态。
+    // 拒绝后仍保持 2.25 秒，不能以默认零点或重新加载谱面冒充原子失败。
     if ( !near(context.noteRegistry.get<MMM::Logic::NoteComponent>(rootEntity)
                    .m_timestamp,
                2.25) ||
@@ -5762,6 +5820,9 @@ bool testObjectTimestampCommand()
         return false;
     }
 
+    // 先重放折线再重放采样，顺序与原提交一致，不能通过重新执行 UI 命令造结果。
+    // 尾节点内嵌数据与实体投影同时恢复，验证动作快照包含完整同步闭包。
+    // 最终采样时间独立核对，防止跨 Registry 的实体数值重叠造成误写。
     context.actionStack.redo(context);
     context.actionStack.redo(context);
     return near(context.noteRegistry.get<MMM::Logic::NoteComponent>(rootEntity)
@@ -6298,25 +6359,25 @@ bool testSelectedPolylineTailEraseWithOtherSelection()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-            .type       = MMM::NoteType::NOTE,
-            .timestamp  = 1.0,
-            .duration   = 0.0,
-            .trackIndex = 0,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::NOTE,
+              .timestamp  = 1.0,
+              .duration   = 0.0,
+              .trackIndex = 0,
+              .dtrack     = 0,
         },
         {
-            .type       = MMM::NoteType::HOLD,
-            .timestamp  = 2.0,
-            .duration   = 0.5,
-            .trackIndex = 1,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::HOLD,
+              .timestamp  = 2.0,
+              .duration   = 0.5,
+              .trackIndex = 1,
+              .dtrack     = 0,
         },
         {
-            .type       = MMM::NoteType::FLICK,
-            .timestamp  = 3.0,
-            .duration   = 0.0,
-            .trackIndex = 1,
-            .dtrack     = 1,
+              .type       = MMM::NoteType::FLICK,
+              .timestamp  = 3.0,
+              .duration   = 0.0,
+              .trackIndex = 1,
+              .dtrack     = 1,
         },
     };
 
@@ -7401,6 +7462,9 @@ bool testGuestCollaborationResourcesSupportEditing()
     MMM::Logic::SessionContext context;
     configureObjectEditingCanvas(context);
     context.collaborationProject = std::make_shared<MMM::Project>();
+    // 路径仅表达资源镜像归属，本场景只验证资源表解析而不触发文件解码。
+    // 真实哈希文件名与稳定资源 ID 不同，转换应保留 ID 而非把缓存路径写入绑定。
+    // 因此本测试证明的是允许编辑的对象能够引用镜像资源，不是缓存磁盘完整性。
     context.collaborationProject->m_projectRoot = "collaboration-cache";
     context.collaborationProject->m_audioResources.push_back(MMM::AudioResource{
         .m_id   = "guest-effect-id",
@@ -7429,8 +7493,10 @@ bool testGuestCollaborationResourcesSupportEditing()
     // 再将同一对象拖到玩家区，覆盖转换阶段的二次资源解析。
     const auto sampleEntity = *samples.begin();
     context.sampleRegistry.get<MMM::Logic::InteractionComponent>(sampleEntity)
-        .isSelected           = true;
-    context.hoveredEntity     = sampleEntity;
+        .isSelected       = true;
+    context.hoveredEntity = sampleEntity;
+    // 悬停明确给出 AudioSample 域，不能仅根据 entt 句柄数值猜测目标 Registry。
+    // 资源校验与跨域转换都在同一次实际拖动里发生，避免只测创建分支。
     context.hoveredObjectKind = MMM::Logic::ChartObjectKind::AudioSample;
     context.hoveredPart =
         static_cast<std::int32_t>(MMM::Logic::HoverPart::SampleAnchor);
@@ -7459,6 +7525,8 @@ bool testGuestCollaborationResourcesSupportEditing()
         XERROR("Guest sample did not convert through collaboration resources");
         return false;
     }
+    // 先确认原 Sample 已销毁且只生成一个 Note，之后才读取唯一结果的绑定。
+    // 最终比较稳定 ID，可以发现转换时错误降级成无声 Note 的路径。
     const auto& note = notes.get<MMM::Logic::NoteComponent>(*notes.begin());
     return note.m_sampleBinding &&
            note.m_sampleBinding->m_audioResourceId == "guest-effect-id";
@@ -8444,7 +8512,7 @@ bool testCompositeConversionUsesTypedIdentity()
                 .entity = sampleEntity,
                 .before = context.sampleRegistry
                               .get<MMM::Logic::SampleComponent>(sampleEntity),
-                .after  = std::nullopt,
+                .after          = std::nullopt,
                 .beforeSelected = true,
             },
         }));
@@ -8539,11 +8607,11 @@ bool testMarqueeSelectsTypedSamplesOnlyOnMainCanvas()
     context.sortedSampleMaxEndPrefix = { 1.0 };
     context.marqueeBoxes             = {
         MMM::Logic::MarqueeBox{
-            .startTime  = 0.9,
-            .endTime    = 1.1,
-            .startTrack = 4.05F,
-            .endTrack   = 4.95F,
-            .cameraId   = "Basic2DCanvas",
+                        .startTime  = 0.9,
+                        .endTime    = 1.1,
+                        .startTrack = 4.05F,
+                        .endTrack   = 4.95F,
+                        .cameraId   = "Basic2DCanvas",
         },
     };
     context.isMarqueeSelectionDirty = true;
@@ -8622,10 +8690,10 @@ bool testMarqueeKeepsOffscreenHoldsOnRelease()
     auto&      shared = context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
         sharedEntity,
         MMM::Logic::NoteComponent{
-            .m_type       = MMM::NoteType::HOLD,
-            .m_timestamp  = 1.0,
-            .m_duration   = 0.4,
-            .m_trackIndex = 2,
+                 .m_type       = MMM::NoteType::HOLD,
+                 .m_timestamp  = 1.0,
+                 .m_duration   = 0.4,
+                 .m_trackIndex = 2,
         });
     shared.m_metadata.note_properties[MMM::NoteMetadataType::MMM]
                                      ["hold_independent_end_hs"] = "false";
@@ -8636,11 +8704,11 @@ bool testMarqueeKeepsOffscreenHoldsOnRelease()
     context.sortedNoteMaxEndPrefix = { 1.4, 1.4 };
     context.marqueeBoxes           = {
         MMM::Logic::MarqueeBox{
-            .startTime  = 0.8,
-            .endTime    = 1.6,
-            .startTrack = 0.8F,
-            .endTrack   = 3.2F,
-            .cameraId   = "Basic2DCanvas",
+                      .startTime  = 0.8,
+                      .endTime    = 1.6,
+                      .startTrack = 0.8F,
+                      .endTrack   = 3.2F,
+                      .cameraId   = "Basic2DCanvas",
         },
     };
 
@@ -8720,7 +8788,7 @@ bool testPastePositionPreference()
                         CmdSetMousePosition mouse{
                             .cameraId = "Basic2DCanvas",
                             .mouseX   = 150.0F,
-                            .mouseY = 300.0F -
+                            .mouseY   = 300.0F -
                                       static_cast<float>(cache.getAbsY(10.37) -
                                                          cache.getAbsY(10.0)),
                             .viewportWidth  = 1000.0F,

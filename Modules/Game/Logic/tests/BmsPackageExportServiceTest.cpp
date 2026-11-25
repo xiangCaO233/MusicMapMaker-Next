@@ -63,7 +63,9 @@ std::vector<unsigned char> bytes(const std::filesystem::path& path)
 bool makeAudio(const std::filesystem::path& path)
 {
     std::ofstream output(path, std::ios::binary);
-    const auto    little = [&](std::uint32_t value, int size) {
+    // 这个 helper 只写最低指定字节，高位通过流的 char 转换截断。
+    // 所有 RIFF 数值字段显式用它写出，不依赖结构体布局或内存端序。
+    const auto little = [&](std::uint32_t value, int size) {
         for ( int i = 0; i < size; ++i )
             output.put(static_cast<char>(value >> (8 * i)));
     };
@@ -113,6 +115,8 @@ bool checkAudio(const std::filesystem::path& path, int phase)
     // 编码器可插入额外 RIFF 块，不能假定数据恒在第四十四字节开始。
     for ( std::size_t at = 12; at + 8 <= data.size(); ) {
         const auto size = read(at + 4, 4);
+        // 块头已由循环条件保护；长度再与剩余字节比较，防止截断输出越界。
+        // 先确认边界再读取 fmt 字段，失败不能靠后续帧数比较偶然发现。
         if ( size > data.size() - at - 8 ) return false;
         const std::string tag(data.begin() + at, data.begin() + at + 4);
         if ( tag == "fmt " && size >= 16 ) {
@@ -123,6 +127,8 @@ bool checkAudio(const std::filesystem::path& path, int phase)
             start  = at + 8;
             length = size;
         }
+        // RIFF 的奇数字节块带一个对齐字节，该字节不属于有效 PCM。
+        // 按声明长度越过它，保证下一个块标签仍从正确位置读取。
         at += 8 + size + (size & 1U);
     }
     // 总帧数由原始两秒减去裁头相位得到，不读取文档声明的时长。
@@ -130,6 +136,8 @@ bool checkAudio(const std::filesystem::path& path, int phase)
     if ( rate != 48000 || !frame || !start ||
          length / frame != static_cast<unsigned>(2000 - phase) * 48U )
         return false;
+    // 前导静音只用于负相位；正相位应直接裁掉来源帧而非添加空白。
+    // 下面把静音区和剩余声音分开检查，避免全零音频靠时长正确通过。
     const auto padding =
         static_cast<std::size_t>(std::max(0, -phase)) * 48U * frame;
     // 数量正确仍不足以证明同步：补头必须真的是零值，不能把尾部补零冒充。
@@ -166,10 +174,15 @@ bool unpack(const std::filesystem::path& path,
             ok = false;
             break;
         }
+        // 归档成员名是 UTF-8，路径转换应与项目资源引用遵循同一约定。
+        // 这里只处理生产服务生成的夹具，不能把这个简化提取器视为不可信 ZIP
+        // 导入器。
         const auto target = root / MMM::Config::utf8ToPath(stat.m_filename);
         std::filesystem::create_directories(target.parent_path(), error);
-        std::size_t size    = 0;
-        void*       content = mz_zip_reader_extract_to_heap(&zip, i, &size, 0);
+        std::size_t size = 0;
+        // miniz 返回的缓冲只由本轮提取持有，成功和失败路径都需配对释放。
+        // 创建目录失败后也不能泄漏已提取的内容；reader 最终由循环外统一关闭。
+        void* content = mz_zip_reader_extract_to_heap(&zip, i, &size, 0);
         if ( !content || error ) {
             if ( content ) mz_free(content);
             ok = false;
@@ -213,6 +226,8 @@ bool makeChart(const std::filesystem::path& path, double first, bool early,
     bpm.m_bpm = bpm.m_timingEffectParameter = 120;
     bpm.m_beat_length                       = 500;
     map.m_timings.push_back(bpm);
+    // 主音乐的谱面锚点与独立 offset 分开给定，检测打包是否重复加偏移。
+    // 稳定 ID 必须先经过 Project 资源表，才能映射到真正可归档的媒体路径。
     map.m_audioSamples.push_back(
         MMM::AudioSampleEvent{ .m_timestamp       = 0,
                                .m_offsetMs        = offset,
@@ -301,6 +316,8 @@ bool run(const std::filesystem::path& root)
         const std::string stem(name);
         const auto        chart =
             MMM::BeatMap::loadFromFile(extracted / "charts" / (stem + ".bms"));
+        // 四份预期相位直接列在测试中，不通过生产对齐函数得到。
+        // 提前物件迫使相位退到前一拍，独立 offset 则同时影响声音内容原点。
         const int    phase    = stem == "a"       ? 100
                                 : stem == "b"     ? -100
                                 : stem == "early" ? -400
@@ -815,6 +832,8 @@ bool checkMyO2Pack(const std::filesystem::path& root)
 {
     using namespace MMM;
     using Logic::BmsPackageExportService;
+    // 独立子目录保持 BMS 的相对音乐与内层键音包引用处于同一来源树。
+    // 后面以解包树解析引用，不能因原素材仍存在而掩盖归档漏文件。
     const auto      source = root / "myo2-pack-source";
     std::error_code error;
     std::filesystem::create_directories(source / "charts", error);
@@ -833,6 +852,8 @@ bool checkMyO2Pack(const std::filesystem::path& root)
                               music.size(),
                               MZ_DEFAULT_COMPRESSION) &&
         mz_zip_writer_finalize_heap_archive(&inner, &data, &size);
+    // finalize 生成的外置缓冲与 writer 生命周期分离，后面写盘完成才释放。
+    // 先结束 writer 仍能读取结果，验证调用顺序没有借用内部归档状态。
     mz_zip_writer_end(&inner);
     if ( !zipped ) return false;
     std::ofstream bankOut(bank, std::ios::binary);
@@ -887,8 +908,10 @@ bool checkMyO2Pack(const std::filesystem::path& root)
             return false;
         const auto restored =
             BeatMap::loadFromFile(extracted / "charts/demo.bms");
-        const auto& hint     = restored.m_baseMapMetadata.song_file_hint;
-        const auto  resolved = (extracted / "charts" / hint).lexically_normal();
+        const auto& hint = restored.m_baseMapMetadata.song_file_hint;
+        // 相对引用按谱面所在目录解析，而不是按归档根或进程工作目录解释。
+        // 词法规范化只消除路径段，不借助来源文件的真实路径补全缺失依赖。
+        const auto resolved = (extracted / "charts" / hint).lexically_normal();
         if ( Bms::bmsProperty(restored.m_metadata, Bms::MYO2_AUDIO_MODE) !=
                  "MYO2" ||
              Bms::bmsProperty(restored.m_metadata, Bms::MYO2_KEYSOUND) !=
@@ -906,6 +929,8 @@ bool checkMyO2Pack(const std::filesystem::path& root)
             return false;
     }
     // 依赖缺失只能让整次事务失败，不能重新写出无音源的 ZIP 覆盖先前成品。
+    // 同一份成功归档随后成为事务保护哨兵，失败不得以新空包替换它。
+    // 选择列表只缺键音包，仍保留谱面与整曲，限定失败来自真实依赖闭包。
     const auto existing = root / "myo2-shift.zip";
     const auto saved    = bytes(existing);
     const auto missing  = BmsPackageExportService::exportPackage(
@@ -935,6 +960,8 @@ bool externalProbe(const std::filesystem::path& source,
     project.m_projectRoot = source.parent_path();
     auto map              = MMM::BeatMap::loadFromFile(source);
     if ( map.m_baseMapMetadata.map_path.empty() ) return false;
+    // 快照在任何保存和导出之前取得；后续加载产生的内存状态不替代磁盘基线。
+    // 外部探针即使通过内容检查，末尾仍需证明用户来源没有被回写。
     const auto               snapshot = bytes(source);
     std::vector<std::string> selected{ MMM::Config::pathToUtf8(
         source.filename()) };
@@ -994,6 +1021,8 @@ bool externalProbe(const std::filesystem::path& source,
          map.m_noteData.holds.size() != restored.m_noteData.holds.size() ||
          restored.m_noteData.notes.empty() )
         return false;
+    // 前面已确认目标有普通 Note，才能用首颗物件定义共同位移。
+    // 这个位移不直接宣布成功，下面仍逐一检查其他物件和长条持续时间。
     const double shift = map.m_noteData.notes.front().m_timestamp -
                          restored.m_noteData.notes.front().m_timestamp;
     // 首个物件的差值只定义共同原点；每个其他对象仍需独立匹配验证。
@@ -1002,6 +1031,8 @@ bool externalProbe(const std::filesystem::path& source,
     // 轨号与时间共同匹配，确保内容没有被移到另一条物理轨道。
     // 所有对象必须只有同一个整体位移，离拍音符不能再次被吸附。
     // 读写各有 0.01ms 精度预算，组合比较额外容纳浮点积分尾差。
+    // 匹配只在测试记录间进行，不修改原物件的时间或轨号。
+    // 数量已独立校验，查找允许同刻和弦换序，不要求读取器保持容器下标。
     const auto matches = [shift](const auto& original, const auto& output) {
         for ( const auto& note : original ) {
             if ( std::none_of(
@@ -1043,6 +1074,8 @@ bool externalProbe(const std::filesystem::path& source,
         .bmsMyO2Grid          = false,
         .path                 = MMM::Config::pathToUtf8(singlePath) } });
     session.update(0, MMM::Config::EditorConfig{}, false);
+    // 正式命令是异步队列入口，上一轮 update 才使保存结果可读取。
+    // 加载后继续检查数量和位移，文件路径存在不能单独证明命令成功。
     const auto single = MMM::BeatMap::loadFromFile(singlePath);
     // 资源包和单文件应具有相同的整体位移，不因行表示不同再次量化物件。
     // matches 继续比较每轨物件时间和长条时长，不能仅凭文件存在判成功。
@@ -1072,6 +1105,8 @@ int main(int argc, char** argv)
     if ( argc != 2 && argc != 3 ) return 1;
     XLogger::init("BmsPackageExportServiceTest");
     MMM::Runtime::AppThreadPool::instance().init();
+    // 格式注册表也是公共打包入口的一部分，必须确认 BML 确实可被选入 ZIP。
+    // 服务实现可调用不等于 UI 文件筛选允许用户选择该种谱面。
     const auto* types = MMM::findPackageSupportedFileTypes(".zip");
     if ( !types || !MMM::isPackageCandidateExtensionSupported(*types, ".bml") )
         return 2;

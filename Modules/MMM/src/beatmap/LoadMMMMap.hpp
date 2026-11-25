@@ -544,6 +544,7 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
     }
 
     // 第二阶段解析 Timing；非对象元素直接跳过，不占用模型条目。
+    // 老文件可能省略列表；格式不正确的列表按无时间点处理，其余谱面字段仍可载入。
     auto timingIt = root.find("timing");
     if ( timingIt != root.end() && timingIt->is_array() ) {
         for ( const auto& tJson : *timingIt ) {
@@ -573,6 +574,7 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
             }
 
             // 私有来源属性在公共 Timing 字段完成后附加。
+            // 额外属性与 Timing 效果分别反序列化；单项属性缺失不影响效果本身。
             auto timingExtraIt = tJson.find("extra");
             if ( timingExtraIt != tJson.end() && timingExtraIt->is_array() ) {
                 for ( const auto& extraItem : *timingExtraIt ) {
@@ -593,6 +595,7 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 }
             }
             // 保留文件数组次序，最终规范排序由 sync 统一完成。
+            // 只提交已校验区间和附加属性的实例，排序与重算留给调用层。
             beatMap.m_timings.push_back(t);
         }
     }

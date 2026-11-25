@@ -37,6 +37,7 @@ struct AudioSpectrumViewTestAccess {
         // 模拟 A→B→A：最后一次仍是 A 的文件，但音频调度世代已经改变。
         view.retarget(12, true);
         view.retarget(13, true);
+        // 换轨时立即校验旧渲染状态撤销，后台任务仍可留到下一轮回收。
         const bool hidden =
             !view.m_spectrumReady && !view.m_texturesNeedReload &&
             view.m_spectrumDrawCmds.empty() && view.m_recalculateRequested;
@@ -46,6 +47,7 @@ struct AudioSpectrumViewTestAccess {
         view.m_cachedIntensityR        = { 21 };
         view.m_cachedNumTotalSegments  = 1;
         view.m_pendingNumFrequencyBins = 1;
+        // 手工交付成功结果，覆盖与取消状态竞争时的优先级。
         oldResult.set_value(true);
         view.pollCalculation();
         if ( !hidden || view.m_calcFuture.valid() || view.m_texturesNeedReload )
@@ -55,6 +57,7 @@ struct AudioSpectrumViewTestAccess {
         std::promise<bool> currentResult;
         view.m_calcStopSource = std::stop_source{};
         view.m_calcFuture     = currentResult.get_future();
+        // 新任务交付后先进入纹理上传队列，不能提前标记已绘制。
         currentResult.set_value(true);
         view.pollCalculation();
         if ( !view.m_texturesNeedReload || view.m_pendingChunksL.size() != 1 ||
@@ -260,12 +263,14 @@ bool checkGuestAudio(MMM::UI::UIManager& manager)
     drawController(manager, controller, ImVec2(-1, -1), false);
     drawController(manager, controller, ImVec2(-1, -1), false);
     // 两个按钮位于不同半区，都要通过实际点击验证，不能只检查绘制成功。
+    // 同一访客仍需能够查看两种分析结果，不能以另一个按钮的打开状态代替。
     passed &= clickAnalysis(manager, controller, 520, "AudioSpectrum");
     passed &= clickAnalysis(manager, controller, 220, "AudioWaveform");
     // 点击禁用区不能改资源；退出绑定应同时恢复本机数据源并释放缓存所有权。
     passed &= original->m_audioResources.front().m_config.volume == 0.37F &&
               !original->m_audioResources.front().m_config.muted;
     // 解除绑定同步恢复数据源与只读状态，不能遗留有所有权的空壳项目。
+    // 仍保留原始观察指针的身份记录；清空之后只检查弱引用，避免延长缓存生命周期。
     manager.setCollaborationAudioProject(nullptr);
     passed &= !manager.isAudioReadOnly() && !manager.getAudioProject() &&
               lifetime.expired();
@@ -277,12 +282,14 @@ bool checkGuestAudio(MMM::UI::UIManager& manager)
 /// 绘制主体保持折叠，检查关闭契约不需要初始化音轨或修改任何播放参数。
 bool checkControllerWindowRouting(MMM::UI::UIManager& manager)
 {
+    // 收起被测内容，只验证平台外壳能往返传递原始打开状态。
     ControllerPresentation       presentation;
     MMM::UI::WorkspaceFrameScope frameScope(presentation);
     bool                         passed = true;
     for ( const auto type :
           { MMM::UI::AudioTrackControllerUI::TrackType::Main,
             MMM::UI::AudioTrackControllerUI::TrackType::Effect } ) {
+        // 位于单次循环作用域，确保切换轨型时上一控制器不再存活。
         MMM::UI::AudioTrackControllerUI controller(
             type == MMM::UI::AudioTrackControllerUI::TrackType::Main
                 ? "routing-main"
@@ -298,6 +305,7 @@ bool checkControllerWindowRouting(MMM::UI::UIManager& manager)
         drawController(manager, controller, { -1, -1 }, false);
         passed &= presentation.m_routed && controller.isOpen();
         // 下一帧由平台明确消费关闭命令，主轨和音效轨都须反映到公开打开状态。
+        // 路由探针在同一个控制器的下一帧执行，防止关闭状态来自新对象的默认值。
         presentation.m_closeRequested = true;
         drawController(manager, controller, { -1, -1 }, false);
         passed &= presentation.m_routed && !controller.isOpen();
@@ -312,11 +320,13 @@ bool checkControllerWindowRouting(MMM::UI::UIManager& manager)
 int main()
 {
     // 配置根由 CTest 框架隔离，测试不读取用户保存的窗口位置。
+    // 测试直接驱动 NewFrame 与 Render，不创建绑定用户桌面的系统窗口。
     ImGui::CreateContext();
     auto& io = ImGui::GetIO();
     // 禁止写入 imgui.ini，固定字体和显示尺寸以稳定鼠标命中。
-    io.IniFilename        = nullptr;
-    io.DisplaySize        = ImVec2(900, 740);
+    io.IniFilename = nullptr;
+    io.DisplaySize = ImVec2(900, 740);
+    // 给 ImGui 固定帧间隔，使鼠标输入与悬浮处理不依赖测试机实际频率。
     io.DeltaTime          = 1.0F / 60.0F;
     unsigned char* pixels = nullptr;
     int            width  = 0;
@@ -324,6 +334,7 @@ int main()
     // 无图形后端仍需构建字体图集，避免 NewFrame 拒绝运行。
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
     // 所有分析视图在其内部作用域析构，覆盖早于 GPU 初始化的关闭路径。
+    // 用同一个管理器观察全部注册结果，确保平台外壳路径与访客路径共享真实注册表。
     bool passed = false;
     {
         // 管理器只构造一次，避免已销毁视图的 Clay context

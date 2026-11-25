@@ -25,25 +25,35 @@ namespace
 bool verifyMyO2Grid()
 {
     using namespace MMM::Bms;
+    // 中点样本覆盖偶数两侧，防止实现退化为一律向上取整。
+    // 这些输入都可精确表示，不把二进制浮点误差混入舍入规则。
     if ( myO2Round(.5) != 0 || myO2Round(1.5) != 2 || myO2Round(2.5) != 2 )
         return false;
     // 1 tick 到两种网格同距，原工具建议 48 分，结果归零。
+    // 候选位置仅偏离零点一个原始 tick，能区分建议分辨率的选择。
+    // 断言直接检查修改后的行容器，不通过再次导出掩盖量化结果。
     ExportRows single{ { { 0, 0x11 }, { { 1.0 / 192, 1 } } } };
     if ( !quantizeMyO2Rows(single) ||
          single.begin()->second.front().first != 0 )
         return false;
     // 小节尾吸附至下一小节；同拍 BGM 复音必须保留。
+    // 跨小节后两个事件仍须共存于目标行，不能把迁移解释成覆盖。
+    // 这里使用 BGM 通道，重复拍位合法，与下面玩家轨冲突形成对照。
     ExportRows boundary{ { { 0, 1 },
                            { { 191.0 / 192, 1 }, { 191.0 / 192, 2 } } } };
     if ( !quantizeMyO2Rows(boundary) || boundary.count({ 1, 1 }) != 1 ||
          boundary.begin()->second.size() != 2 )
         return false;
     // 玩家音符不能以覆盖同槽的方式通过零偏移检查。
+    // 三个不同事件的编码值不同，碰撞时无法用同值去重蒙混通过。
+    // 拒绝针对不可表达的玩家格点，不应推广到允许复音的 BGM 行。
     ExportRows collision{
         { { 0, 0x11 }, { { .1 / 192, 1 }, { .2 / 192, 2 }, { 1.0 / 192, 3 } } }
     };
     if ( quantizeMyO2Rows(collision) ) return false;
     // 已位于 64 分网格上的位置不应发生移动。
+    // 已对齐输入承担不动点检查，防止每次调用都再移动一轮。
+    // 只接受原拍位精确相等，而非落入某个宽松时间容差。
     ExportRows aligned{ { { 0, 0x11 },
                           { { 3.0 / 192, 1 }, { 9.0 / 192, 2 } } } };
     if ( !quantizeMyO2Rows(aligned) ||
@@ -51,6 +61,8 @@ bool verifyMyO2Grid()
         return false;
     // 原工具把亚 tick 距离逐次舍入为零，但仍可能显示警告行。
     // 兼容模式不能因为两列都为零就保留这些原始浮点残差。
+    // 残差夹具与完全对齐夹具分开，覆盖建议网格不变但数值仍需规范化。
+    // 结果必须来自格点位置，不能仅以警告清零作为转换完成的标志。
     ExportRows residual{ { { 0, 0x11 }, { { 4.1 / 192, 1 } } } };
     if ( !quantizeMyO2Rows(residual) ||
          residual.begin()->second.front().first != 4.0 / 192 )
@@ -87,6 +99,8 @@ bool verify(const MMM::BeatMap& map)
         return false;
     // 既检查参数也检查事件数量，防止重复生成同一暂停。
     // 只比较绝对期望，避免读写器共享同一错误公式时互相掩盖。
+    // STOP 只增加实际等待，不改变以音乐为基准的物件绝对时间。
+    // 因此这里单独统计暂停，前面的物件时间断言不叠加暂停时长。
     int stops = 0;
     for ( const auto& timing : map.m_timings ) {
         if ( timing.m_timingEffect != MMM::TimingEffect::STOP ) continue;
@@ -186,6 +200,8 @@ bool verifyBpmDefinitionReuse(const std::filesystem::path& root)
         map.m_timings.push_back(timing);
         milliseconds += 60000 / timing.m_timingEffectParameter;
     }
+    // 已有目标的哨兵内容与合法 BMS 无关，便于精确识别失败时是否提前打开文件。
+    // 边界用例先拒绝再减一成功，避免将所有大谱面统一拒绝也视作正确。
     const auto boundary = root / "bpm_definition_capacity.bms";
     {
         std::ofstream file(boundary);
@@ -240,6 +256,8 @@ bool verifyDenseBpmTiming(const std::filesystem::path& root)
     hold.m_timestamp = 300.25;
     hold.m_duration  = 600.5;
     map.m_noteData.holds.push_back(hold);
+    // 目标位于独立输出目录；默认策略通过公共保存入口选择。
+    // 密集事件不预先改成兼容格点，保留离拍输入才能检测默认精度退化。
     const auto path = root / "dense_bpm_default.bms";
     // 不设置任何精度属性，真正验证普通保存入口的保真默认值。
     // 只允许文本编码误差，不能通过删除事件降低输出分辨率。
@@ -351,6 +369,9 @@ bool verifyKeyboardChannels(const std::filesystem::path& root,
             if ( !mainData ) return false;
             // 统计实际非零对象，避免一行虽然存在却只剩最后一个音符。
             // 长条同一行必须含首尾两个端点，而不是仅有一个结束标记。
+            // 每个数据 token 固定两字符，非零 token
+            // 数才能代表实际写出的对象数量。
+            // 缺行返回零与全零行共同失败，禁止把空结构当作成功表达。
             const auto count = [&](const std::string& ch) {
                 const auto found = rows.find("#000" + ch);
                 if ( found == rows.end() ) return 0;
@@ -407,6 +428,9 @@ bool verifyMyO2Basic(const std::filesystem::path& root)
     const auto source = root / "myo2-basic-source.bms";
     // 两拍短小节从 2000ms 开始，240 BPM 下第二拍为 2250ms。
     // 该拍先换成 150.5 BPM，再按新 BPM 解释一拍长度的 STOP。
+    // 声明先给出资源与扩展模式，数据行再混合大小写控制码。
+    // 同通道重复行是合法输入，不能在解析阶段先装入覆盖式字典。
+    // 原始文字是人工夹具，后续期望不依赖导出器生成的通道内容。
     std::ofstream(source) << R"BMS(#PLAYER 1
 #TITLE basic test
 #ARTIST Example
@@ -453,6 +477,9 @@ bool verifyMyO2Basic(const std::filesystem::path& root)
 #00412:ff
 #00416:01
 )BMS";
+    // 此处先核验原始导入，再测试原生持久化，两个阶段的失败不会互相掩盖。
+    // 根物件、长条、自动采样分别计数，控制码不能变成可判定音符。
+    // 长条从短小节起点开始，尾部仍需按实际 BPM 计算而非固定小节长度。
     auto map = BeatMap::loadFromFile(source);
     if ( map.m_baseMapMetadata.track_count != 4 ||
          map.m_noteData.notes.size() != 3 || map.m_noteData.holds.size() != 1 ||
@@ -465,6 +492,8 @@ bool verifyMyO2Basic(const std::filesystem::path& root)
 
     // 中间使用普通 MMM 持久化，确保
     // BGA、轨道控制和变长小节并非仅存在于读取缓冲。
+    // 原生往返切断文本读取缓冲的生命周期，扩展信息必须已经进入模型元数据。
+    // 后续从这个模型导出，而非直接把来源 BMS 文本原样复制到目标。
     const auto native = root / "myo2-basic.mmm";
     if ( !map.saveToFile(native) ) return false;
     map                  = BeatMap::loadFromFile(native);
@@ -494,6 +523,8 @@ bool verifyMyO2Basic(const std::filesystem::path& root)
                                    "sw",
                                    "ed" } )
         if ( text.find(required) == std::string::npos ) return false;
+    // 输出文本满足标记要求之后，还要检查这些标记重新形成可编辑的领域对象。
+    // 同刻双 BGM 分别保留，不能被首个主音乐事件吞并。
     const auto restored = BeatMap::loadFromFile(target);
     if ( restored.m_noteData.notes.size() != 3 ||
          restored.m_noteData.holds.size() != 1 ||
@@ -502,8 +533,12 @@ bool verifyMyO2Basic(const std::filesystem::path& root)
          restored.m_audioSamples[1].effectiveTimestamp() != 2250 ||
          restored.m_audioSamples[2].effectiveTimestamp() != 2250 )
         return false;
+    // 滚速可以为零或负数，不能套用 BPM 必须为正的数值约束。
+    // STOP 的零值也有可往返语义，不能作为空事件在写出时丢弃。
     std::vector<double> rates;
     std::vector<double> stops;
+    // 按当前容器顺序收集同类参数，兼顾数量、值和事件次序。
+    // 只看最终滚速无法发现中途暂停、倒退或恢复过程被删除。
     for ( const auto& timing : restored.m_timings ) {
         if ( timing.m_timingEffect == TimingEffect::SCROLL )
             rates.push_back(timing.m_timingEffectParameter);
@@ -517,6 +552,8 @@ bool verifyMyO2Basic(const std::filesystem::path& root)
     // 原生背景没有现成的 BGA 事件，导出时由视频起始时间生成 FF。
     BeatMap video      = BeatMap::loadFromFile(target);
     auto&   videoProps = video.m_metadata.map_properties[MapMetadataType::BMS];
+    // 移除导入保留的 cue，确保下面 FF 只能由原生视频起点派生。
+    // 若继续沿用来源 cue，即使视频自动生成分支失效也可能错误通过。
     std::erase_if(videoProps, [](const auto& entry) {
         return entry.first.starts_with("myo2_cue_");
     });
@@ -534,6 +571,8 @@ bool verifyMyO2Basic(const std::filesystem::path& root)
     if ( videoCue == videoFormat->second.end() ||
          videoCue->second != "FF 1000" )
         return false;
+    // 复用同一合法视频模型只更换格式，使拒绝原因限定为目标格式不支持。
+    // 这里不要求解码视频；扩展名兼容判断属于谱面导出能力边界。
     video.m_baseMapMetadata.main_cover_path = "test-video.webm";
     if ( video.saveToFile(root / "myo2-unsupported-video.bms") ) return false;
 
@@ -542,6 +581,8 @@ bool verifyMyO2Basic(const std::filesystem::path& root)
     std::ofstream(legacy, std::ios::binary)
         << "#TITLE \xd6\xd0\xce\xc4\n#BPM 120\n#AUDIO_MODE STANDARD\n"
            "#WAV01 samples/hit.wav\n#00016:01\n";
+    // 输入按历史编码写字节，模型标题则与源码 UTF-8 字符串比较。
+    // 输出再次读取为二进制文本，避免系统文本转换替写出器完成编码迁移。
     const auto legacyMap = BeatMap::loadFromFile(legacy);
     const auto utf8      = root / "myo2-utf8.bms";
     if ( legacyMap.m_baseMapMetadata.title != "中文" ||
@@ -555,6 +596,8 @@ bool verifyMyO2Basic(const std::filesystem::path& root)
     const auto wholeOnly = root / "myo2-whole-only.bms";
     std::ofstream(wholeOnly) << "#BPM 120\n#BGM music.wav\n#WAV01 music.wav\n"
                                 "#00011:00ww\n#00016:01\n#00001:01\n";
+    // 普通 WAV 声明在整曲模式中可以只是占位，不能据此凭空建立键音绑定。
+    // WW 定义的实际起播点仍需进入自动采样，和占位音符分属两个数据域。
     const auto wholeOnlyMap = BeatMap::loadFromFile(wholeOnly);
     if ( wholeOnlyMap.m_noteData.notes.size() != 1 ||
          wholeOnlyMap.m_noteData.notes.front().m_sampleBinding ||
@@ -567,6 +610,8 @@ bool verifyMyO2Basic(const std::filesystem::path& root)
     const auto sparseSeven = root / "myo2-sparse-seven.bms";
     std::ofstream(sparseSeven) << "#BPM 120\n#AUDIO_MODE MYO2\n#BGM music.wav\n"
                                   "#00014:01\n#00055:0101\n";
+    // 键数推断必须看通道语义而非实际最右物件位置。
+    // 保留稀疏七键布局能避免导出后所有右侧轨道再次发生偏移。
     const auto seven       = BeatMap::loadFromFile(sparseSeven);
     const auto sevenTarget = root / "myo2-sparse-seven-export.bms";
     if ( seven.m_baseMapMetadata.track_count != 7 ||
@@ -585,11 +630,15 @@ bool verifyMyO2Basic(const std::filesystem::path& root)
     const auto chord       = BeatMap::loadFromFile(fullChord);
     const auto chordTarget = root / "myo2-full-chord-export.bms";
     if ( !chord.saveToFile(chordTarget) ) return false;
+    // 满和弦已经占满玩家区，控制事件仍须通过 BGM 数据行独立表达。
+    // 重新读取后同时核对四颗判定音符和唯一音乐触发，防止借丢音符腾位置。
     const auto restoredChord = BeatMap::loadFromFile(chordTarget);
     if ( restoredChord.m_noteData.notes.size() != 4 ||
          restoredChord.m_audioSamples.size() != 1 ||
          restoredChord.m_audioSamples.front().effectiveTimestamp() != 2000 )
         return false;
+    // HE 是界面控制 cue，不能作为第二条可播放音频混入采样数组。
+    // 这里检查其保留元数据，和上面的音频数量形成互补断言。
     const auto chordProperties =
         restoredChord.m_metadata.map_properties.find(MapMetadataType::BMS);
     if ( chordProperties == restoredChord.m_metadata.map_properties.end() ||
@@ -599,6 +648,8 @@ bool verifyMyO2Basic(const std::filesystem::path& root)
 
     // 两条同轨长条互相穿插时，端点仍可能成对，但留下的会是两个不同的长条。
     // 要求在写盘前拒绝，不能用输出的重新配对掩盖源谱重叠。
+    // 复制现有长条可保留全部合法绑定，仅让区间关系变为不可表达的交叠。
+    // 尾点重配对虽能生成语法合法文件，却会改变两个长条各自的持续时间。
     auto overlapping = map.m_noteData.holds.front();
     overlapping.m_timestamp += 125;
     map.m_noteData.holds.push_back(overlapping);
@@ -655,6 +706,8 @@ int main(int argc, char** argv)
                     std::filesystem::path(argv[3]).extension() != ".pms"
                 ? 1
                 : 0;
+        // 时间误差以毫秒报告；轨道身份不匹配必须独立判为失败。
+        // 三元组保留长条终点，因此同长但整体移位的两个长条不会被误认为等价。
         const auto timingError = [laneOffset](const auto& left,
                                               const auto& right) {
             using Entry = std::tuple<int, double, double>;
@@ -713,6 +766,8 @@ int main(int argc, char** argv)
             return values;
         };
         // 真实曲库还包含同刻重复红线，逐条保留能防止编号复用被误写成事件去重。
+        // 来源记录完全从已载入模型提取，输出头部是否额外生成需另行判断。
+        // 两侧只规范顺序，不按 BPM 值去重，否则会遗漏同刻重复事件。
         const auto beforeTimings = musicTimings(source, false);
         // 来源的零点 BPM 可能排在同刻 STOP 之后，不能只检查第一项。
         const bool headerRepresentsSource =
@@ -753,6 +808,8 @@ int main(int argc, char** argv)
             std::sort(values.begin(), values.end());
             return values;
         };
+        // 音频配对以资源身份排序，避免文本 WAV 定义次序影响比较。
+        // 有效触发时刻已经合并独立 offset，比较不要求目标格式保留原字段拆分。
         const auto beforeAudio = audioTimings(source);
         const auto afterAudio  = audioTimings(target);
         // 即使不解码音频，也必须证明主曲的触发点仍与物件共用时轴。
@@ -772,6 +829,8 @@ int main(int argc, char** argv)
         // 旁路报告使批量驱动记录主动吸附幅度，不把零网格偏移等同无损。
         // 报告跟随导出路径，所有临时数据均落在显式输出目录。
         // JSON 仅含有限的最大误差，失败行仍会保留进程日志。
+        // 旁路报告属于导出目标的诊断产物，不写到只读来源目录。
+        // 即使最终阈值失败也先保留报告，让批量驱动区分物件、时间线和音乐偏移。
         std::ofstream stats(std::string(argv[3]) + ".json");
         // 先落下完整报告再返回偏移失败，使批量工具保留真实误差与事件数。
         // 布尔值显式写成 JSON 字面量，不依赖进程流的 boolalpha 状态。
@@ -853,6 +912,8 @@ int main(int argc, char** argv)
     }
     // LNOBJ 尾部不产生额外 Note，绑定仍来自开始点。
     // 夹具的最后一个对象位于第四格，即三拍而非四拍。
+    // LNOBJ 的尾码只负责闭合已有起点，不是一个拥有自身采样的点按。
+    // 零个普通 Note 加一个 Hold 的联合检查可以捕获尾码泄漏成普通物件。
     auto lnobj = MMM::BeatMap::loadFromFile(root / "lnobj.bms");
     if ( !lnobj.m_noteData.notes.empty() ||
          lnobj.m_noteData.holds.size() != 1 ||
@@ -890,6 +951,8 @@ int main(int argc, char** argv)
         std::ofstream file(root / "nine.PMS");
         file << "#BPM 120\n#00025:01\n";
     }
+    // PMS 复用了 BMS 文本形状，但轨道布局规则不同，不能沿用双侧通道解释。
+    // 最后一轨断言同时覆盖九键宽度与零起点的内部轨号约定。
     auto pms = MMM::BeatMap::loadFromFile(root / "nine.PMS");
     if ( pms.m_baseMapMetadata.track_count != 9 ||
          pms.m_noteData.notes.size() != 1 ||
@@ -905,6 +968,8 @@ int main(int argc, char** argv)
     // 读取成功不能只看标题，音效文件名错误会导致编辑器静音。
     // 因此同一夹具检查模型中的显式绑定路径，保持字符转换与资源定位一致。
     // 期望为源码 UTF-8 字面量，不调用生产解码函数生成期望值。
+    // 标题与绑定使用同一段编码字节，确保通用文本和资源路径都经过解码。
+    // 绑定为空与路径错误是不同失败形态，必须先检查 optional 再读取路径。
     auto encoded = MMM::BeatMap::loadFromFile(root / "cp932.bms");
     if ( encoded.m_baseMapMetadata.title != "テスト" ||
          encoded.m_noteData.notes.size() != 1 ||
@@ -941,6 +1006,8 @@ int main(int argc, char** argv)
     if ( !keyboard.saveToFile(root / "keyboard.bms") ) return 12;
     // 读取器仍按标准通道判断布局，验证结果不依赖私有键数元数据。
     // 首、末轨分别覆盖 16 转盘通道和 13 普通键通道两个边界。
+    // 这里保留标准 BMS 的布局推断，不把导出源模型的四键元数据当成读取期望。
+    // 因此必须另外验证首末轨号，防止只满足六轨宽度而把物件整体顺移。
     const auto converted = MMM::BeatMap::loadFromFile(root / "keyboard.bms");
     // 重载仍是标准六轨宽度，但两个音符的轨号必须与来源一致。
     // 导出不能把修改写回来源模型的键数、轨号或增益。

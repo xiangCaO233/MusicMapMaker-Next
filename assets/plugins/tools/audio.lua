@@ -144,16 +144,22 @@ return {
     id = "mmm.audio_transcoder",
     name = "音频信息与转码",
 
+    -- 宿主把导出状态按插件 ID 保留，Lua 重建界面时读取最新的一份状态。
+    -- 这里返回描述表，控件回调不捕获本次构建的局部路径或后台对象。
     build = function(api)
         -- build 仅在加载、用户动作和后台完成时执行；普通帧复用缓存控件。
         -- 后台进度另由 audio_progress 读取原子值，避免每帧进入 Lua。
         local status = api.audio_status()
         local status_text = state.message
+        -- 先检查批量计数。Lua 中数字零也为真，表示批次实际运行但没有写出，
+        -- 仍要保留该批次的失败详情。只有不展示结果时才由当前输入提示接管。
         if state.show_result and status.audio_written then
             -- 即使部分失败也展示已提交的文件数，方便继续处理失败项。
             status_text = string.format("已转码 %d 个音频，生成 %d 份谱面副本，%d 张没有匹配引用。",
                 status.audio_written, status.charts_written, status.charts_unchanged)
             if status.errors and #status.errors > 0 then
+                -- 仅限制摘要文本行数，失败总数仍按完整列表显示，长失败批次不会撑开整个面板。
+                -- 行数上限作用于显示，不能用它判断后台是否还会处理剩余任务。
                 local shown = math.min(#status.errors, 12)
                 status_text = status_text .. "\n失败 " .. #status.errors .. " 项：\n" ..
                     table.concat(status.errors, "\n", 1, shown)
@@ -175,6 +181,8 @@ return {
         local widgets = {
             { type = "button", id = "select_input", label = "选择输入音频" },
         }
+        -- 只有单选才持有可探测的媒体快照。批量输入不借用第一项标签代表整批，
+        -- 以免用户把混合格式/声道数误读为一份统一的输出约束。
         if #state.inputs == 1 then
             widgets[#widgets + 1] = { type = "text", id = "input_path", label = state.inputs[1] }
             widgets[#widgets + 1] = { type = "text", id = "media_info", label = describe(state.info) }
@@ -271,6 +279,8 @@ return {
 
     on_action = function(id, value, api)
         -- 只有明确点击按钮或修改参数才会到达这里；文件对话框可阻塞 UI。
+        -- 选择器能力来自宿主而非操作系统。旧宿主只暴露单选时，
+        -- 仍把结果规范为同一种数组，后面的合法性和提示无需保持两套逻辑。
         if id == "select_input" then
             local paths
             if api.pick_files and api.pick_folder then
@@ -294,11 +304,15 @@ return {
                 else
                     state.message = "已选择批量转码输入。"
                 end
+            -- 空数组可能是取消，也可能带宿主错误字段。取消时保留旧批次和状态，
+            -- 明确报错时只替换提示，不丢失用户上一次已选输入。
             elseif paths.error then
                 state.show_result = false
                 state.message = paths.error
             end
         elseif id == "select_charts" then
+            -- 谱面列表只提供给批量改链，与正在探测的单个音频信息没有依赖关系。
+            -- 选择器失败时保留现有谱面，只有显式清空才恢复纯音频模式。
             local paths = api.pick_files("audio_batch_charts", "mmm,mc,osu,imd,bms,bme,bml,pms")
             if #paths > 0 then state.charts = paths end
             if paths.error then
@@ -310,6 +324,8 @@ return {
         elseif id == "output_format" then
             -- 此时没有待确认的输出路径，切换格式只更新保存建议名。
             state.format = selected_format(value).label
+            -- 仅当用户主动改变格式时标记已指定。未来改变输入数量仍保留本次选择，
+            -- 而未指定时可以根据单个或批量输出采用各自默认容器。
             state.custom_format = true
         elseif id == "toggle_details" then
             state.show_details = not state.show_details
@@ -332,6 +348,8 @@ return {
                 return
             end
             state.show_result = false
+            -- 单文件入口依赖已经完成的媒体探测；批量入口允许部分源无效，
+            -- 错误由宿主按输入报告，能写出的其他文件仍继续处理。
             if #state.inputs == 0 or (not uses_batch() and (not state.info or state.info.error)) then
                 state.message = "请先选择可读取的输入音频。"
                 return
@@ -357,14 +375,21 @@ return {
                     state.message = "同步谱面引用时倍速必须为 1。"
                     return
                 end
+                -- 输出目录由本轮对话框明确确认，插件保存的最近位置只用作起始目录。
+                -- 目录名不携带编码参数，统一扩展名来自已经验证的格式选项。
                 local directory = api.pick_folder("audio_batch_output")
                 if directory == "" then return end
                 -- 取得目录后一次提交，逐文件错误与最终成果由同一状态接口返回。
+                -- inputs 和 charts 交给宿主建立批次快照；后续调整选择只影响下次提交。
+                -- 目录取消时不会调用这里，也不会意外向最近使用过的目录追加输出。
+                -- 批量接口接受后，每项写入结果可能不同，界面使用完整批次摘要核对。
                 local error = api.audio_export_batch({
                     inputs = state.inputs, charts = state.charts, directory = directory,
                     extension = format.extension, speed = speed, pitch_semitones = pitch,
                     sample_rate = sample_rate, bitrate = bitrate,
                 })
+                -- 只有队列接受本轮请求时才允许后续状态覆盖提示。
+                -- 提交时失败保留即时诊断，避免旧批次的成功摘要掩盖它。
                 state.show_result = error == ""
                 state.message = state.show_result and "正在准备批量导出..." or error
                 return
@@ -373,6 +398,8 @@ return {
             -- 用途键只记最近目录，不能把上次输出文件当成本次隐式目标。
             local output = api.save_file("audio_output", "output" .. format.extension)
             if output == "" then return end
+            -- 另存为只给建议后缀，实际选择可能不同。以最终名称选择编码器，
+            -- 让生成内容与用户打开文件时依赖的后缀一致。
             local chosen = format_from_path(output)
             if not chosen then
                 -- 不猜测无后缀文件的编码器，保存对话框可能尚未确认补名结果。
@@ -384,6 +411,8 @@ return {
                 state.format = chosen.label
                 state.custom_format = true
                 format = chosen
+                -- 使用最终容器重新计算参数。切换到无损时不带旧码率，
+                -- 即使原选择是有损，退回无损也不把后者的编码设置写进任务。
                 bitrate = format.lossy and tonumber(state.bitrate) or 0
                 if not bitrate or bitrate < 0 or bitrate % 1 ~= 0 then
                     state.message = "目标码率必须为非负整数。"
@@ -392,6 +421,8 @@ return {
             end
             -- 宿主再次验证数值范围、路径和编码器能力，脚本校验只负责输入体验。
             -- 返回空串仅表示任务进入队列，最终结果仍以 audio_status 为准。
+            -- 这里仅传一对路径和值参数。插件可关闭或重载，后台任务由宿主拥有，
+            -- 完成通知不会调用一份已销毁 Lua 状态中的回调。
             local error = api.audio_export({
                 input = state.inputs[1], output = output,
                 speed = speed, pitch_semitones = pitch,

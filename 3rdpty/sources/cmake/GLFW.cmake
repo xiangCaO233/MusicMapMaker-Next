@@ -7,12 +7,15 @@ set(GLFW_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/glfw")
 set(GLFW_BUILD_DOCS
     OFF
     CACHE BOOL "Disable GLFW documentation" FORCE)
+# 避免上游窗口探针介入项目 CTest；原生平台行为由项目自己的窗口适配器测试覆盖。
 set(GLFW_BUILD_TESTS
     OFF
     CACHE BOOL "Disable GLFW tests" FORCE)
+# 项目只分发 GLFW 运行所需产物，样例的独立窗口和渲染依赖不应进入构建图。
 set(GLFW_BUILD_EXAMPLES
     OFF
     CACHE BOOL "Disable GLFW examples" FORCE)
+# 安装布局由父项目负责，禁用上游规则以免写入非选定前缀。
 set(GLFW_INSTALL
     OFF
     CACHE BOOL "Disable GLFW install target" FORCE)
@@ -23,4 +26,5 @@ add_subdirectory(${GLFW_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/glfw_build
 
 # 创建接口库
 add_library(3rd_glfw INTERFACE)
+# 包装接口统一源码与预编译消费者的公共链接名称。
 target_link_libraries(3rd_glfw INTERFACE glfw)

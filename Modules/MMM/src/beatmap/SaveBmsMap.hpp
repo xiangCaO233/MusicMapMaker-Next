@@ -34,6 +34,8 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     const bool  keyboardOnly = !pms && tracks >= 1 && tracks <= 3;
     const bool  myO2         = usesMyO2Format(map.m_metadata);
     const bool  myO2Grid     = bmsProperty(map.m_metadata, "myo2_grid") == "1";
+    // 不同变体允许的键数和物件集合不同，三者分别校验，避免先依靠通用键路由产生非法编码。
+    // MyO2 的判定通道由站点固定映射，PMS 不能靠改后缀复用同一档谱面。
     if ( myO2 &&
          (pms || (tracks != 4 && tracks != 7) ||
           map.m_noteData.notes.size() + map.m_noteData.holds.size() == 0 ||
@@ -54,6 +56,9 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         XERROR("MyO2 视频 BGA 需要 MP4 文件");
         return false;
     }
+    // 兼容声明解析出小节前缀和控制事件。只需要标准 BMS 时不应要求来源的 MyO2
+    // 属性有效。
+    // 保存会借用这些预处理结果到行序列化结束，过程中不再解释原始属性文本。
     const auto myO2Data = myO2 ? myO2ExportData(map) : std::nullopt;
     if ( myO2 && !myO2Data ) {
         XERROR("MyO2 小节比例或控制标记无效");
@@ -73,6 +78,8 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     // 七键的后两键跳过通道 17，不能简单把轨道号加到 11。
     // 第二玩家的通道十位与第一玩家不同，键序保持一致。
     // PMS 使用独立九键映射，不包含转盘。
+    // 传入的内部轨道号始终从零开始。调用者已检查档位，映射仅负责选择协议通道。
+    // 自动采样绕过此映射直接走 01，不能把它们算入玩家键数。
     const auto channel = [&](int track) {
         if ( myO2 ) return MYO2_LANES[track];
         if ( pms ) return track < 5 ? 0x11 + track : 0x22 + track - 5;
@@ -85,6 +92,8 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     };
     // 指针只观察调用期间固定的谱面，排序不改变活动编辑模型。
     // 原始 Timing 顺序不一定按时间排列，所以导出单独建立有序视图。
+    // 排序向量保存原事件地址以标识真正的首红线，避免同值 BPM
+    // 与首红线在后续比较中混淆。
     std::vector<const Timing*> timings;
     for ( const auto& t : map.m_timings ) {
         // 外部协议没有负小节；非法或无限时间不能参与拍位积分。
@@ -112,6 +121,8 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         // 保留同刻事件的稳定顺序，BPM 查询会单独处理优先级。
         timings.push_back(&t);
     }
+    // 同刻多个声明仍按输入顺序参与判断。稳定排序不会因名称或类型改变最后生效的速度。
+    // 无关视觉事件已经被过滤，积分锚点只来自时间模型可表示的记录。
     std::stable_sort(
         timings.begin(), timings.end(), [](const Timing* a, const Timing* b) {
             return a->m_timestamp < b->m_timestamp;
@@ -149,6 +160,8 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         double m_beat{};  ///< 红线不含 STOP 的绝对拍位。
         double m_bpm{};   ///< 从该位置开始生效的 BPM。
     };
+    // 首个哨兵保证在可导出的最早事件之前已有速度状态，时间查询不需要为每个来点回退到默认
+    // BPM。 仅兼容分支保留理想锚点；标准分支在量化时会更新另一套已编码时间线。
     std::vector<TempoAnchor> idealTempos{ { chartOrigin, 0, initial } };
     if ( myO2 ) {
         for ( const auto* t : timings ) {
@@ -161,6 +174,9 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
                 { t->m_timestamp, beat, t->m_timingEffectParameter });
         }
     }
+    // upper_bound 允许同刻多个锚点，返回的是同刻最后一个已声明速度。下游 STOP
+    // 同样使用它。 调用前由统一时间域保证 ms 不早于 chartOrigin，因而 prev
+    // 不会越过哨兵。
     const auto idealTempoAt = [&](double ms) -> const TempoAnchor& {
         return *std::prev(std::upper_bound(
             idealTempos.begin(),
@@ -178,6 +194,9 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     for ( const auto* t : timings )
         if ( t->m_timingEffect == TimingEffect::BPM )
             minimumBpm = std::min(minimumBpm, t->m_timingEffectParameter);
+    // 一小节四拍，每拍 60000/BPM
+    // 毫秒。用最慢速度得出的比例误差保证快段也满足同一时间预算。
+    // 变长小节编码时还要按实际小节比例换算；这里以标准四拍长度作为基准。
     const double fractionTolerance = minimumBpm * 0.01 / 240000.0;
     // MyO2 的普通/长条和 BPM 通道只能写入单行；标准 BMS 仍可用稀疏行。
     const bool compactRows =
@@ -186,6 +205,8 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     // 目标文件直到全部对象通过验证才打开，失败不截断已有文件。
     // 声明与通道分开收集，最终先输出完整资源表。
     std::ostringstream header, body;
+    // 声明和通道使用经典数值语法，运行机器设置不能让 BPM
+    // 或小节比例出现本地化分隔符。
     header.imbue(std::locale::classic());
     body.imbue(std::locale::classic());
     // 十二位有效数字覆盖毫秒级谱面时长的既有误差预算，同时消除
@@ -205,9 +226,12 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         if ( text.back() == '.' ) text.pop_back();
         return text;
     };
+    // 兼容格式的十进制精度固定到 12 位，过小的正初始速度会被文本表示舍成零。
     if ( !std::isfinite(initial) || (myO2 && initial < 1e-12) ) return false;
     const auto player = bmsProperty(map.m_metadata, "myo2_player");
     header << "#PLAYER ";
+    // 兼容来源的有效 PLAYER
+    // 声明具有优先权。普通导出按单边或双边轨道推导，不受旧兼容字段影响。
     if ( myO2 && integer(player, 10) > 0 )
         header << player;
     else
@@ -229,6 +253,7 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
                  mainPath )
             main = &sample;
     }
+    // 只计算非空采样引用。空绑定用于静音判定，不应凭它要求提供额外 KEY 音包。
     const auto hasBinding = [](const auto& notes) {
         return std::any_of(notes.begin(), notes.end(), [](const auto& note) {
             return note.m_sampleBinding &&
@@ -242,6 +267,8 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         myO2 && (mode == "MYO2" ||
                  (mode.empty() && !mainPath.empty() &&
                   (!bank.empty() || (!hasKeys && nonemptySamples <= 1))));
+    // 显式声明不能被自动模式覆盖。对于整曲模式，没有音包只能容纳主音乐自己的触发。
+    // 兼容音包内的名字与散装文件是两个命名空间，推导结果决定后续资源声明。
     if ( myO2 ) {
         if ( (!mode.empty() && mode != "MYO2" && mode != "STANDARD") ||
              (wholeMusic &&
@@ -265,6 +292,9 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         header << "#RANK " << rank << "\n#TOTAL " << total << '\n';
         bool bga     = bmsProperty(map.m_metadata, "myo2_bga") == "1";
         bool display = bmsProperty(map.m_metadata, "myo2_sp_note") == "1";
+        // FF
+        // 视频与其余展示事件独立推导开关。谱面显式标记开启时，即使此批没有对应
+        // cue 也保留。
         for ( const auto& cue : myO2Data->m_cues ) {
             bga |= cue.m_code == integer("FF", 36);
             display |= cue.m_code != integer("FF", 36);
@@ -281,10 +311,15 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     std::map<std::string, int> resources;
     int                        nextResource = 0;
     bool                       needsSilence = false;
-    const auto                 resource     = [&](const std::string& name) {
+    // 按完整引用字符串复用编号；编号还承担判定身份，所以静音也需要一个非零字元。
+    // 资源分配先检查是否已有编号，已到编号上限时仍能继续引用已登记资源。
+    const auto resource = [&](const std::string& name) {
         if ( const auto it = resources.find(name); it != resources.end() )
             return it->second;
         // 空绑定仍需非零判定码；STANDARD 松散音源路径必须指向真实采样。
+        // 保留标识在兼容播放器中会触发控制行为，不能发给普通键或自动音。
+        // 两位 base36 的最大值为 1295；零保留给空槽，耗尽时由 emit
+        // 路径拒绝条目。
         do {
             if ( ++nextResource > 1295 ) return 0;
         } while ( myO2 && (myO2ControlCode(base36Code(nextResource)) ||
@@ -293,6 +328,7 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         if ( !myO2 || !name.empty() )
             header << "#WAV" << base36Code(nextResource) << ' ' << field(name)
                    << '\n';
+        // 散装资源引用必须有对应磁盘文件。整曲或有音包时则不创建额外散装静音，避免改变部署内容。
         else if ( !wholeMusic && bank.empty() ) {
             needsSilence = true;
             header << "#WAV" << base36Code(nextResource) << ' '
@@ -314,6 +350,8 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         if ( !std::isfinite(beat) || beat < 0 ||
              beat >= (myO2 ? myO2Data->m_starts.back() : 4000) )
             return false;
+        // 兼容小节的前缀数组含末尾边界，先用总范围检查保证查找结果是实际小节而非哨兵。
+        // 标准小节每四拍推进一次，保持 000 起点与头部 BPM 统一。
         int measure =
             myO2 ? static_cast<int>(std::upper_bound(myO2Data->m_starts.begin(),
                                                      myO2Data->m_starts.end(),
@@ -327,14 +365,20 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
                                : beat / 4 - measure;
         // 允许精度范围内的整小节尾差进入下一小节，不生成越界槽位。
         // 两种行写出路径共用规范化，避免聚合与独立事件行边界不同。
+        // 标准扩展 BPM 和 STOP
+        // 的位置由已编码时轴决定，不能在这里额外把极近尾部的时间点移动。
+        // 其他通道的局部近似允许在误差范围内跨到下一小节第一槽。
         if ( (myO2 || (ch != 8 && ch != 9)) &&
              1.0 - fraction <= fractionTolerance ) {
             ++measure;
             fraction = 0;
         }
+        // 小节尾部也可能被舍入到哨兵之后，因此需要在规范化之后再做一次上界检查。
         if ( measure >= 1000 ) return false;
         // 键位和 BPM 通道一次写出整小节；保留原拍位供公共分辨率搜索。
         // 不先逐事件量化，防止各自的近似误差在合并时再次累积。
+        // 同通道事件共享小节键但仍逐个保留，避免聚合阶段吞掉复音或同刻速度声明。
+        // 能否压成单行由最终协议和格点冲突共同决定，此处不消解碰撞。
         rows[{ measure, ch }].emplace_back(fraction, value);
         return true;
     };
@@ -350,6 +394,7 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     // 编号引用的是速度定义，而非事件身份；多次切回同一 BPM 可共用定义。
     // 精确比较已验证有限的正值，不通过近似舍入合并不同速度。
     // 保留变速的原时序与编号，只让文件头承担已存在于零点的首条 BPM。
+    // 下游定义编号只在该谱面范围内有意义，不能将另一张谱面的编号缓存复用。
     std::map<double, int> bpmDefinitions;
     std::map<double, int> scrollDefinitions;
     std::map<double, int> stopDefinitions;
@@ -365,9 +410,12 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
                        t->m_timingEffect == TimingEffect::BPM
                            ? std::optional<double>{ t->m_timingEffectParameter }
                            : std::nullopt);
+        // 标准映射可能拒绝无法精确编码的边界；不能改用理想拍位继续，否则后续事件积分仍依据另一套锚点。
         if ( !beat ) return false;
         if ( t->m_timingEffect == TimingEffect::SCROLL ) {
-            const auto rate       = t->m_timingEffectParameter;
+            const auto rate = t->m_timingEffectParameter;
+            // 滚速影响显示位置，独立的定义编号允许它与同一拍的音乐 BPM 或 STOP
+            // 共存。 首次出现才写定义行，后续相同速率只写通道事件。
             const auto definition = scrollDefinitions.try_emplace(
                 rate, static_cast<int>(scrollDefinitions.size()) + 1);
             const int id = definition.first->second;
@@ -382,6 +430,9 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
                 if ( t == initialTiming && t->m_timestamp == chartOrigin )
                     continue;
                 if ( bpm < 1e-12 ) return false;
+                // 直接速度占用两个十六进制字符，边界 255
+                // 仍可表达。小数或更快速度转用扩展通道。
+                // 进入直写分支后不能再登记 08，否则读取端会收到两次变速。
                 if ( bpm <= 255 && bpm == std::floor(bpm) ) {
                     if ( !emitBeat(*beat, 3, static_cast<int>(bpm)) )
                         return false;
@@ -424,6 +475,7 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
             }
             const double units =
                 t->m_timingEffectParameter * (stopBpm / 60) * 48;
+            // 内部等待时间乘以当前速度后可能溢出，拒绝非有限协议值，避免生成读取端无法解释的定义。
             if ( !std::isfinite(units) ) return false;
             // STOP 值以刻度去重，重复 09 行仍累计等待时长。
             const auto definition =
@@ -452,6 +504,9 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
                                        ? note.m_sampleBinding->m_audioResourceId
                                        : "");
         int       ch    = channel(note.m_track);
+        // 长条头尾在同一玩家键的长条通道写成一对，尾部换用普通键通道会变成独立判定。
+        // 单键由 duration
+        // 为零选择普通通道；原始长条时长在外层已做严格正值检查。
         if ( duration > 0 ) ch += 0x40;
         if ( !emit(note.m_timestamp, ch, sound) ) return false;
         return duration == 0 || emit(note.m_timestamp + duration, ch, sound);
@@ -465,6 +520,7 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     // 自动采样统一写入 01，不把 BGM 错当玩家键位。
     // effectiveTimestamp 包含事件自身偏移，导出位置应与实际触发一致。
     // WW 是整曲唯一的起播标记，绝不能同时再写一条同文件的 01。
+    // 已有主曲事件时保留独立触发位置。旧谱面只有歌曲提示时，整曲起播才回退到零点。
     if ( wholeMusic && !emit(main ? main->effectiveTimestamp() : 0,
                              MYO2_CUE_CHANNEL,
                              integer("WW", 36)) )
@@ -477,6 +533,9 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
              !emit(0, 1, resource(Config::pathToUtf8Generic(mainPath))) )
             return false;
     }
+    // 整曲模式先登记 WW，循环跳过同一主事件避免双播；同名的其他触发仍按独立 BGM
+    // 表达。 兼容分支没有音源名称的事件无需写入
+    // 01，玩家键的空采样则由判定资源号保留。
     for ( const auto& sample : map.m_audioSamples ) {
         if ( myO2 && (sample.m_audioResourceId.empty() ||
                       (wholeMusic && &sample == main)) )
@@ -511,6 +570,8 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
                 "MyO2 兼容导出失败：音符重叠、变速位置冲突或演奏时间超出规范");
             return false;
         }
+        // 先验证键和变速行再布置控制事件，控制码不参与玩家物件重叠检查。
+        // 控制事件最终与普通网格一起序列化，原始 cue 的绝对毫秒不直接写进通道。
         placeMyO2Cues(rows, tracks);
         // 第七轨空着时声明一行空格，MMM 可识别键数，站点仍按选定模式解析。
         if ( tracks == 7 &&
@@ -519,10 +580,13 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
              }) )
             body << "#00018:00\n";
     }
+    // SC 为扩展文字通道，其他通道采用固定两位表示，不能直接使用十进制轨道号。
     const auto rowChannel = [](int ch) {
         return ch == SCROLL_CHANNEL ? std::string("SC")
                                     : fmt::format("{:02X}", ch);
     };
+    // 单元编码与通道一起确定。MyO2
+    // 的直接速度是十六进制，其他资源编号仍须使用相应形式。
     const auto encodeCell = [myO2](int ch, int value) {
         return myO2 ? encodeMyO2Cell(ch, value) : base36Code(value);
     };
@@ -542,12 +606,16 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     for ( const auto& [position, events] : rows ) {
         // 音乐时轴已确定实际拍位，序列化不能再次近似这些 BPM/STOP。
         // 判定与 BGM 仍使用局部预算，整体误差由前面的逐段校正约束。
+        // 公共行和拆分行共享这一误差限。变长小节比例越大，相同相对偏差造成的时间误差越大。
+        // 已确定的音乐时间点使用更严格界限，以免读回后后续小节的积分原点移动。
         const double rowTolerance =
             myO2Grid ||
                     (!myO2 && (position.second == 8 || position.second == 9))
                 ? 1e-12
                 : fractionTolerance /
                       (myO2 ? myO2Data->m_ratios[position.first] : 1);
+        // 从最小可能行宽开始测试所有同通道事件。第一个可行值使常见拍点无需大量填充。
+        // 上限控制搜索时间，未命中时保留分母状态供后续判断能否改写为多行。
         int denominator = 1;
         for ( ; denominator <= 65536; ++denominator ) {
             const bool fits = std::all_of(
@@ -566,11 +634,14 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
             // 比较成本前仅存整数位置，不提前为每个候选分配大段零串。
             // 选择公共行或独立行只改变文本表示，不改变通道和采样身份。
             // 同一行内真实离拍事件仍按既有误差预算表达，不强制取整拍。
+            // 每个候选记录槽、分辨率和资源号，延迟分配直到行策略确定。
+            // 字节预算包括固定的行前缀与结尾；即便单槽靠近零点也要计入整行文本。
             std::vector<std::array<int, 3>> sparse;
             std::size_t                     sparseBytes = 0;
             for ( const auto& [fraction, value] : events ) {
                 const auto approximation =
                     approximateExportFraction(fraction, rowTolerance);
+                // 分母近似失败表示该事件无法在当前预算内表达，不能省略它来满足其他槽。
                 if ( !approximation ) return false;
                 const int slot       = (*approximation)[0],
                           resolution = (*approximation)[1];
@@ -579,6 +650,8 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
             }
             // 同刻红线也保留为独立事件，不能因复用同一编号而在公共行中覆盖。
             // 默认保真允许叠加行；显式兼容模式仍遵循既有单行限制。
+            // 相邻检查基于此前稳定时间排序，等拍的速度事件连续存放。
+            // 序列化的同拍声明顺序仍供读取器确定最终速度。
             const bool repeatedTiming =
                 position.second == 8 &&
                 std::adjacent_find(events.begin(),
@@ -591,6 +664,8 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
                  denominator > 65536 || sparseBytes < denominator * 2U + 9U ) {
                 outputBytes += sparseBytes;
                 if ( outputBytes > 64U * 1024U * 1024U ) return false;
+                // 每个复音或停顿独占一行，制造两个相同位置的记录时仍保留原来的声明顺序。
+                // 每槽用两个字符，置换发生在该行已确定的总宽度之内。
                 for ( const auto& event : sparse ) {
                     std::string data(event[1] * 2U, '0');
                     data.replace(event[0] * 2U,
@@ -608,6 +683,8 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
             // 四舍五入到 D 格时误差至多为 0.5/D，直接求保证精度的公共格点。
             // 不放宽 0.01ms 预算，也不改用多行，保持 MyO2 的单行读取兼容性。
             // 额外加一格避开浮点边界；计算量固定，不扩大逐个分母搜索范围。
+            // 该分支求的是共有格点的数学上界，不是继续穷举到高分母。
+            // 额外容量检查覆盖固定行开销，后面的格式单行限制仍独立适用。
             const double resolution = std::ceil(0.5 / rowTolerance) + 1;
             // 仅分配剩余文本预算能容纳的格点，极低 BPM 不能制造无界零串。
             // 容量检查先于整数转换，防止无限值或超大分母越界。
@@ -619,15 +696,20 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
             denominator = static_cast<int>(resolution);
         }
         // 与读取器保持相同行长边界，不能生成只能写出却无法重开的文件。
+        // 单行上限是格式回读约束，即使整个谱面尚有文本预算也不能超出。
         if ( denominator > 1'000'000 ) return false;
         outputBytes += denominator * 2U + 9U;
         if ( outputBytes > 64U * 1024U * 1024U ) return false;
+        // 先构造空槽串再写有效位置，读取器可根据总字符数解释分辨率，不能删掉行尾空槽。
+        // 总预算在此之前已计入本行，防止边界检查发生在大分配之后。
         std::string data(denominator * 2U, '0');
         for ( const auto& [fraction, value] : events ) {
             const int slot =
                 static_cast<int>(std::round(fraction * denominator));
             // 边界量化不能生成越过本行的写入；冲突音符也不能被静默覆盖。
             // 同拍 BPM 沿用声明顺序，最后一条定义决定后续积分速度。
+            // 即使比例 <
+            // 1，乘以分母后的四舍五入仍可能落到第一个越界格；检查实际格点再编码。
             if ( slot < 0 || slot >= denominator ) return false;
             const auto code = encodeCell(position.second, value);
             const auto old  = data.substr(slot * 2U, 2);
@@ -635,6 +717,8 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
             // BGM 复音已由独立 01 行表达，不适用玩家键位的冲突处理。
             if ( old != "00" && old != code && position.second != 8 )
                 return false;
+            // 冲突规则先于覆盖执行。同刻 BPM
+            // 允许使用最后的声明，其余通道需已判定等价。
             data.replace(slot * 2U, 2, code);
         }
         body << '#' << std::setfill('0') << std::setw(3) << std::dec
@@ -646,15 +730,20 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     // 输出流失败通过返回值传播，禁止在无异常构建中引入异常处理。
     // 二进制打开避免平台自动插入换行，结果在各平台一致。
     // 数值流使用经典 locale，系统小数逗号不会污染协议。
+    // 静音是已选散装模式中的真实依赖，提交谱面之前确认资源存在。
+    // 已有同名的非预期文件必须保留并报告失败，以免修改其他谱面引用的资源。
     if ( needsSilence && !ensureMyO2Silence(myO2SilencePath(path)) ) {
         XERROR("MyO2 静音音源无法写入或目标文件与已有资源冲突");
         return false;
     }
+    // 使用谱面共用暂存提交接口，关闭失败要保留原文件。
+    // 正文不交给文本模式转换，避免固定协议行分隔被平台再次翻译。
     Internal::BeatmapOutputFile staged(path, std::ios::binary);
     auto&                       output = staged.stream();
     // 分隔行也是部分旧播放器定位主数据区的入口，不能只输出空行。
     output << header.str() << "\n*---------------------- MAIN DATA FIELD\n"
            << body.str();
+    // 返回提交结果而非流打开状态，覆盖延迟写出错误和最终替换失败。
     return staged.commit();
 }
 }  // namespace MMM::Bms
