@@ -1,7 +1,10 @@
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
+#include "config/StagedFile.h"
 #include "log/colorful-log.h"
+#include "logic/EditorEngine.h"
 #include "logic/ProjectController.h"
+#include "mmm/beatmap/BeatMap.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
@@ -18,6 +21,8 @@
 #include <future>
 #include <ice/thread/ThreadPool.hpp>
 #include <imgui_internal.h>
+#include <memory>
+#include <string>
 #include <string_view>
 #include <thread>
 
@@ -251,8 +256,56 @@ void formats(bool package, bool narrow = false)
     ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true);
     f.frame([&] { action->renderDeferred(context); });
 }
-/// @brief 通过真实格式按钮触发候选任务，覆盖阻塞、取消及同路径换代。
-/// @param root 测试专用项目目录，正常扫描应看到一份可支持的音频。
+/// @brief 对照旧同步流程在固定工程上的候选顺序、默认勾选和缺失诊断。
+/// @param rendered 候选模态实际绘制的 ImGui 文本日志，含复选框状态。
+/// @return 所有参考项按次序匹配其勾选和可见诊断时返回真。
+/// @note 固定的是用户能看到的结果。期望不调用生产排序或依赖计算，
+/// 防止同步参考与异步实现共用同一错误。
+bool matchesSynchronousCandidates(std::string_view rendered)
+{
+    /// @brief 同步参考输出的单行，资源依赖通过发布后的最终勾选表示。
+    struct ReferenceRow {
+        std::string_view path;      ///< 项目相对路径，按类别再按路径排序。
+        bool             selected;  ///< 打开谱面或其依赖才默认进入包。
+    };
+    // 封面只因已选谱面的引用而选中；未打开谱面单独引用的音频仍保持未选。
+    // 先列图片，再列同类别的两份谱面和两份音频；类别与路径各有独立的排序反例。
+    constexpr std::array reference{
+        ReferenceRow{ "cover.png", true },
+        ReferenceRow{ "active-candidate.mc", true },
+        ReferenceRow{ "inactive-candidate.mc", false },
+        ReferenceRow{ "a-unused.wav", false },
+        ReferenceRow{ "z-dependent.wav", true },
+    };
+    // 从前一行之后匹配，不能仅凭每个名字出现过就判定排序正确。
+    for ( const auto& row : reference ) {
+        const auto path = rendered.find(row.path);
+        if ( path == std::string_view::npos ) return false;
+        const auto prefix = rendered.substr(0, path);
+        // ImGui 在行内先记录复选框再记录类型和文件名。取最近的勾选状态，
+        // 避免把候选表之前的兼容选项错当作该行的默认状态。
+        // 上一条路径已经消费，旧行的复选框也不会被沿用。
+        const auto checked   = prefix.rfind("[x]");
+        const auto unchecked = prefix.rfind("[ ]");
+        if ( checked == unchecked ) return false;
+        const bool selected =
+            checked != std::string_view::npos &&
+            (unchecked == std::string_view::npos || checked > unchecked);
+        if ( selected != row.selected ) return false;
+        rendered.remove_prefix(path + row.path.size());
+        // 缺失图片应标记在所属谱面行。取当前行余部，排除其他行的同种提示。
+        const auto rowEnd = rendered.find('\n');
+        if ( rendered.substr(0, rowEnd).contains("(缺少依赖)") !=
+             (row.path == "active-candidate.mc") )
+            return false;
+    }
+    return true;
+}
+
+/// @brief 通过真实格式按钮触发候选任务，覆盖阻塞、取消、换代及同步参考。
+/// @param root 测试专用工程目录，包含可打包及会被筛除的资源。
+/// @details 同一模态连续执行三次请求。前两次证明排队和陈旧代次可取消，
+/// 最后一次在门闩后发布，并使用打开谱面的真实 Session 键确认默认选择。
 void candidateScan(const std::filesystem::path& root)
 {
     // 复用工程控制器的公开接口打开、关闭和重开，保持真正的代次变化。
@@ -324,14 +377,25 @@ void candidateScan(const std::filesystem::path& root)
     check(ImGui::GetTopMostPopupModal() == nullptr,
           "project generation change dismisses the stale candidate window");
 
+    // 最后一次请求捕获当前打开的谱面。让任务继续排在门闩之后，保证它读取
+    // 会话键时，提交函数的本地条目副本已经销毁。
+    auto& engine = MMM::Logic::EditorEngine::instance();
+    // 只有一份谱面开为活动会话，其余仍保留在目录中以区分扫描与默认选择。
+    // Session 的路径由正式加载入口生成，测试不会通过写入待选数组伪造命中。
+    const auto session = engine.createSession(
+        std::make_shared<MMM::BeatMap>(
+            MMM::BeatMap::loadFromFile(root / "active-candidate.mc")),
+        "Package candidate reference");
+    engine.setActiveSessionIndex(session);
+    check(selectFormat(), "scan can run in the reopened project");
+
     // 先解除门闩，确保测试失败也不会阻塞池的退出。
     // 保留失败状态累计，但不使用提前返回使工作者永久等待。
     release.set_value();
     for ( auto& worker : blockers ) worker.get();
-    // 真实读取此时才允许开始。第三份请求必须获得当前工程的独立候选列表。
-    check(selectFormat(), "scan can run in the reopened project");
-    // 第一份确认只有在文件池恢复后才会从工作结果显示。
-    bool sawCandidates = false;
+    // 等到末行可见，捕获整张表首次出现的状态，不用轮询掩盖错误的默认值。
+    // 临时等待帧仍有模态文字，但不会含已安装的候选路径，不能作为参考输出。
+    std::string renderedCandidates;
     // 等待上限只属于测试，生产线程以帧为单位非阻塞轮询。
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(4);
@@ -340,26 +404,34 @@ void candidateScan(const std::filesystem::path& root)
             // 使用 ImGui 的文本记录，验证正常候选确实到达业务弹窗。
             ImGui::LogToBuffer();
             draw();
-            // 从已绘制文本中匹配真实文件名，无需读取私有缓存或比较平台字形。
-            // 同一列表包含有效 WAV、排除 ZIP 才能验证筛选阶段确实生效。
             const std::string_view rendered(GImGui->LogBuffer.c_str());
-            sawCandidates |=
-                rendered.find("valid-candidate.wav") !=
-                    std::string_view::npos &&
-                rendered.find("ignored-archive.zip") == std::string_view::npos;
+            if ( rendered.contains("z-dependent.wav") )
+                renderedCandidates = rendered;
             // 每帧结束日志捕获，避免上一帧结果误入下一帧时序断言。
             ImGui::LogFinish();
         });
-        if ( !sawCandidates ) std::this_thread::yield();
-    } while ( !sawCandidates && std::chrono::steady_clock::now() < deadline );
-    // 超时必须失败，不能将测试中预设的扩展名当作业务列表验证。
-    check(sawCandidates,
-          "async result applies format filtering to the fixture");
+        if ( renderedCandidates.empty() ) std::this_thread::yield();
+    } while ( renderedCandidates.empty() &&
+              std::chrono::steady_clock::now() < deadline );
+    // 耗尽时限和顺序不符都失败，消除“列表从未发布”被视为通过的机会。
+    if ( !matchesSynchronousCandidates(renderedCandidates) ) {
+        // 同时保留实际行及勾选状态，便于定位跨平台布局与真实候选差异。
+        XERROR("Observed package candidates: {}", renderedCandidates);
+        check(false,
+              "async rows and default selections match the synchronous "
+              "reference");
+    }
+    // 文件扩展是唯一排除条件，此处保留文件并让正式扫描规则处理它。
+    check(!renderedCandidates.contains("ignored-archive.zip"),
+          "format filtering excludes a non-candidate archive");
+    // 关闭会话不保存个人停靠布局，工程关闭和临时目录删除由调用方收尾。
+    engine.closeSession(session, false);
     // 测试清理只在门闩释放后执行；析构 action 不会加入任何 IO 同步等待。
     pools.shutdown();
 }
 }  // namespace
-/// @brief 覆盖小屏、高 DPI、两种对齐含义以及桌面不放大的反例。
+/// @brief 覆盖触屏选项、桌面布局和异步打包候选。
+/// @return 任一场景失败时返回非零。
 int main()
 {
     // 小屏与高 DPI 是两条独立几何路径，桌面再提供不放大的负例。
@@ -369,16 +441,30 @@ int main()
     options(1, false, false);
     // 打包入口会冻结当前工程身份，先通过控制器打开隔离夹具。
     auto& controller = MMM::Logic::ProjectController::instance();
-    // 临时工程只用来提供真实可打包身份，目录不需要任何谱面。
-    // 两个夹具文件内容不重要，格式筛选只使用其实际名称和普通文件状态。
-    const auto root =
-        std::filesystem::current_path() / "test_output/BmsTouchDialogTest";
+    // 独占目录防止上一次测试的文件改变本次参考列表；父目录属于构建树。
+    const auto      output = std::filesystem::current_path() / "test_output";
     std::error_code error;
-    std::filesystem::create_directories(root, error);
-    if ( error || !(std::ofstream(root / "valid-candidate.wav") << "audio") ||
-         !(std::ofstream(root / "ignored-archive.zip") << "archive") ||
-         !controller.openProject(root).m_opened )
+    std::filesystem::create_directories(output, error);
+    if ( error ) return 1;
+    MMM::Config::ScopedTemporaryDirectory project(output, "BmsTouchDialog-");
+    if ( project.error() ) return 1;
+    const auto& root = project.path();
+    // 故意按不同于显示的顺序创建文件，且提供选中、未选和无效引用各一。
+    // 测试只解析谱面的资源引用，不解码媒体，所以文件只需是普通文件。
+    // 背景使用缺失路径，封面使用存在图片，避免一个成功引用掩盖另一失败引用。
+    // 两张谱面的音频互不重叠，可以检测依赖解析是否误将未选谱面的音频加入包。
+    if (
+        !(std::ofstream(root / "z-dependent.wav") << "main") ||
+        !(std::ofstream(root / "cover.png") << "cover") ||
+        !(std::ofstream(root / "active-candidate.mc")
+          << R"({"meta":{"cover":"cover.png","background":"missing.png","song":{"file":"z-dependent.wav"}},"time":[],"note":[{"beat":[0,0,1],"sound":"z-dependent.wav","type":1}]})") ||
+        !(std::ofstream(root / "a-unused.wav") << "unused") ||
+        !(std::ofstream(root / "inactive-candidate.mc")
+          << R"({"meta":{"song":{"file":"a-unused.wav"}},"time":[],"note":[{"beat":[0,0,1],"sound":"a-unused.wav","type":1}]})") ||
+        !(std::ofstream(root / "ignored-archive.zip") << "archive") ||
+        !controller.openProject(root).m_opened )
         return 1;
+    // 写入全部资源后才开启工程，由正式初始化建立资源索引。
     formats(true);
     formats(false);
     formats(true, true);

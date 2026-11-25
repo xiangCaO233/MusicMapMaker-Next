@@ -1,16 +1,18 @@
 #pragma once
 
 #include <span>
+#include <string>
 #include <string_view>
 
 namespace MMM::UI
 {
 
 /// @brief 已打开谱面用于计算打包默认选择的轻量状态。
-/// @details 状态由当前 Session 与停靠布局快照构造，不持有路径或画布对象。
+/// @details 状态由当前 Session 与停靠布局快照构造，可随文件任务跨线程移交。
 struct PackageOpenBeatmapState {
     /// @brief 与候选文件使用相同规则生成的稳定绝对路径键。
-    std::string_view beatmapPathKey{};
+    /// @note 由任务持有，提交函数返回后仍可比较。
+    std::string beatmapPathKey;
 
     /// @brief 对应主画布是否为所属停靠组当前显示的前台标签。
     bool isCanvasVisible{ false };

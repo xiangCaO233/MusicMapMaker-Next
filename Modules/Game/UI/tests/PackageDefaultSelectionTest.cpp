@@ -19,7 +19,7 @@ using MMM::UI::shouldDefaultSelectPackageBeatmap;
 bool checkSingleForegroundSelection()
 {
     // 单停靠组只有一个前台画布，后台活动标记不能覆盖前台判定。
-    constexpr std::array states{
+    const std::array states{
         PackageOpenBeatmapState{ "/project/a.mc", true, false, false },
         PackageOpenBeatmapState{ "/project/b.mc", false, true, false },
     };
@@ -33,7 +33,7 @@ bool checkSingleForegroundSelection()
 bool checkMultipleForegroundSelection()
 {
     // 并排停靠允许每个组各有一个前台画布，二者都应默认勾选。
-    constexpr std::array states{
+    const std::array states{
         PackageOpenBeatmapState{ "/project/a.mc", true, true, false },
         PackageOpenBeatmapState{ "/project/b.mc", true, false, false },
         PackageOpenBeatmapState{ "/project/c.mc", false, false, false },
@@ -49,7 +49,7 @@ bool checkMultipleForegroundSelection()
 bool checkActiveFallbackSelection()
 {
     // 没有任何前台快照时，才允许使用全局活动谱面兜底。
-    constexpr std::array states{
+    const std::array states{
         PackageOpenBeatmapState{ "/project/a.mc", false, false, false },
         PackageOpenBeatmapState{ "/project/b.mc", false, true, false },
     };
@@ -64,7 +64,7 @@ bool checkActiveFallbackSelection()
 bool checkInvalidSessionSelection()
 {
     // 占位会话即使同时标记前台和活动，也不代表可打包谱面。
-    constexpr std::array states{
+    const std::array states{
         PackageOpenBeatmapState{ "/project/a.mc", true, true, true },
         PackageOpenBeatmapState{ {}, true, false, false },
     };
