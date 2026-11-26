@@ -78,11 +78,13 @@ public:
     /// @param playback 由当前目录通过 makePlayback 创建的节点。
     /// @param ids 新的全部选择，空列表表示静音。
     /// @param maximumBlockFrames 调用方为新调度预备的块容量。
+    /// @param gains 与目录同序的线性推子值。空列表使用单位增益。
     /// @return 新调度代次或错误。无效选择不影响当前调度。
     /// @warning 仅允许控制线程调用，并按节点契约回收已退役的调度。
     [[nodiscard]] std::expected<std::uint64_t, StemAuditionError> select(
         AudioTimelineMixerNode& playback, std::span<const std::string> ids,
-        std::size_t maximumBlockFrames) const;
+        std::size_t            maximumBlockFrames,
+        std::span<const float> gains = {}) const;
 
     /// @brief 在原曲帧坐标取样，output 活动帧数决定半开区间的长度。
     /// @details 区间必须完全属于源时间轴，输出采用内部 PCM 格式。
@@ -95,7 +97,8 @@ private:
     /// @brief 解析选择并按固定求和顺序生成时间线调度片段。
     [[nodiscard]] std::expected<std::vector<PreparedTimelineClip>,
                                 StemAuditionError>
-    makeClips(std::span<const std::string> ids) const;
+    makeClips(std::span<const std::string> ids,
+              std::span<const float>       gains = {}) const;
 
     /// @brief 创建通过时间轴与 ID 校验的目录。
     StemAudition(AudioTimelineFrame             sourceEndFrame,

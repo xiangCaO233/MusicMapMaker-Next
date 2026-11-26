@@ -208,6 +208,16 @@ int main(int argc, char** argv)
         return 9;
     }
 
+    // 推子只改变选中轨的增益。循环和共享播放头复用原调度位置。
+    // 上一段消费 [2, 5) 后重新回到第 2 帧，并额外推进一帧到第 3 帧。
+    // 人声在第 3 帧为 0.375，选择 0.5 后首样本恰为 0.1875。
+    const std::array gains{ 0.5F, 0.0F };
+    if ( !stems->select(node, combined, 2, gains) ) return 12;
+    node.process(excerpt);
+    if ( !matches(excerpt, std::array{ 0.1875F, 0.0F, 0.125F, 0.1875F }) ) {
+        return 13;
+    }
+
     // 重名或在原曲结束后仍有数据的轨道在建组时拒绝。
     // 在发布前拒绝不一致输入，可防止摘录时悄悄延长原曲边界。
     if ( StemAudition::create(7,

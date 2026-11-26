@@ -2,6 +2,7 @@
 
 #ifndef __ANDROID__
 
+#    include "StemSeparationJob.h"
 #    include "audio/AudioManager.h"
 #    include "audio/AudioTimelineMixerNode.h"
 #    include "audio/StemAudition.h"
@@ -52,6 +53,8 @@ public:
     /// @warning 仅 UI 线程改变窗口可见性，工作线程不访问此动作。
     void execute(MainMenuContext&, const MainMenuItemActivation&) override
     {
+        // 每个动作实例只恢复一次配置，后续打开沿用当前环境。
+        if ( !m_environment ) m_environment = loadStemSeparationEnvironment();
         m_open = true;
     }
 
@@ -60,7 +63,7 @@ public:
     /// 解码没结束则继续使用现有试听。窗口关闭后也应收回异步结果。
     /// @warning 热路径仅在结果就绪时执行安装，平时不访问文件系统。
     /// @warning UI 热路径。只消费已就绪结果，禁止等待解码或资源池。
-    void renderDeferred(MainMenuContext&) override
+    void renderDeferred(MainMenuContext& context) override
     {
         using namespace std::chrono_literals;
         if ( m_load.valid() &&
@@ -74,16 +77,18 @@ public:
 
         // Begin/End 总是配对。折叠只停止绘制，显式关闭才断开混音节点。
         if ( ImGui::Begin("多轨试听###StemAudition", &m_open) ) {
-            ImGui::TextUnformatted("请选择从同一时间点导出的音轨。");
             // 一个窗口同时只拥有一份准备请求，避免覆盖仍在用解码池的 future。
             ImGui::BeginDisabled(m_load.valid());
-            if ( FeedbackButton("选择音轨") ) loadFiles();
+            drawSeparationControls();
+            if ( FeedbackButton("导入已有分轨") ) loadFiles();
             ImGui::EndDisabled();
 
             // 即使保留上一组播放，也向作者说明正在准备新的输入。
-            if ( m_load.valid() ) ImGui::TextUnformatted("正在解码");
-            if ( m_error ) ImGui::TextUnformatted(m_error);
-            if ( m_playback ) drawTrackControls();
+            if ( m_load.valid() )
+                ImGui::TextUnformatted(m_separating ? "正在运行模型并准备音轨…"
+                                                    : "正在解码…");
+            if ( !m_error.empty() ) ImGui::TextWrapped("%s", m_error.c_str());
+            if ( m_playback ) drawTrackControls(context.dpiScale);
         }
         ImGui::End();
 
@@ -91,14 +96,143 @@ public:
         if ( !m_open ) {
             releasePlayback();
             m_discardLoad = true;
-            m_error       = nullptr;
+            m_error.clear();
         }
     }
 
 private:
     /// @brief 文件任务返回的不可变目录，错误在 UI 线程显示。
-    using LoadResult =
-        std::expected<Audio::StemAudition, Audio::StemAuditionError>;
+    using LoadResult = std::expected<Audio::StemAudition, std::string>;
+
+    /// @brief 只在用户点击后调用原生选择器，接管 UTF-8 路径后释放 NFD 内存。
+    /// @param filter 可选的文件类型限制，空值允许模型环境和音频的各平台扩展名。
+    /// @return 已拷贝的路径，取消或对话框失败时返回空。
+    /// @warning 选择对话框可等待用户，禁止从普通渲染帧无条件调用。
+    std::string pickFile(const nfdu8filteritem_t* filter = nullptr)
+    {
+        nfdu8char_t* path = nullptr;
+        const auto   status =
+            NativeFileDialog::openFile(&path, filter, filter ? 1 : 0, nullptr);
+        if ( status != NFD_OKAY || !path ) {
+            if ( status == NFD_ERROR ) m_error = "无法打开文件选择器。";
+            return {};
+        }
+        // NFD 使用自己的分配方式。复制之后立即使用对应的释放 API。
+        std::string selected(path);
+        NFD_FreePathU8(path);
+        return selected;
+    }
+
+    /// @brief 呈现外部模型包、运行环境与声部预览。
+    /// @details 路径只在对应按钮按下时更新。每次任务使用提交时的选择。
+    /// 模型选择和运行配置分离，因此模型可以随项目更换而不影响环境。
+    /// 该面板与旧音轨使用不同对象，选择新来源不改变实时混音。
+    /// 运行环境保存到用户配置，只允许明确的文件选择更新。
+    /// @warning 普通帧只绘制已缓存的名字；文件解析仅发生在确认选择后。
+    void drawSeparationControls()
+    {
+        // 模型选择只解析描述，不触发权重加载或本地进程。
+        if ( FeedbackButton("选择外部模型") ) {
+            const nfdu8filteritem_t filter{ "MMM model package", "json" };
+            if ( const auto file = pickFile(&filter); !file.empty() ) {
+                auto model = readStemSeparationModel(file);
+                // 选择失败时保留上一份有效模型，便于修正本地文件。
+                if ( model ) {
+                    m_model = std::move(*model);
+                    m_error.clear();
+                } else {
+                    m_error = model.error();
+                }
+            }
+        }
+        // 当前曲目与模型包独立，可以在同一曲目上对照多个模型。
+        ImGui::SameLine();
+        if ( FeedbackButton("选择待分离音频") ) {
+            // 取消选择保持已显示的源音频，可继续按当前配置分离。
+            if ( auto file = pickFile(); !file.empty() )
+                m_source = std::move(file);
+        }
+        // 声部按照模型包声明排序。名称不会用作资源路径或动态可执行参数。
+        if ( m_model ) {
+            ImGui::Text("模型：%s", m_model->name.c_str());
+            // 在加载权重前显示实际会请求的声部，允许作者确认计划。
+            for ( const auto& stem : m_model->stems ) {
+                ImGui::BulletText("%s", stem.c_str());
+            }
+        }
+        // 原曲路径可能很长，用软换行维持控制面板宽度。
+        if ( !m_source.empty() ) ImGui::TextWrapped("%s", m_source.c_str());
+        // 环境独立于模型权重；换模型或换歌可以复用同一 Python 和推理入口。
+        auto& environment = *m_environment;
+        if ( ImGui::CollapsingHeader("分离运行环境") ) {
+            // 只有配置值在当前帧改变时才写盘。展开面板本身不会触发 I/O。
+            bool changed = false;
+            // 同一模型运行时允许换解释器，更便于切换虚拟环境。
+            if ( FeedbackButton("选择模型环境的 Python") ) {
+                if ( auto file = pickFile(); !file.empty() ) {
+                    environment.python = std::move(file);
+                    changed            = true;
+                }
+            }
+            ImGui::TextWrapped("%s", environment.python.c_str());
+            // 推理脚本仅从本机文件选择器接受，模型包本身只引用权重。
+            if ( FeedbackButton("选择 MSST inference.py") ) {
+                const nfdu8filteritem_t filter{ "Python", "py" };
+                if ( auto file = pickFile(&filter); !file.empty() ) {
+                    environment.backend = std::move(file);
+                    changed             = true;
+                }
+            }
+            // 首次设置时在禁用分离按钮前说明需要的本机组件。
+            if ( environment.backend.empty() )
+                ImGui::TextDisabled("请先设置 MSST 推理入口。");
+            else
+                ImGui::TextWrapped("%s", environment.backend.c_str());
+            // CPU 选项只改变新任务的设备选择，已有结果仍可继续试听。
+            changed |= FeedbackCheckbox("使用 CPU", &environment.cpu);
+            // 保存错误可以提示，但当前会话仍能使用刚选择的运行环境。
+            if ( changed && !saveStemSeparationEnvironment(environment) ) {
+                m_error = "无法保存分离运行环境。";
+            }
+        }
+        ImGui::BeginDisabled(!m_model || m_source.empty() ||
+                             environment.backend.empty());
+        // 从按钮点击进入任务提交，本次推理使用全部声明的目标声部。
+        if ( FeedbackButton("分离音轨") ) startSeparation();
+        ImGui::EndDisabled();
+    }
+
+    /// @brief 固定本次模型和音源快照，启动后台推理和解码。
+    /// @pre 已解析模型描述且选择本机后端及源音频。
+    /// @details 分离与正常导入共享一个 future，界面一次只排入一个装载任务。
+    /// @warning 点击触发。后台作业不借用窗口对象，关闭窗口仅丢弃待发布结果。
+    void startSeparation()
+    {
+        auto& runtime = Runtime::AppThreadPool::instance();
+        auto* files   = runtime.getFileThreadPool();
+        auto* decode  = runtime.get();
+        if ( !files || !decode ) {
+            m_error = "音频后台服务尚未就绪。";
+            return;
+        }
+        m_error.clear();
+        m_discardLoad = false;
+        // 工作线程只持有值快照和应用级池指针，不观察 UI 的后续选择。
+        m_separating = true;
+        m_load       = files->enqueue([model       = *m_model,
+                                       source      = m_source,
+                                       environment = *m_environment,
+                                       decode] {
+            // 工作进程生成完一组结果后才进入解码，解码池不持有界面状态。
+            return runStemSeparation(model,
+                                     source,
+                                     environment.python,
+                                     environment.backend,
+                                     environment.cpu,
+                                     *decode);
+        });
+        if ( !m_load.valid() ) m_error = "无法提交分离任务。";
+    }
 
     /// @brief 启动低频文件选择，再将完整解码交给文件池。
     /// @details 文件列表来自桌面原生多选结果，取消不替换任何状态。
@@ -125,11 +259,16 @@ private:
         }
         // 工作者只捕获所选文件与应用线程池观察指针。应用先关闭文件池，
         // 再关闭解码池，因此等待解码时拥有有效的执行器。
-        m_error       = nullptr;
+        m_error.clear();
         m_discardLoad = false;
-        m_load        = files->enqueue([paths = std::move(paths), decode] {
-            return Audio::StemAudition::loadAlignedFiles(paths, *decode);
-        });
+        m_separating  = false;
+        m_load =
+            files->enqueue([paths = std::move(paths), decode]() -> LoadResult {
+                auto tracks =
+                    Audio::StemAudition::loadAlignedFiles(paths, *decode);
+                if ( !tracks ) return std::unexpected("无法解码导入的音轨。");
+                return std::move(*tracks);
+            });
         // 线程池在退出阶段可以拒绝投递，此时没有后续结果可轮询。
         if ( !m_load.valid() ) m_error = "无法提交音轨解码任务。";
     }
@@ -143,7 +282,7 @@ private:
     {
         // 文件级错误先于可见状态变更，失败的局部结果始终不会接入设备。
         if ( !result ) {
-            m_error = "无法读取所选音轨。请检查文件格式或重复选择。";
+            m_error = result.error();
             return;
         }
         // 选择和显示文本分别保存，绘制时无需创建文件名或读取文件系统。
@@ -170,18 +309,24 @@ private:
         m_playback = std::move(*playback);
         m_labels   = std::move(labels);
         m_enabled.assign(m_labels.size(), true);
-        m_error = nullptr;
+        // 独听索引属于当前目录，更换声部后重新回到全轨试听。
+        m_solo.reset();
+        // 每次载入使用新轨道的电平，旧推子不按位置错误套到不同声部。
+        m_gains.assign(m_labels.size(), 1.0F);
+        m_error.clear();
     }
 
     /// @brief 绘制单独的试听传输与每轨启停控件。
     /// @details 传输按钮发往公共播放节点，设备在音频块边界应用。
     /// 按钮意图读取请求态，进度读取已发布的实际播放位置。
     /// @warning UI 热路径。仅在交互改变选择时建调度，不读取文件。
-    void drawTrackControls()
+    /// @param dpiScale 当前窗口 DPI 比例，统一推子和滚动区域的物理尺寸。
+    void drawTrackControls(float dpiScale)
     {
         // 生命周期受当前渲染调用保护，使用引用而不复制节点所有权。
         auto& node = *m_playback;
         // 请求状态可早于设备反馈，按钮仍应对短时间内的重复点击作出响应。
+        // 该状态只驱动传输按钮，不把后台分离的进度当作播放状态。
         const auto state = node.requestedState();
         if ( FeedbackButton(
                  state == Audio::AudioTimelinePlaybackState::Playing &&
@@ -203,6 +348,7 @@ private:
         // UI 展示秒，设备使用采样帧。转换使用与解码同一个内部采样率。
         const double rate = ice::ICEConfig::internal_format.samplerate;
         const double zero = 0.0;
+        // 试听零点由载入的混音组决定，未选中的通道不会改变持续时间。
         const double endSeconds =
             static_cast<double>(m_catalog->endFrame()) / rate;
         // 进度上限来自最长轨道，勾选较短音轨不会收缩进度范围。
@@ -219,37 +365,66 @@ private:
         }
         // 仅在值变化后计算 ID 列表，平时保留当前调度与共享缓存。
         bool changed = false;
+        // 每条通道独立维护推子。静音与独听只影响选轨，不重置推子值。
+        // 横向排布给各通道同一种控制结构。长音轨列表仍可滚动。
+        // 子区域覆盖推子和启停按钮，滚动时仍可看到共享时间轴。
+        ImGui::BeginChild("StemMixer",
+                          ImVec2(0, 230 * dpiScale),
+                          ImGuiChildFlags_None,
+                          ImGuiWindowFlags_HorizontalScrollbar);
         for ( std::size_t index = 0; index < m_labels.size(); ++index ) {
             // 同一文件名可能来自不同目录，固定的索引作用域隔离控件状态。
             ImGui::PushID(static_cast<int>(index));
             // vector<bool> 的位引用不能借给 ImGui，提交时用实际 bool。
+            // 推子、启用和独听共享同一个通道作用域，避免标签重复冲突。
+            ImGui::BeginGroup();
+            // 显示名按普通文本输出，文件名中的 ImGui 分隔符不参与控件 ID。
+            ImGui::TextUnformatted(m_labels[index].c_str());
+            changed |=
+                ImGui::VSliderFloat("##gain",
+                                    ImVec2(46 * dpiScale, 120 * dpiScale),
+                                    &m_gains[index],
+                                    0.0F,
+                                    1.0F,
+                                    "%.2f");
+            // 使用临时 bool 保存复选框结果，变更后才发布整套轨道选择。
             bool enabled = m_enabled[index];
-            if ( FeedbackCheckbox("##enabled", &enabled) ) {
+            if ( FeedbackCheckbox("启用", &enabled) ) {
                 m_enabled[index] = enabled;
                 changed          = true;
             }
             ImGui::SameLine();
-            if ( FeedbackSmallButton("独听") ) {
-                // 独听是一次替换整个组合，后续仍能勾选任意其他声部。
-                m_enabled.assign(m_enabled.size(), false);
-                m_enabled[index] = true;
-                changed          = true;
+            if ( FeedbackSmallButton(m_solo == index ? "退出独听" : "独听") ) {
+                // 独听是临时监听状态。退出后恢复原先的静音组合及推子位置。
+                if ( m_solo == index )
+                    m_solo.reset();
+                else
+                    m_solo = index;
+                changed = true;
             }
-            ImGui::SameLine();
-            // 文件名以普通文本显示，避免把文件名中的 ImGui ID 分隔符当标签。
-            ImGui::TextUnformatted(m_labels[index].c_str());
+            // 组宽由标签和控制按钮共同决定，下一轨接在完整列之后。
+            ImGui::EndGroup();
             ImGui::PopID();
+            // 末尾不延长水平布局，子窗口自行计算滚动宽度。
+            if ( index + 1 < m_labels.size() ) ImGui::SameLine();
         }
+        // 无论子区域是否被裁剪，EndChild 均须与 BeginChild 配对。
+        ImGui::EndChild();
+        // 单帧即使修改多个控件，也只发布一次最新的完整组合。
         if ( changed ) {
             // 整批发布选择，共享播放头在下一个音频块继续推进。
+            // 所有推子值仍按目录传入。静音轨重新启用时可恢复其先前电平。
             std::vector<std::string> selected;
             // 目录与控件共享装载顺序，无需逐帧匹配完整路径。
             const auto tracks = m_catalog->tracks();
             for ( std::size_t index = 0; index < tracks.size(); ++index ) {
-                if ( m_enabled[index] ) selected.push_back(tracks[index].id);
+                // 单人监听时暂时忽略启用位，退出后按保存的启用位恢复。
+                if ( m_solo ? *m_solo == index : m_enabled[index] ) {
+                    selected.push_back(tracks[index].id);
+                }
             }
-            if ( auto generation =
-                     m_catalog->select(node, selected, BLOCK_FRAMES) ) {
+            if ( auto generation = m_catalog->select(
+                     node, selected, BLOCK_FRAMES, m_gains) ) {
                 // 后续切换可覆盖尚未生效的选择，只跟踪最新一代。
                 m_pendingGeneration = *generation;
             } else {
@@ -314,9 +489,21 @@ private:
     /// @brief 当前组合，按目录顺序排列。
     /// @details 使用本地 UI 状态，不从实时节点反向查询每个轨道。
     std::vector<bool> m_enabled;
-    /// @brief 最近一次操作失败的静态提示。
-    /// @details 指针仅引用程序内常量，后台任务结束后仍有效。
-    const char* m_error = nullptr;
+    /// @brief 最近一次操作失败的提示，可包含后台返回的本地错误。
+    /// @details 拥有完整文本，避免后台 future 销毁后仍持有借用字符串。
+    std::string m_error;
+    /// @brief 经过校验的外部模型及声部定义。
+    std::optional<StemSeparationModel> m_model;
+    /// @brief 当前待分离音频所在路径，仅任务快照持有副本。
+    std::string m_source;
+    /// @brief 从本机设置恢复解释器和推理入口，首次打开时读取一次。
+    std::optional<StemSeparationEnvironment> m_environment;
+    /// @brief 区分文件导入与模型推理的等待状态。
+    bool m_separating = false;
+    /// @brief 目录索引对应推子位置，关轨和独听不改变设定。
+    std::vector<float> m_gains;
+    /// @brief 临时独听通道索引，空值播放已启用的组合。
+    std::optional<std::size_t> m_solo;
 };
 }  // namespace
 

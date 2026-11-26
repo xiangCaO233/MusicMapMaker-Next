@@ -69,7 +69,7 @@ class SeparationTest(unittest.TestCase):
             audio.setparams((2, 2, 44100, 0, "NONE", "not compressed"))
             audio.writeframes(bytes(64))
 
-    def run_worker(self, routes):
+    def run_worker(self, routes, convert=False):
         """执行同编辑器手工导入时使用的 CLI，并返回执行状态。"""
         tracks = {
             name: {"model": model, "target": target, "config": "config.yml",
@@ -79,10 +79,16 @@ class SeparationTest(unittest.TestCase):
         self.plan.write_text(json.dumps({"version": 1, "tracks": tracks}),
                              encoding="utf-8")
         script = Path(__file__).with_name("separate_stems.py")
+        # 编辑器把工作入口作为 -c 参数嵌入，验证不依赖 __file__ 或当前目录。
+        arguments = [
+            sys.executable, "-c", script.read_text(encoding="utf-8"),
+            str(self.source), str(self.plan), str(self.output),
+            "--backend", str(self.backend), "--cpu",
+        ]
+        if convert:
+            arguments.append("--convert-input")
         return subprocess.run(
-            [sys.executable, str(script), str(self.source), str(self.plan),
-             str(self.output), "--backend", str(self.backend), "--cpu"],
-            capture_output=True, text=True, timeout=10, check=False,
+            arguments, capture_output=True, text=True, timeout=10, check=False,
         )
 
     def test_uses_each_requested_output_and_reuses_model_run(self):
@@ -109,7 +115,7 @@ class SeparationTest(unittest.TestCase):
     @unittest.skipUnless(shutil.which("ffmpeg"), "requires FFmpeg")
     def test_flac_is_published_as_wave_with_identical_pcm(self):
         """覆盖 MSST 使用 FLAC 容器时的真实解码和帧数检查。"""
-        result = self.run_worker([("bass", "flac", "bass")])
+        result = self.run_worker([("bass", "flac", "bass")], convert=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         # 只比较有效采样和布局，重新封装允许文件元数据不同。
         with wave.open(str(self.output / "bass.wav"), "rb") as audio:

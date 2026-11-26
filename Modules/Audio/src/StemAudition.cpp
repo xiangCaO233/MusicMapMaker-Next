@@ -8,6 +8,7 @@
 
 
 #include <algorithm>
+#include <cmath>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
@@ -110,7 +111,8 @@ AudioTimelineFrame StemAudition::endFrame() const noexcept
 /// 播放节点按时间与事件编号排序，所以用目录顺序确定同拍片段的编号。
 /// 选空时返回空调度，由调用者保留原曲终点。
 std::expected<std::vector<PreparedTimelineClip>, StemAuditionError>
-StemAudition::makeClips(std::span<const std::string> ids) const
+StemAudition::makeClips(std::span<const std::string> ids,
+                        std::span<const float>       gains) const
 {
     // 先验证完整请求，再按注册顺序建图。输入 ID 排列不改变混音结果。
     std::unordered_set<std::string_view> selected(ids.begin(), ids.end());
@@ -120,12 +122,23 @@ StemAudition::makeClips(std::span<const std::string> ids) const
 
     std::vector<PreparedTimelineClip> clips;
     clips.reserve(ids.size());
-    for ( const auto& track : m_tracks ) {
+    // 推子按目录索引，静音和独听时仍保留各轨原设定。
+    if ( !gains.empty() && gains.size() != m_tracks.size() ) {
+        return std::unexpected(StemAuditionError::InvalidTrack);
+    }
+    for ( std::size_t index = 0; index < m_tracks.size(); ++index ) {
+        const auto& track = m_tracks[index];
+        const float gain  = gains.empty() ? 1.0F : gains[index];
+        // 静音选轨与推子增益彼此独立，未选中的轨也必须满足输入契约。
+        if ( !std::isfinite(gain) || gain < 0.0F || gain > 1.0F ) {
+            return std::unexpected(StemAuditionError::InvalidTrack);
+        }
         if ( selected.contains(track.id) ) {
             clips.push_back({
                 .eventId    = clips.size() + 1,
                 .sourceKey  = track.id,
                 .startFrame = track.startFrame,
+                .volume     = gain,
                 .audio      = track.audio,
             });
         }
@@ -165,17 +178,19 @@ StemAudition::makePlayback(std::span<const std::string> ids,
 /// @return 混音器发布代次，供上层跟踪实际生效位置。
 std::expected<std::uint64_t, StemAuditionError> StemAudition::select(
     AudioTimelineMixerNode& playback, std::span<const std::string> ids,
-    std::size_t maximumBlockFrames) const
+    std::size_t maximumBlockFrames, std::span<const float> gains) const
 {
     if ( maximumBlockFrames == 0 ) {
         return std::unexpected(StemAuditionError::InvalidInterval);
     }
     // 解析可以分配，发生在控制线程。所有错误均在发布调度前返回。
-    auto clips = makeClips(ids);
+    auto clips = makeClips(ids, gains);
     if ( !clips ) {
         return std::unexpected(clips.error());
     }
     // 复用既有 block 边界发布，实时线程从上一播放位置继续。
+    // 调度替换继承上一块的传输状态，推子更新不归零或回放已消费帧。
+    // 已失效调度按播放器的既有退役协议回收。
     return playback.replaceSchedule(
         std::move(*clips), m_sourceEndFrame, maximumBlockFrames);
 }

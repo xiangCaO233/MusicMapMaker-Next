@@ -1,0 +1,4 @@
+#pragma once
+
+// 直接嵌入已测试的工作进程入口，发布包不依赖源码目录。
+inline constexpr char STEM_SEPARATION_WORKER[] = R"MMMWorker(@MMM_STEM_WORKER_SOURCE@)MMMWorker";

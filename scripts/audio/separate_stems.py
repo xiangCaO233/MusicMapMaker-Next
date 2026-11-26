@@ -120,7 +120,7 @@ def publish_track(run_dir, target, destination, frames):
         raise ValueError(f"Frame count does not match the mixture: {destination.stem}")
 
 
-def separate(source, plan, backend, output, cpu):
+def separate(source, plan, backend, output, cpu, convert_input=False):
     """在临时目录运行各组模型，验证后一次性发布选中的 WAV 和清单。
 
     推理环境由调用者安装，配置和模型加载错误保留原有退出状态。
@@ -144,7 +144,17 @@ def separate(source, plan, backend, output, cpu):
         inputs.mkdir()
         mixture = inputs / "mixture.wav"
         # 将原曲复制成固定快照。不同模型看到同一份采样数据。
-        shutil.copyfile(source, mixture)
+        # 命令行默认保留原始 PCM 输入，编辑器可接收 MP3、FLAC 等常见来源。
+        # 两条路径最终都以同一精确 WAV 帧数作为产物校验基准。
+        if convert_input:
+            # 编辑器接受解码器支持的普通音频，统一转换到模型输入坐标。
+            subprocess.run(
+                ["ffmpeg", "-nostdin", "-v", "error", "-i", str(source),
+                 "-map", "0:a:0", "-ar", "44100", "-ac", "2",
+                 "-c:a", "pcm_s16le", str(mixture)], check=True,
+            )
+        else:
+            shutil.copyfile(source, mixture)
         # 原曲长度是所有结果必须遵守的坐标系，拒绝后端自行裁短或补长。
         frames = wav_frames(mixture)
         # 只把已经验证且被选择的声部写进发布目录。
@@ -209,11 +219,13 @@ def main():
     parser.add_argument("plan", type=Path, help="local JSON model routing plan")
     parser.add_argument("output", type=Path, help="a new directory for selected stems")
     parser.add_argument("--backend", required=True, type=Path, help="MSST inference.py")
+    parser.add_argument("--convert-input", action="store_true")
     parser.add_argument("--cpu", action="store_true", help="disable GPU acceleration")
     args = parser.parse_args()
     # 失败仍由工作目录上下文清理中间文件，并同时保留后端原始进度日志。
     try:
-        separate(args.source, args.plan, args.backend, args.output, args.cpu)
+        separate(args.source, args.plan, args.backend, args.output, args.cpu,
+                 args.convert_input)
     except (OSError, KeyError, TypeError, ValueError, EOFError, wave.Error,
             subprocess.CalledProcessError) as error:
         parser.exit(1, f"Stem separation failed: {error}\n")
