@@ -64,9 +64,20 @@
 
 #### 编辑器内分离与混音
 
-在音轨列表中打开项目主音轨的控制器，展开“声部分离”。模型目录列出可部署模型、擅长的声部及当前绑定状态。选择某一行的“部署”并指定父目录，MMM 会下载官方权重、创建该模型自己的虚拟环境、安装依赖并保存绑定。首次部署需要本机可用的 Python 3.11 或 3.12，分离还需要 FFmpeg。也可通过“绑定已有”复用完整的模型目录或其 `env` 子目录。各模型的绑定在下次启动时恢复。分离直接以该控制器对应的主音轨为输入，结果自动进入同一区域的混音台，可逐轨调节推子、启停和独听。音效轨控制器没有此入口。
+在音轨列表中打开项目主音轨的控制器，展开“声部分离”。模型目录列出可部署模型、擅长的声部及当前绑定状态。选择某一行的“部署”并指定父目录，MMM 会从对应发布者或上游项目链接下载权重、创建该模型自己的虚拟环境、安装依赖并保存绑定。首次部署需要本机可用的 Python 3.11 或 3.12，分离还需要 FFmpeg。也可通过“绑定已有”复用完整的模型目录或其 `env` 子目录。各模型的绑定在下次启动时恢复。分离直接以该控制器对应的主音轨为输入，结果自动进入同一区域的混音台，可逐轨调节推子、启停和独听。音效轨控制器没有此入口。
 
-目录目前提供 HTDemucs 四轨与六轨，前者覆盖通用人声和节奏组，后者增加吉他与实验性的钢琴声部。已有 MSST 模型仍可通过“高级 · 自定义模型”导入并使用其独立配置。
+已登记的模型由各发行方提供。MMM 在用户指定目录下载并校验配置、权重和运行时。项目发布包只包含部署和调用代码，模型各自沿用上游发布条件。KimberleyJSN 的权重标注 MIT。Becruily 两个模型的发布页未标注权重许可证，ViperX 的 UVR 发布资产也未单独注明。
+
+| 目录模型 | 最适合的用途 | 发布来源 |
+|---|---|---|
+| HTDemucs / HTDemucs 6s | 通用分轨，六轨版增加吉他和实验性的钢琴 | [Demucs](https://github.com/facebookresearch/demucs) |
+| SCNet / SCNet-large | 人声、贝斯、整组鼓和其他，两版分别使用匹配的配置 | [SCNet 作者](https://github.com/starrytong/SCNet) · [对应的 MSST 预训练权重](https://github.com/ZFTurbo/Music-Source-Separation-Training/blob/84b1eac0887756b4f1a9d7a1ff49105939749ed2/docs/pretrained_models.md) |
+| DrumSep | 先由 HTDemucs 从主音轨提取整组鼓，再细分为底鼓、军鼓、通鼓和镲片（含踩镲） | [DrumSep 作者](https://github.com/inagoy/drumsep) · [MSST 发布资产](https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/tag/v1.0.5) |
+| KimberleyJSN Mel-Band RoFormer | 提取人声，伴奏由原混音减去人声得到 | [作者权重](https://huggingface.co/KimberleyJSN/melbandroformer) |
+| Becruily Mel-Band RoFormer 人声版与伴奏版 | 分别优先提取人声或伴奏，另一轨取混音差值 | [人声](https://huggingface.co/becruily/mel-band-roformer-vocals) · [伴奏](https://huggingface.co/becruily/mel-band-roformer-instrumental) |
+| ViperX BS-RoFormer 1297 | 提取人声，伴奏由原混音减去人声得到 | [MSST 配置索引](https://github.com/ZFTurbo/Music-Source-Separation-Training/blob/84b1eac0887756b4f1a9d7a1ff49105939749ed2/docs/pretrained_models.md#vocal-models) · [UVR 权重](https://github.com/TRvlvr/model_repo/releases/tag/all_public_uvr_models) |
+
+公开的音乐分轨版 SCNet XL 只输出整组鼓。需要进一步拆鼓件时选 DrumSep。已有 MSST 模型仍可通过“高级 · 自定义模型”导入并使用其独立配置。
 
 外部模型包是 JSON 描述文件，引用发布者提供的配置和权重。相对路径以 JSON 所在目录为基准。`tracks` 的键是编辑器显示的声部 ID，`target` 是推理后端实际写出的声部名。单模型可用一个包列出多个输出，组合包也可指定不同模型各取一轨。以下文件名是本地示例，需要与实际下载的权重匹配。[MSST 推理入口](https://github.com/ZFTurbo/Music-Source-Separation-Training#how-to-inference)
 
