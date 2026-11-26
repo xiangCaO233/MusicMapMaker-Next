@@ -3,6 +3,7 @@
 #include "audio/StemAudition.h"
 
 #include <expected>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -52,5 +53,5 @@ std::expected<StemSeparationModel, std::string> readStemSeparationModel(
 std::expected<Audio::StemAudition, std::string> runStemSeparation(
     const StemSeparationModel& model, const std::string& source,
     const std::string& interpreter, const std::string& backend, bool cpu,
-    ice::ThreadPool& decodePool);
+    ice::ThreadPool& decodePool, std::stop_token stop);
 }  // namespace MMM::UI

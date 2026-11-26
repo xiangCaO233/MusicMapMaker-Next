@@ -23,6 +23,7 @@
 #    include <future>
 #    include <memory>
 #    include <optional>
+#    include <stop_token>
 #    include <string>
 #    include <string_view>
 #    include <utility>
@@ -41,6 +42,10 @@ namespace
 class OpenStemAuditionAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 工具随主窗口销毁时通知后台取消，不等待推理进程。
+    /// @details 主窗口析构会先于应用文件池销毁，池内任务可收到停止请求。
+    ~OpenStemAuditionAction() override { m_separationStop.request_stop(); }
+
     /// @brief 暴露固定的工具身份，标题语言不会影响分派。
     /// @warning UI 热路径，仅返回静态字符串。
     std::string_view operationId() const override
@@ -75,6 +80,10 @@ public:
         // 无需打开窗口即可清理已经完成且应丢弃的载入结果。
         if ( !m_open ) return;
 
+        // 初次打开为模型清单和四轨混音台留出空间，之后尊重用户保存的布局。
+        ImGui::SetNextWindowSize(
+            ImVec2(680.0F * context.dpiScale, 580.0F * context.dpiScale),
+            ImGuiCond_FirstUseEver);
         // Begin/End 总是配对。折叠只停止绘制，显式关闭才断开混音节点。
         if ( ImGui::Begin("声部分离###StemAudition", &m_open) ) {
             // 一个窗口同时只拥有一份准备请求，避免覆盖仍在用解码池的 future。
@@ -87,6 +96,11 @@ public:
             if ( m_load.valid() )
                 ImGui::TextUnformatted(m_separating ? "正在运行模型并准备音轨…"
                                                     : "正在解码…");
+            // 文件导入不拥有外部进程，取消按钮只在模型作业排队或运行时出现。
+            if ( m_load.valid() && m_separating ) {
+                if ( FeedbackButton("取消分离") )
+                    m_separationStop.request_stop();
+            }
             if ( !m_error.empty() ) ImGui::TextWrapped("%s", m_error.c_str());
             if ( m_playback ) drawTrackControls(context.dpiScale);
         }
@@ -96,6 +110,7 @@ public:
         if ( !m_open ) {
             releasePlayback();
             m_discardLoad = true;
+            m_separationStop.request_stop();
             m_error.clear();
         }
     }
@@ -219,17 +234,21 @@ private:
         m_discardLoad = false;
         // 工作线程只持有值快照和应用级池指针，不观察 UI 的后续选择。
         m_separating = true;
-        m_load       = files->enqueue([model       = *m_model,
-                                       source      = m_source,
-                                       environment = *m_environment,
-                                       decode] {
+        // 每个任务获得新的停止状态，上一任务的取消不会污染下一次启动。
+        m_separationStop = std::stop_source{};
+        m_load           = files->enqueue([model       = *m_model,
+                                           source      = m_source,
+                                           environment = *m_environment,
+                                           stop        = m_separationStop.get_token(),
+                                           decode] {
             // 工作进程生成完一组结果后才进入解码，解码池不持有界面状态。
             return runStemSeparation(model,
                                      source,
                                      environment.python,
                                      environment.backend,
                                      environment.cpu,
-                                     *decode);
+                                     *decode,
+                                     stop);
         });
         if ( !m_load.valid() ) m_error = "无法提交分离任务。";
     }
@@ -500,6 +519,8 @@ private:
     std::optional<StemSeparationEnvironment> m_environment;
     /// @brief 区分文件导入与模型推理的等待状态。
     bool m_separating = false;
+    /// @brief 本次推理取消信号，工作线程持有自身 token。
+    std::stop_source m_separationStop;
     /// @brief 目录索引对应推子位置，关轨和独听不改变设定。
     std::vector<float> m_gains;
     /// @brief 临时独听通道索引，空值播放已启用的组合。

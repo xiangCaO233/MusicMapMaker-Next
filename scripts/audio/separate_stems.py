@@ -96,7 +96,58 @@ def read_routes(path):
     return routes
 
 
-def publish_track(run_dir, target, destination, frames):
+class SeparationCancelled(Exception):
+    """本机调用者已取消当前作业。"""
+
+
+def ensure_not_cancelled(cancel_file):
+    """每个阶段开始前检查作业私有标记，取消时保留上一套输出。"""
+    if cancel_file is not None and cancel_file.exists():
+        raise SeparationCancelled("Separation cancelled")
+
+
+def run_child(command, cancel_file, cwd=None):
+    """在后台等待转换或推理，取消时终止并回收直接子进程。
+
+    args 由调用者构造，保持程序路径和音频路径的参数边界。cwd 仅影响后端自身
+    找依赖的上下文。取消标记属于整个分离作业，也覆盖前置格式转换和后置转码。
+    只在子进程退出后向调用者报告取消，避免清理时仍有进程写入暂存目录。
+    """
+    ensure_not_cancelled(cancel_file)
+    # CLI 普通调用不需要定时检查。GUI 传入标记后才使用有界等待。
+    if cancel_file is None:
+        subprocess.run(command, cwd=cwd, check=True)
+        return
+
+    # 标记放在当前作业目录，子进程及其他作业无需共享控制状态。
+    with subprocess.Popen(command, cwd=cwd) as child:
+        while child.poll() is None:
+            if cancel_file.exists():
+                # 先给后端正常退出的机会。无响应时强制停止后再清理输出。
+                try:
+                    child.terminate()
+                except ProcessLookupError:
+                    pass
+                try:
+                    child.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    try:
+                        child.kill()
+                    except ProcessLookupError:
+                        pass
+                    child.wait()
+                raise SeparationCancelled("Separation cancelled")
+            try:
+                child.wait(timeout=0.2)
+            except subprocess.TimeoutExpired:
+                # 等待发生在 Python 工作进程内。编辑器与音频回调继续运行。
+                pass
+        # 后端的非零退出仍走原有故障通道；取消只有在明确观察标记时发生。
+        if child.returncode:
+            raise subprocess.CalledProcessError(child.returncode, command)
+
+
+def publish_track(run_dir, target, destination, frames, cancel_file):
     """归一 MSST 的 WAV/FLAC 容器选择并验证原音频坐标。
 
     后端可按不同峰值为同一组声部选择容器，因此逐轨探测。
@@ -109,10 +160,10 @@ def publish_track(run_dir, target, destination, frames):
         # MSST 在支持整型编码且峰值不溢出时可能直接写 FLAC。
         # 转封装只改变容器，不要求重采样或下混。形状不一致仍按错误处理。
         flac = require_file(run_dir / f"{target}.flac")
-        subprocess.run(
+        run_child(
             ["ffmpeg", "-nostdin", "-v", "error", "-i", str(flac),
              "-map", "0:a:0", "-c:a", "pcm_s16le", str(destination)],
-            check=True,
+            cancel_file,
         )
 
     # 目标仍在临时发布区内。结果损坏时上层销毁整个工作区。
@@ -120,7 +171,7 @@ def publish_track(run_dir, target, destination, frames):
         raise ValueError(f"Frame count does not match the mixture: {destination.stem}")
 
 
-def separate(source, plan, backend, output, cpu, convert_input=False):
+def separate(source, plan, backend, output, cpu, convert_input=False, cancel_file=None):
     """在临时目录运行各组模型，验证后一次性发布选中的 WAV 和清单。
 
     推理环境由调用者安装，配置和模型加载错误保留原有退出状态。
@@ -128,6 +179,7 @@ def separate(source, plan, backend, output, cpu, convert_input=False):
     上层可只索取单一专用模型输出，也可以用同一权重准备多个互补声部。
     """
     # 后端脚本与权重由本机作者提供，运行环境可以独立于编辑器安装。
+    ensure_not_cancelled(cancel_file)
     source = require_file(source)
     backend = require_file(backend)
     routes = read_routes(require_file(plan))
@@ -148,10 +200,10 @@ def separate(source, plan, backend, output, cpu, convert_input=False):
         # 两条路径最终都以同一精确 WAV 帧数作为产物校验基准。
         if convert_input:
             # 编辑器接受解码器支持的普通音频，统一转换到模型输入坐标。
-            subprocess.run(
+            run_child(
                 ["ffmpeg", "-nostdin", "-v", "error", "-i", str(source),
                  "-map", "0:a:0", "-ar", "44100", "-ac", "2",
-                 "-c:a", "pcm_s16le", str(mixture)], check=True,
+                 "-c:a", "pcm_s16le", str(mixture)], cancel_file,
             )
         else:
             shutil.copyfile(source, mixture)
@@ -186,7 +238,7 @@ def separate(source, plan, backend, output, cpu, convert_input=False):
             if cpu:
                 command.append("--force_cpu")
             # 参数以 argv 逐项传递。每组模型的输入都是同一份原始 PCM 快照。
-            subprocess.run(command, cwd=backend.parent, check=True)
+            run_child(command, cancel_file, cwd=backend.parent)
             # 哈希在每次模型推理后记录一次，每个产物直接引用相同值。
             weight_hash = digest(weights)
             config_hash = digest(config)
@@ -194,7 +246,9 @@ def separate(source, plan, backend, output, cpu, convert_input=False):
                 # 某些后端将读入失败只写入日志，仍须检查实际文件及帧数。
                 # 导出名单独使用声部 ID，与后端如何命名分类无关。
                 name = f"{stem}.wav"
-                publish_track(run_dir, target, published / name, frames)
+                # 后端退出与声部文件发布之间也可能收到窗口关闭事件。
+                ensure_not_cancelled(cancel_file)
+                publish_track(run_dir, target, published / name, frames, cancel_file)
                 # 同名声部更换权重后，来源摘要可区分两个版本。
                 manifest["tracks"].append({
                     "id": stem, "file": name, "model": model, "target": target,
@@ -208,6 +262,8 @@ def separate(source, plan, backend, output, cpu, convert_input=False):
         # 推理耗时可能较长，发布前复核目标没有被此前的另一个任务创建。
         if output.exists():
             raise FileExistsError(f"Output directory already exists: {output}")
+        # 最后检查用户意图，避免模型成功后发生的取消被误当成成功发布。
+        ensure_not_cancelled(cancel_file)
         published.rename(output)
 
 
@@ -219,15 +275,17 @@ def main():
     parser.add_argument("plan", type=Path, help="local JSON model routing plan")
     parser.add_argument("output", type=Path, help="a new directory for selected stems")
     parser.add_argument("--backend", required=True, type=Path, help="MSST inference.py")
+    # 此参数由应用的后台作业传入。普通 CLI 使用者无需创建控制文件。
+    parser.add_argument("--cancel-file", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--convert-input", action="store_true")
     parser.add_argument("--cpu", action="store_true", help="disable GPU acceleration")
     args = parser.parse_args()
     # 失败仍由工作目录上下文清理中间文件，并同时保留后端原始进度日志。
     try:
         separate(args.source, args.plan, args.backend, args.output, args.cpu,
-                 args.convert_input)
+                 args.convert_input, args.cancel_file)
     except (OSError, KeyError, TypeError, ValueError, EOFError, wave.Error,
-            subprocess.CalledProcessError) as error:
+            subprocess.CalledProcessError, SeparationCancelled) as error:
         parser.exit(1, f"Stem separation failed: {error}\n")
 
 

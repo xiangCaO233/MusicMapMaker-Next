@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import wave
 
@@ -16,6 +17,7 @@ BACKEND = """
 import argparse
 from pathlib import Path
 import subprocess
+import time
 import wave
 
 parser = argparse.ArgumentParser()
@@ -36,6 +38,8 @@ with wave.open(str(args.input_folder / "mixture.wav"), "rb") as source:
     assert source.readframes(frames) == bytes(frames * 4)
 with Path("calls").open("a", encoding="utf-8") as journal:
     journal.write(args.model_type + "\\n")
+if args.model_type == "slow":
+    time.sleep(30)
 args.store_dir.mkdir()
 for target, value in (("vocals", 1), ("bass", 2), ("drums", 3)):
     with wave.open(str(args.store_dir / (target + ".wav")), "wb") as result:
@@ -121,6 +125,35 @@ class SeparationTest(unittest.TestCase):
         with wave.open(str(self.output / "bass.wav"), "rb") as audio:
             self.assertEqual(audio.getnframes(), 16)
             self.assertEqual(audio.readframes(16), bytes([2]) * 64)
+
+    def test_cancelled_model_stops_and_keeps_output_unpublished(self):
+        """运行中写入 GUI 的取消文件，验证工作进程结束而不是跑满后端等待。"""
+        route = {"model": "slow", "target": "bass", "config": "config.yml",
+                 "weights": "model.ckpt"}
+        self.plan.write_text(json.dumps({"version": 1, "tracks": {"bass": route}}),
+                             encoding="utf-8")
+        cancel = self.root / "cancel"
+        script = Path(__file__).with_name("separate_stems.py")
+        with subprocess.Popen([
+            sys.executable, "-c", script.read_text(encoding="utf-8"),
+            str(self.source), str(self.plan), str(self.output),
+            "--backend", str(self.backend), "--cpu", "--cancel-file", str(cancel),
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True) as worker:
+            try:
+                # 先等替身记录推理进入，避免在进程启动前就满足取消测试。
+                deadline = time.monotonic() + 4
+                while not (self.root / "calls").exists():
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.02)
+                cancel.touch()
+                _, error = worker.communicate(timeout=5)
+            finally:
+                if worker.poll() is None:
+                    worker.kill()
+        self.assertNotEqual(worker.returncode, 0)
+        self.assertIn("Separation cancelled", error)
+        self.assertFalse(self.output.exists())
+        self.assertFalse(any(self.root.glob(".mmm-stems-*")))
 
     def test_invalid_output_does_not_publish_any_tracks(self):
         """首个模型成功后第二条轨道错位，整组仍不对外可见。"""

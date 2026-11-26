@@ -8,6 +8,7 @@
 
 #    include <SDL3/SDL_error.h>
 #    include <SDL3/SDL_process.h>
+#    include <SDL3/SDL_timer.h>
 #    include <nlohmann/json.hpp>
 
 #    include <filesystem>
@@ -158,13 +159,15 @@ std::expected<StemSeparationModel, std::string> readStemSeparationModel(
 /// @param backend 用户本机安装的 MSST 入口。
 /// @param cpu 允许在无 GPU 的环境强制使用 CPU。
 /// @param decodePool 与本文件任务分离的解码池，避免后台线程等待自身。
+/// @param stop 由界面提交取消；后台将它转发为当前作业私有标记。
 /// @return 完全驻留且源帧对齐的试听目录，或错误原因。
 /// @warning 仅后台文件池可调用。可能等待模型推理、转换及音频解码。
 std::expected<Audio::StemAudition, std::string> runStemSeparation(
     const StemSeparationModel& model, const std::string& source,
     const std::string& interpreter, const std::string& backend, bool cpu,
-    ice::ThreadPool& decodePool)
+    ice::ThreadPool& decodePool, std::stop_token stop)
 {
+    if ( stop.stop_requested() ) return std::unexpected("已取消分离。");
     std::error_code error;
     // 临时区独立于工程，退出时清理也不会访问原曲所在目录。
     const auto temp = std::filesystem::temp_directory_path(error);
@@ -189,6 +192,9 @@ std::expected<Audio::StemAudition, std::string> runStemSeparation(
     // 输出目录留给工作进程创建。成功发布前该路径不会暴露有效声部。
     const auto output    = path / "output";
     const auto outputArg = Config::pathToUtf8(output);
+    // 每个任务只观察自己的取消文件，并与模型产物一起清理。
+    const auto cancelPath = path / "cancel";
+    const auto cancelArg  = Config::pathToUtf8(cancelPath);
     // Python 入口随二进制嵌入。通过 argv 交接空格、Unicode 与文件路径。
     // SDL 负责桌面平台进程启动，模型包无法注入命令行选项。
     // Python -c 只执行内置脚本；参数数组以空指针结束。
@@ -202,6 +208,8 @@ std::expected<Audio::StemAudition, std::string> runStemSeparation(
                         "--backend",
                         backend.c_str(),
                         "--convert-input",
+                        "--cancel-file",
+                        cancelArg.c_str(),
                         cpu ? "--cpu" : nullptr,
                         nullptr };
     // 设备回调与 UI 都不持有进程对象。它的生命周期限定在这份文件任务中。
@@ -216,8 +224,23 @@ std::expected<Audio::StemAudition, std::string> runStemSeparation(
     // 这里仅在后台线程等待进程句柄。音频队列继续回调，旧组可继续试听。
     // 进程退出后才交回临时目录所有权，避免外部写入与清理相互竞争。
     int result = 0;
-    // 退出状态和创建状态分别检查，防止误打开失败任务留下的局部产物。
-    if ( !SDL_WaitProcess(process.get(), true, &result) || result != 0 ) {
+    // 从等待线程写标记，UI 线程只发布 stop_token，控制动作不做磁盘 I/O。
+    bool cancellationSent = false;
+    while ( !SDL_WaitProcess(process.get(), false, &result) ) {
+        if ( stop.stop_requested() && !cancellationSent ) {
+            // 让 Python 回收它启动的模型进程，再等待退出。直接杀 Python
+            // 会绕过工作目录的析构，并可能留下仍在推理的子进程。
+            std::ofstream cancelled(cancelPath);
+            cancelled.close();
+            // 如果写入失败，不把未送达的通知当成后端已经开始退出。
+            cancellationSent = static_cast<bool>(cancelled);
+        }
+        // 只在文件工作线程观察外部进程，UI 渲染和播放不等待该周期。
+        SDL_Delay(100);
+    }
+    if ( stop.stop_requested() ) return std::unexpected("已取消分离。");
+    // 取消请求在退出状态解读前优先处理，避免向作者报告推理故障。
+    if ( result != 0 ) {
         return std::unexpected(
             "分离进程失败。请检查所选 Python、MSST 和 FFmpeg。");
     }
