@@ -62,6 +62,39 @@
 
 **落地顺序。** 先用原始音频和已知对齐的人工分轨实现播放、切片与列表契约，再接模型验证来源对齐和分离质量。这样在模型选型完成前，编辑器和 MCP 已可使用真实多轨素材。第一版回归覆盖任意轨道组合、全关、播放中启停、seek/循环、首尾越界处理、试听与 MCP 取样的一致性，以及分离失败和缓存失效。用有参考分轨的样本测相对延迟和串音，并记录低、中、高配置设备的耗时与峰值内存。模型质量决定某个声部可作何种分析依据。
 
+#### 桌面试听与本地分离进程
+
+桌面端从“工具 → 多轨试听”选择从同一时间点导出的 WAV 或其他支持格式。可以逐轨启停及独听，进度条使用所有音轨共享的零点。选择文件后，编辑器在后台完成解码；载入失败时保留上一组试听。
+
+可选的本地分离进程基于 [Music Source Separation Training 的推理入口](https://github.com/ZFTurbo/Music-Source-Separation-Training#how-to-inference)。在已安装该后端依赖且可调用 FFmpeg 的 Python 环境中，用 JSON 计划指定每个目标声部采用的配置和权重。以下示例的文件名是用户本地的路径，须与所选权重对应。
+
+```json
+{
+  "version": 1,
+  "tracks": {
+    "vocals": {
+      "model": "mel_band_roformer",
+      "target": "vocals",
+      "config": "models/vocals.yaml",
+      "weights": "models/vocals.ckpt"
+    },
+    "bass": {
+      "model": "scnet",
+      "target": "bass",
+      "config": "models/scnet.yaml",
+      "weights": "models/scnet.th"
+    }
+  }
+}
+```
+
+```bash
+python scripts/audio/separate_stems.py original.wav plan.json output-stems \
+  --backend /path/to/Music-Source-Separation-Training/inference.py --cpu
+```
+
+源文件需为 44.1 kHz 双声道 PCM16 WAV。进程对每组模型使用同一份原曲，验证结果的采样格式和帧数，生成选中的 WAV 与带模型摘要的 `stems.json`。输出目录须为新目录，父目录需已存在。完成后在多轨试听工具中选取生成的 WAV。编辑器的一键分离、模型安装和 MCP 调用入口是后续接入项。
+
 ## 三、服务边界与操作目录
 
 **首选接入方式为编辑器内置 Streamable HTTP 端点。** 作者在编辑器中启用本机 MCP，复制当前实例展示的 `http://127.0.0.1:<端口>/mcp` 到支持 HTTP 的 MCP 客户端，并单独配置访问凭据。客户端向该 URL 发送 MCP JSON-RPC 请求。端口可配置，首次成功绑定后记住；多实例或端口占用时显式展示新地址，由作者选择目标实例。服务仅绑定回环地址，校验来访 Origin（如有）和实例凭据，关闭服务即停止接入。
