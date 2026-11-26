@@ -2,3 +2,6 @@
 
 // 直接嵌入已测试的工作进程入口，发布包不依赖源码目录。
 inline constexpr char STEM_SEPARATION_WORKER[] = R"MMMWorker(@MMM_STEM_WORKER_SOURCE@)MMMWorker";
+
+// 用户选择部署后，由后台进程创建相应的独立 Python 环境。
+inline constexpr char STEM_DEPLOY_WORKER[] = R"MMMDeploy(@MMM_STEM_DEPLOY_SOURCE@)MMMDeploy";
