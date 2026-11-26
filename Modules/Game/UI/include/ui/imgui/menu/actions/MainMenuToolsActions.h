@@ -11,11 +11,6 @@ namespace MMM::UI
 /// @brief 创建打开 BPM 测量工具动作处理器。
 std::unique_ptr<IMainMenuItemActionHandler> createOpenBpmMeasurementAction();
 
-#ifndef __ANDROID__
-/// @brief 创建桌面多轨试听工具入口。
-std::unique_ptr<IMainMenuItemActionHandler> createOpenStemAuditionAction();
-#endif
-
 /// @brief 创建切换重叠检测窗口动作处理器。
 std::unique_ptr<IMainMenuItemActionHandler>
 createToggleOverlapCheckWindowAction();

@@ -7,10 +7,15 @@
 #include "ui/layout/box/CLayBox.h"
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <string>
 
 namespace MMM::UI
 {
+
+#ifndef __ANDROID__
+class StemSeparationPanel;
+#endif
 
 /**
  * @brief 音轨控制器 UI，绑定一个音频音轨（BGM 或 SFX 池）
@@ -91,6 +96,11 @@ public:
     TrackType getTrackType() const { return m_type; }
 
 private:
+#ifndef __ANDROID__
+    /// @brief 仅项目主轨控制器可持有分离区域。关闭或切换项目时释放。
+    std::unique_ptr<StemSeparationPanel> m_stemSeparation;
+#endif
+
     /// @brief 实时主轨参数已更新，等待手势结束后保存一次客户端配置。
     bool m_audioSettingsSavePending{ false };
 

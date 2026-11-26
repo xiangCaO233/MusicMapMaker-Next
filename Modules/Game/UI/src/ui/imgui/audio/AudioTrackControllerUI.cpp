@@ -1,5 +1,10 @@
 // 音轨控制实际构造播放参数命令，载荷在此保持按值提交。
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
+
+#ifndef __ANDROID__
+#    include "StemSeparationPanel.h"
+#endif
+
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
@@ -8,6 +13,8 @@
 #include "config/skin/SkinConfig.h"
 #include "imgui.h"
 #include "logic/EditorEngine.h"
+#include "mmm/project/AudioResource.h"
+#include "mmm/project/AudioTrackType.h"
 #include "mmm/project/Project.h"
 #include "ui/UIManager.h"
 #include "ui/interaction/EditorInteraction.h"
@@ -91,10 +98,11 @@ void AudioTrackControllerUI::requestFocus()
 /// 并根据皮肤资源表决定设置是否持久。
 ///
 /// 轨道类型差异：
-/// - 主轨提供音量、静音、速度、音调、分析工具和 EQ；
+/// - 主轨提供音量、静音、速度、音调、分析工具和 EQ；桌面项目主轨支持声部分离；
 /// - 项目音效轨使用项目 AudioTrackConfig，但不显示主轨专属控件；
 /// - 皮肤音效可能没有项目配置，音量和静音直接来自 SFX Pool；
-/// - 关闭音效控制器会暂停对应预览，关闭主轨控制器不改变播放状态。
+/// - 关闭音效控制器会暂停对应预览。
+/// - 关闭主轨控制器会撤销分离作业并移除该控制器的分轨试听，谱面播放不受影响。
 ///
 /// 状态边界：
 /// - pendingDockId 只在 ImGui 报告已停靠后清除；
@@ -118,6 +126,14 @@ void AudioTrackControllerUI::requestFocus()
 /// 命令完成。项目资源遍历限于当前轻量音频资源列表。
 void AudioTrackControllerUI::update(UIManager* sourceManager)
 {
+    // 与旧占位沿用同一切换标记，也用于阻止分离状态跨项目生命周期。
+    const bool projectTransition =
+        sourceManager && sourceManager->isProjectTransitionInProgress();
+#ifndef __ANDROID__
+    // 控制器未被绘制时也要停止旧项目的分轨，不能依赖 Dock 是否可见。
+    // 持久化工作区可以让同名音轨的控制器重新出现，分离状态必须随前一工程结束。
+    if ( !m_isOpen || projectTransition ) m_stemSeparation.reset();
+#endif
     if ( !m_isOpen ) {
         // 窗口隐藏也必须提交最后参数，不能等待用户下次打开才持久化。
         if ( m_audioSettingsSavePending ) {
@@ -163,7 +179,7 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
         FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin, &m_isOpen);
     if ( opened ) {
         // 工程切换时不读取可能正在替换的项目和音频资源容器。
-        if ( sourceManager && sourceManager->isProjectTransitionInProgress() ) {
+        if ( projectTransition ) {
             // 工程身份切换后，旧工程的滑块草稿不能写入新工程资源。
             m_speedSliderEditing = false;
             m_pitchSliderEditing = false;
@@ -199,6 +215,11 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
         float pitch  = 0.0f;
         bool  muted  = false;
 
+#ifndef __ANDROID__
+        // 资源类型以工程数据为准。已打开的控制器可能仍持有变更前的类型。
+        // 两层检查分别限制控制器入口和实时资源类型；同名皮肤音效也不能通过。
+        const AudioResource* mainAudio = nullptr;
+#endif
         AudioTrackConfig  editedConfig;
         AudioTrackConfig* config = nullptr;
         if ( project ) {
@@ -206,6 +227,13 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
             for ( const auto& res : project->m_audioResources ) {
                 if ( res.m_id == m_trackId ) {
                     // 首个 ID 匹配即为目标；资源 ID 在项目内应保持唯一。
+#ifndef __ANDROID__
+                    if ( m_type == TrackType::Main &&
+                         res.m_type == AudioTrackType::Main &&
+                         !res.m_path.empty() ) {
+                        mainAudio = &res;
+                    }
+#endif
                     editedConfig = res.m_config;
                     config       = &editedConfig;
                     break;
@@ -269,6 +297,23 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
         bool changed      = false;
         bool speedChanged = false;
         bool pitchChanged = false;
+
+#ifndef __ANDROID__
+        // 在音轨参数之前绘制分离区域，使较窄的 Dock 也能直接操作。
+        // 输入只取已绑定的项目资源，文件选择器与皮肤音效池均不参与。
+        // 路径只在本帧借用。子面板负责在变化时缓存来源，并在提交时对工作线程复制。
+        // 该区域与参数草稿互不关联，点击分离不会触发项目设置保存。
+        if ( mainAudio && m_isOpen ) {
+            if ( !m_stemSeparation )
+                m_stemSeparation = createStemSeparationPanel();
+            m_stemSeparation->render(
+                project->m_projectRoot, mainAudio->m_path, dpiScale);
+        } else {
+            // 音轨移除或从主轨转为音效时，立即撤回旧分轨及后台任务。
+            // 用户重新添加同名主轨时，从新状态开始，不接续已失效的作业。
+            m_stemSeparation.reset();
+        }
+#endif
 
         // 每帧清空并重建轻量 Clay 描述树，不保留指向上一帧控件的引用。
         m_contentVBox.clear();
@@ -420,6 +465,11 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
         Config::AppConfig::instance().save();
         m_audioSettingsSavePending = false;
     }
+#ifndef __ANDROID__
+    // 点窗口关闭按钮时 Begin 可能不再展开内容，退出也应释放独立的播放节点。
+    // 工作区可能直接移除视图，不能把此轮关闭留到下一次 update。
+    if ( !m_isOpen ) m_stemSeparation.reset();
+#endif
     // Begin 无论是否展开内容都必须配对 End。
     ImGui::End();
 }

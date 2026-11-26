@@ -28,17 +28,6 @@ MainMenuTools::MainMenuTools()
         MainMenuItemTextKind::TranslationKey,
         nullptr,
         createOpenBpmMeasurementAction()));
-#ifndef __ANDROID__
-    // 桌面原生文件选择支持一次载入对齐的多条音轨。
-    // 工具拥有自己的播放节点和文件任务，打开菜单不会启动解码。
-    // 该动作独立于当前会话，可在选定谱面前试听对齐素材。
-    registerItem(
-        std::make_unique<MainMenuActionItem>(ICON_MMM_MUSIC,
-                                             "声部分离",
-                                             MainMenuItemTextKind::Literal,
-                                             nullptr,
-                                             createOpenStemAuditionAction()));
-#endif
     // 重叠检查与元数据编辑均作用于当前活动谱面。
     registerItem(std::make_unique<MainMenuActionItem>(
         ICON_MMM_SELECT_ALL,

@@ -203,8 +203,6 @@ add_library(
   src/ui/imgui/menu/actions/tools/OpenBpmMeasurementAction.cpp
   src/ui/imgui/menu/actions/tools/OpenDataSourceReplaceWindowAction.cpp
   # 多轨试听负责桌面文件选择与已准备轨道的传输控制。
-  src/ui/imgui/menu/actions/tools/OpenStemAuditionAction.cpp
-  src/ui/imgui/menu/actions/tools/StemSeparationJob.cpp
   src/ui/imgui/menu/actions/tools/OpenPluginListAction.cpp
   src/ui/imgui/menu/actions/tools/ReloadPluginsAction.cpp
   src/ui/imgui/menu/actions/tools/ToggleMetadataEditorWindowAction.cpp
@@ -275,6 +273,9 @@ add_library(
   src/ui/imgui/audio/AudioTrackControllerUI.cpp
   src/ui/imgui/audio/AudioTrackControllerUI_Widgets.cpp
   src/ui/imgui/audio/AudioTrackControllerUI_EQ.cpp
+  src/ui/imgui/audio/StemSeparationPanel.cpp
+  src/ui/imgui/audio/StemModelCatalog.cpp
+  src/ui/imgui/audio/StemSeparationJob.cpp
   src/ui/imgui/audio/ProjectAudioPreviewControls.cpp
   src/ui/imgui/audio/AudioWaveformView.cpp
   src/ui/imgui/audio/WaveformAnalysis.cpp
@@ -345,8 +346,20 @@ if(NOT ANDROID)
     APPEND
     PROPERTY CMAKE_CONFIGURE_DEPENDS "${MMM_STEM_WORKER_PATH}")
   file(READ "${MMM_STEM_WORKER_PATH}" MMM_STEM_WORKER_SOURCE)
+  # 模型部署由窗口显式触发，构建仅嵌入脚本。 两个脚本分开跟踪，部署入口改变时不需要修改分离脚本以触发重配。
+  # 部署入口由后台写入临时目录，复用同一版本的分离脚本回收子进程。 成功部署后，模型推理入口保存在选定的模型目录，不依赖生成头位置。
+  # 生成头不对业务模块导出，脚本内容只参与桌面声部分离工具的构建。 Windows 与 POSIX 复用同一嵌入文本，部署脚本运行时再选择虚拟环境布局。
+  # 模型权重由显式部署步骤取得，不随构建物或生成头分发。
+  # cmake-format: off
+  set(MMM_STEM_DEPLOY_PATH "${CMAKE_SOURCE_DIR}/scripts/audio/deploy_stem_model.py")
+  # cmake-format: on
+  set_property(
+    DIRECTORY
+    APPEND
+    PROPERTY CMAKE_CONFIGURE_DEPENDS "${MMM_STEM_DEPLOY_PATH}")
+  file(READ "${MMM_STEM_DEPLOY_PATH}" MMM_STEM_DEPLOY_SOURCE)
   configure_file(
-    src/ui/imgui/menu/actions/tools/StemSeparationWorker.h.in
+    src/ui/imgui/audio/StemSeparationWorker.h.in
     "${CMAKE_CURRENT_BINARY_DIR}/generated/StemSeparationWorker.h" @ONLY)
   target_include_directories(UI PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
   target_link_libraries(UI PRIVATE 3rd_sdl3)
