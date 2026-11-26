@@ -284,10 +284,15 @@ private:
     void drawCatalog()
     {
         // 优先把可拉伸列宽留给声部说明，部署按钮与说明文本分列。
-        constexpr auto flags = ImGuiTableFlags_RowBg |
-                               ImGuiTableFlags_BordersInnerV |
-                               ImGuiTableFlags_SizingStretchProp;
-        if ( !ImGui::BeginTable("StemModelCatalog", 4, flags) ) return;
+        constexpr auto flags =
+            ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+            ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY;
+        // 目录增长时只扩展滚动内容，给主轨控制器保留操作和播放器空间。
+        // 以字体行距限定内容高度，维持 DPI 切换后的空间分配。
+        const auto tableHeight = 13.0F * ImGui::GetTextLineHeightWithSpacing();
+        if ( !ImGui::BeginTable(
+                 "StemModelCatalog", 4, flags, { 0.0F, tableHeight }) )
+            return;
         ImGui::TableSetupColumn(
             "模型", ImGuiTableColumnFlags_WidthStretch, 1.35F);
         ImGui::TableSetupColumn(
@@ -297,6 +302,7 @@ private:
         ImGui::TableSetupColumn(
             "操作", ImGuiTableColumnFlags_WidthStretch, 1.45F);
         // 表头和内容共用列定义，缩放时仍可对齐模型状态与按钮。
+        ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
         // 窄控制器内按可用列宽堆叠操作，避免绑定入口被右侧 Dock 裁掉。
         // 取自当前 DPI 与皮肤字体计算，避免用固定像素阈值。
@@ -307,6 +313,9 @@ private:
         for ( std::size_t index = 0; index < STEM_MODEL_CATALOG.size();
               ++index ) {
             const auto& entry = STEM_MODEL_CATALOG[index];
+            // 紧凑标签按目录语义换行，完整型号始终在悬停和当前模型中可见。
+            const char* label =
+                entry.catalogName ? entry.catalogName : entry.name;
             // 渲染不探测目录是否还在。选择已有绑定时才重新验证，
             // 已挂载磁盘暂时离线也不会拖慢每帧模型表。
             const bool bound = !m_bindings[index].empty();
@@ -315,8 +324,7 @@ private:
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
             if ( bound ) {
-                if ( FeedbackSelectable(entry.name,
-                                        m_selectedCatalog == index) ) {
+                if ( FeedbackSelectable(label, m_selectedCatalog == index) ) {
                     // 重新解析用户可能在 MMM 之外更新的模型清单。
                     auto model = bindStemModel(entry, m_bindings[index]);
                     if ( model )
@@ -326,8 +334,10 @@ private:
                 }
             } else {
                 // 未部署条目只提供目录操作，不能成为当前分离目标。
-                ImGui::TextUnformatted(entry.name);
+                ImGui::TextUnformatted(label);
             }
+            if ( entry.catalogName && ImGui::IsItemHovered() )
+                ImGui::SetTooltip("%s", entry.name);
             ImGui::TableSetColumnIndex(1);
             ImGui::TextWrapped("%s", entry.stems);
             // 说明作为声部名称的辅助层，但仍需在深色主题和行底色上可读。
@@ -424,7 +434,7 @@ private:
 
         ImGui::Spacing();
         if ( m_model ) {
-            ImGui::Text("当前模型  %s", m_model->name.c_str());
+            ImGui::TextWrapped("当前模型  %s", m_model->name.c_str());
             // 自定义清单没有对应的目录行，才从解析结果展示声部名。
             if ( !m_selectedCatalog ) {
                 for ( const auto& stem : m_model->stems )
