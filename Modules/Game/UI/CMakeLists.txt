@@ -202,6 +202,9 @@ add_library(
   src/ui/imgui/menu/actions/tools/OpenBeatmapSpeedExportAction.cpp
   src/ui/imgui/menu/actions/tools/OpenBpmMeasurementAction.cpp
   src/ui/imgui/menu/actions/tools/OpenDataSourceReplaceWindowAction.cpp
+  # 多轨试听负责桌面文件选择与已准备轨道的传输控制。
+  src/ui/imgui/menu/actions/tools/OpenStemAuditionAction.cpp
+  src/ui/imgui/menu/actions/tools/StemSeparationJob.cpp
   src/ui/imgui/menu/actions/tools/OpenPluginListAction.cpp
   src/ui/imgui/menu/actions/tools/ReloadPluginsAction.cpp
   src/ui/imgui/menu/actions/tools/ToggleMetadataEditorWindowAction.cpp
@@ -331,6 +334,24 @@ target_link_libraries(
          3rd_concurrentqueue
          3rd_entt
          Network)
+# 桌面分离在后台启动独立进程；脚本随 UI 编译，安装包也能直接使用。 configure 阶段只读脚本源码，不寻找解释器或下载模型。 用户选定的
+# Python 和 MSST 入口由运行时加载，构建机无需安装推理依赖。 显式跟踪 Python 源文件，改动入口时由 Ninja 重配并更新内嵌内容。
+# Android 当前没有多文件桌面选择器，也不链接桌面进程启动入口。 SDL 传递参数向量，平台转义集中在该库。
+if(NOT ANDROID)
+  set(MMM_STEM_WORKER_PATH
+      "${CMAKE_SOURCE_DIR}/scripts/audio/separate_stems.py")
+  set_property(
+    DIRECTORY
+    APPEND
+    PROPERTY CMAKE_CONFIGURE_DEPENDS "${MMM_STEM_WORKER_PATH}")
+  file(READ "${MMM_STEM_WORKER_PATH}" MMM_STEM_WORKER_SOURCE)
+  configure_file(
+    src/ui/imgui/menu/actions/tools/StemSeparationWorker.h.in
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/StemSeparationWorker.h" @ONLY)
+  target_include_directories(UI PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+  target_link_libraries(UI PRIVATE 3rd_sdl3)
+endif()
+
 target_link_libraries(UI PRIVATE NetworkCollaboration luajit::luajit 3rd_sol2
                                  3rd_nlohmann_json)
 

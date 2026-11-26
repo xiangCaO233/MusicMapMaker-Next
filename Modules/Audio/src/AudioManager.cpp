@@ -480,6 +480,8 @@ void AudioManager::shutdown()
     destroyPlaybackBackend();
     clearSoundEffects();
     unloadAuditionTrack();
+    // 设备关闭后解除工具试听，避免下次初始化持有旧的输出节点。
+    detachStemAudition(m_stemAudition);
 
     m_timeline->publishAnalysisSource({}, 0.0);
     // 兼容 BGM 观察状态与新复合时间线状态一起清空。

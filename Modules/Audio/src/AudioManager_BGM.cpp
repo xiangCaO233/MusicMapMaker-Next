@@ -963,6 +963,46 @@ const std::string& AudioManager::getLoadedBGMPath() const
     return m_timeline->m_singleFilePath;
 }
 
+/// @brief 把独立多轨试听接到变速器后的设备总线。
+/// @details 试听使用自身源帧传输，因此谱面 Seek 或 STOP 不影响此节点。
+/// 该节点直接送入设备总线，必须先应用当前全局和 BGM 分类控制。
+/// 和单轨试听不同，工具节点没有跟随谱面拉伸时钟的节拍器。
+/// @warning 仅由试听工具在打开音轨后低频调用。
+bool AudioManager::attachStemAudition(
+    const std::shared_ptr<AudioTimelineMixerNode>& node)
+{
+    if ( !m_mainMixer || !node ) {
+        return false;
+    }
+    // 一个工具只占用一个输出来源。重复发布同一节点时不会叠加音量。
+    if ( m_stemAudition == node ) {
+        return true;
+    }
+    detachStemAudition(m_stemAudition);
+    m_stemAudition = node;
+    // 连接前先应用静音，避免新节点用默认音量短暂发声。
+    refreshAuditionTrackVolume();
+    // 主总线在回调边界更新来源列表。节点无需借用谱面拉伸时钟。
+    m_mainMixer->add_source(node);
+    return true;
+}
+
+/// @brief 在工具关闭或更换文件组时切断试听音频。
+/// @warning 仅在控制线程调用，设备回调持有的旧节点由总线延迟回收。
+void AudioManager::detachStemAudition(
+    const std::shared_ptr<AudioTimelineMixerNode>& node)
+{
+    if ( !node || m_stemAudition != node ) {
+        return;
+    }
+    // 旧快照可能仍在回调中持有节点，先停止其传输。
+    node->stop();
+    if ( m_mainMixer ) {
+        m_mainMixer->remove_source(node);
+    }
+    m_stemAudition.reset();
+}
+
 /// @brief 将音轨加载到独立试听通道并接入主混音器。
 /// @param filePath 音频文件绝对路径。
 /// @param config 试听音轨配置。

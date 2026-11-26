@@ -99,6 +99,13 @@ bool AudioManager::isMainTrackMuted() const
 /// 资源的 BGM/SFX 分类并服从应用全局音量。节点未创建时保留状态，加载后再应用。
 void AudioManager::refreshAuditionTrackVolume()
 {
+    // 多轨工具绕过谱面拉伸与资源 DSP，仍必须服从全局和 BGM 静音。
+    if ( m_stemAudition ) {
+        const bool muted = m_globalMuted || m_bgmGainMuted;
+        m_stemAudition->setMasterGain(muted ? 0.0F
+                                            : m_globalVolume * m_bgmGain);
+    }
+    // 单轨工具可能没有打开，以上多轨增益更新仍应在早退前执行。
     if ( !m_auditionSource ) {
         return;
     }
@@ -106,7 +113,7 @@ void AudioManager::refreshAuditionTrackVolume()
     // 歌曲服从 BGM 总控；音效仍服从 SFX，节拍器不被歌曲总线静音。
     const bool music           = m_auditionTrackType == AudioTrackType::Main;
     float      effectiveVolume = m_auditionTrackVolume * m_globalVolume *
-                            (music ? m_bgmGain : m_sfxGain);
+                                 (music ? m_bgmGain : m_sfxGain);
     if ( m_auditionTrackMuted || m_globalMuted ||
          (music ? m_bgmGainMuted : m_sfxGainMuted) ) {
         effectiveVolume = 0.0f;

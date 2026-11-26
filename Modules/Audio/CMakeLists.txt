@@ -62,7 +62,9 @@ add_library(
   src/KeySoundControl.cpp
   # 离线分析按任务捕获均衡参数，不向实时音频图发布中间状态。
   src/OfflineAnalysisEQ.cpp
-  src/SoundEffectPool.cpp)
+  src/SoundEffectPool.cpp
+  # 多轨试听和区间取样复用实时排程及源帧坐标。
+  src/StemAudition.cpp)
 
 target_link_libraries(
   Audio
@@ -283,3 +285,11 @@ mmm_add_test_executable(Audio AudioPresetApplyTest
 target_link_libraries(AudioPresetApplyTest PRIVATE Audio Config Log)
 # 不初始化输出后端，验证不依赖 CI 主机是否存在声卡。
 mmm_register_test_case(NAME AudioPresetApplyTest COMMAND AudioPresetApplyTest)
+
+# 独立 PCM 夹具验证播放、切轨和取样一致性，无需声卡或模型权重。
+mmm_add_test_executable(Audio StemAuditionTest tests/StemAuditionTest.cpp)
+target_link_libraries(StemAuditionTest PRIVATE Audio)
+mmm_register_test_case(
+  NAME StemAuditionTest COMMAND StemAuditionTest
+  "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/resources/audio/note.wav"
+  "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/resources/audio/flick.wav")

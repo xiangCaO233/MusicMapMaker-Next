@@ -62,6 +62,39 @@
 
 **落地顺序。** 先用原始音频和已知对齐的人工分轨实现播放、切片与列表契约，再接模型验证来源对齐和分离质量。这样在模型选型完成前，编辑器和 MCP 已可使用真实多轨素材。第一版回归覆盖任意轨道组合、全关、播放中启停、seek/循环、首尾越界处理、试听与 MCP 取样的一致性，以及分离失败和缓存失效。用有参考分轨的样本测相对延迟和串音，并记录低、中、高配置设备的耗时与峰值内存。模型质量决定某个声部可作何种分析依据。
 
+#### 编辑器内分离与混音
+
+打开“工具 → 声部分离”。首次在“分离运行环境”选择已安装 MSST 依赖的 Python 解释器和 `inference.py`，并确保 FFmpeg 在 PATH 中。设置保存在本机，下次可直接选模型包和待分离音频。编辑器预览包内声明的声部，点击“分离音轨”后在后台运行模型。完成后结果自动载入同一窗口，可用竖直推子调节各轨音量，逐轨启停、独听或任意组合。也可导入已有的对齐分轨。
+
+外部模型包是 JSON 描述文件，引用发布者提供的配置和权重。相对路径以 JSON 所在目录为基准。`tracks` 的键是编辑器显示的声部 ID，`target` 是推理后端实际写出的声部名。单模型可用一个包列出多个输出，组合包也可指定不同模型各取一轨。以下文件名是本地示例，需要与实际下载的权重匹配。[MSST 推理入口](https://github.com/ZFTurbo/Music-Source-Separation-Training#how-to-inference)
+
+```json
+{
+  "version": 1,
+  "tracks": {
+    "vocals": {
+      "model": "mel_band_roformer",
+      "target": "vocals",
+      "config": "models/vocals.yaml",
+      "weights": "models/vocals.ckpt"
+    },
+    "bass": {
+      "model": "scnet",
+      "target": "bass",
+      "config": "models/scnet.yaml",
+      "weights": "models/scnet.th"
+    }
+  }
+}
+```
+
+```bash
+python scripts/audio/separate_stems.py original.wav plan.json output-stems \
+  --backend /path/to/Music-Source-Separation-Training/inference.py --cpu
+```
+
+上述命令用于独立调试，要求源文件是 44.1 kHz 双声道 PCM16 WAV。编辑器入口会先用 FFmpeg 转换普通音频，然后运行同一分离进程，检查声道、采样率和帧数。只有所有目标声部通过检查且完全解码后才替换当前混音台。源工程和上一组试听会在失败时保留。模型推理需要自行提供可信的环境、模型配置与权重。
+
 ## 三、服务边界与操作目录
 
 **首选接入方式为编辑器内置 Streamable HTTP 端点。** 作者在编辑器中启用本机 MCP，复制当前实例展示的 `http://127.0.0.1:<端口>/mcp` 到支持 HTTP 的 MCP 客户端，并单独配置访问凭据。客户端向该 URL 发送 MCP JSON-RPC 请求。端口可配置，首次成功绑定后记住；多实例或端口占用时显式展示新地址，由作者选择目标实例。服务仅绑定回环地址，校验来访 Origin（如有）和实例凭据，关闭服务即停止接入。

@@ -32,6 +32,7 @@ namespace MMM::Audio
 {
 
 class AuditionSourceMixerNode;
+class AudioTimelineMixerNode;
 class KeySoundControlBank;
 class PreparedTimelineAudio;
 struct PreparedAudioTimeline;
@@ -335,6 +336,16 @@ public:
 
     /// @brief 卸载独立试听音轨并断开其混音节点。
     void unloadAuditionTrack();
+    /// @brief 将多轨试听节点接入主输出，保留独立播放头。
+    /// @warning UI 控制线程低频调用，混音总线在回调边界发布来源。
+    [[nodiscard]] bool attachStemAudition(
+        const std::shared_ptr<AudioTimelineMixerNode>& node);
+
+    /// @brief 从主输出断开指定试听节点。
+    /// @warning 与 attach 使用同一控制线程；节点的退役由总线管理。
+    void detachStemAudition(
+        const std::shared_ptr<AudioTimelineMixerNode>& node);
+
     /// @brief 读取独立试听源已经应用的增益，用于低频音量诊断。
     /// @return 未加载时为零，不读取或改变节拍器的音量。
     float getAuditionEffectiveVolume() const;
@@ -943,6 +954,9 @@ private:
 
     /// @brief 试听歌曲和节拍共用的源帧混合节点，接入主拉伸器前级。
     std::shared_ptr<AuditionSourceMixerNode> m_auditionMixer;
+    /// @brief 接入设备的独立多轨试听节点，用于应用全局与 BGM 增益。
+    /// @warning 仅控制线程访问该成员，混音线程通过现有主总线持有其快照。
+    std::shared_ptr<AudioTimelineMixerNode> m_stemAudition;
 
     /// @brief 试听是否需要主拉伸器继续拉取输入。
     /// @warning 控制线程写、音频回调读；relaxed 仅传递播放标量，图节点另由
