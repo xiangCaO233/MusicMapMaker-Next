@@ -76,7 +76,7 @@ public:
         if ( !m_open ) return;
 
         // Begin/End 总是配对。折叠只停止绘制，显式关闭才断开混音节点。
-        if ( ImGui::Begin("多轨试听###StemAudition", &m_open) ) {
+        if ( ImGui::Begin("声部分离###StemAudition", &m_open) ) {
             // 一个窗口同时只拥有一份准备请求，避免覆盖仍在用解码池的 future。
             ImGui::BeginDisabled(m_load.valid());
             drawSeparationControls();

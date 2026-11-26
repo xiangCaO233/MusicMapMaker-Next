@@ -34,7 +34,7 @@ MainMenuTools::MainMenuTools()
     // 该动作独立于当前会话，可在选定谱面前试听对齐素材。
     registerItem(
         std::make_unique<MainMenuActionItem>(ICON_MMM_MUSIC,
-                                             "多轨试听",
+                                             "声部分离",
                                              MainMenuItemTextKind::Literal,
                                              nullptr,
                                              createOpenStemAuditionAction()));
