@@ -202,6 +202,8 @@ add_library(
   src/ui/imgui/menu/actions/tools/OpenBeatmapSpeedExportAction.cpp
   src/ui/imgui/menu/actions/tools/OpenBpmMeasurementAction.cpp
   src/ui/imgui/menu/actions/tools/OpenDataSourceReplaceWindowAction.cpp
+  # 多轨试听负责桌面文件选择与已准备轨道的传输控制。
+  src/ui/imgui/menu/actions/tools/OpenStemAuditionAction.cpp
   src/ui/imgui/menu/actions/tools/OpenPluginListAction.cpp
   src/ui/imgui/menu/actions/tools/ReloadPluginsAction.cpp
   src/ui/imgui/menu/actions/tools/ToggleMetadataEditorWindowAction.cpp

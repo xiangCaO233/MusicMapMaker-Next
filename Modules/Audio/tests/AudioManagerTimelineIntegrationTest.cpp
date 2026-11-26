@@ -1,4 +1,6 @@
 #include "audio/AudioManager.h"
+#include "audio/AudioTimelineMixerNode.h"
+#include "audio/StemAudition.h"
 #include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
 
@@ -1100,6 +1102,66 @@ bool testDeferredTimelinePreparation(MMM::Audio::AudioManager& manager,
            manager.getLoadedAudioTimelineClipCount() == 0U;
 }
 
+/// @brief 验证多轨节点在真实设备回调中遵守全局静音并可解绑。
+/// @param manager 已在 SDL dummy 后端初始化的音频图。
+/// @param samplePath 通过生产解码器读取的短音频。
+/// @return 接入播放、静音、解除静音与解绑均可观察到时返回 true。
+/// @details 使用循环持续提供音频，避免自然结束被误判为静音。
+/// 每次测试都恢复全局和 BGM 配置，后续场景可以复用同一设备。
+/// 使用跨回调峰值而非直接调用混音函数，因此节点没接到设备就无法得到正峰值。
+/// 本场景覆盖默认试听为正常音量时的动态变更，配置预设也随结束顺序恢复。
+/// BGM 轨道类别与单轨试听相同，因此这里显式清除 BGM 分类静音。
+bool testStemAuditionRouting(MMM::Audio::AudioManager& manager,
+                             const std::string&        samplePath)
+{
+    using MMM::Audio::StemAudition;
+    const std::array ids{ samplePath };
+    // 在测试主线程执行低频文件准备，解码调度使用应用池。
+    auto* decode = MMM::Runtime::AppThreadPool::instance().get();
+    if ( !decode ) return false;
+    auto stems = StemAudition::loadAlignedFiles(ids, *decode);
+    if ( !stems ) return false;
+
+    // 先准备独立节点，再提交到已经有主时间线和音效来源的输出图。
+    auto playback = stems->makePlayback(ids, 256);
+    if ( !playback ) return false;
+    auto& node = **playback;
+    if ( !node.setLoop({ 0, stems->endFrame() }) ||
+         !manager.attachStemAudition(*playback) ) {
+        return false;
+    }
+
+    // 将输入增益钳至已知正值，避免已存用户设置让测试始终静音。
+    // 配置 setter 会持久化到这个用例自己的临时配置目录。
+    const auto oldVolume  = manager.getGlobalVolume();
+    const auto oldGain    = manager.getBGMGain();
+    const auto oldMute    = manager.isGlobalMuted();
+    const auto oldBgmMute = manager.isBGMGainMuted();
+    manager.setGlobalVolume(1.0F);
+    manager.setBGMGain(1.0F);
+    manager.setGlobalMute(false);
+    manager.setBGMGainMute(false);
+    node.play();
+
+    // 音量峰值来自同一个真实音频块，因此异步增益更新可直接在输出上验证。
+    const bool audible = waitUntil([&] { return node.leftLevel() > 0.0F; });
+    // 静音期间循环仍然运行，因而恢复音量时不需要额外下发 Play。
+    manager.setGlobalMute(true);
+    const bool muted = waitUntil([&] { return node.leftLevel() == 0.0F; });
+    manager.setGlobalMute(false);
+    const bool restored = waitUntil([&] { return node.leftLevel() > 0.0F; });
+
+    // 脱离主设备后恢复设置，其他声音仍由测试图各自管理。
+    // 保留测试强引用直到观察完成，解绑后设备可能仍持有当前块的快照。
+    manager.detachStemAudition(*playback);
+    manager.setGlobalVolume(oldVolume);
+    manager.setBGMGain(oldGain);
+    manager.setGlobalMute(oldMute);
+    manager.setBGMGainMute(oldBgmMute);
+    // 三段分别记录，失败时仍尝试其余状态并执行完整清理。
+    return audible && muted && restored;
+}
+
 }  // namespace
 
 /// @brief 运行 AudioManager 自动采样时间线集成测试。
@@ -1154,6 +1216,7 @@ int main(int argc, char** argv)
         testStreamingSelection(manager, samplePath) &&
         testSharedMainStretcher(manager, samplePath) &&
         testAuditionVolumeRouting(manager, samplePath) &&
+        testStemAuditionRouting(manager, samplePath) &&
         testQueuedSoundEffectShutdown(manager, samplePath);
 
     // 先停止音频后端和释放图，再关闭资源线程池。
