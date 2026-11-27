@@ -90,11 +90,19 @@ bool writeMalodyExportWithAudio(const BeatMap&               beatMap,
         nlohmann::json* pairedMain = nullptr;
         // 完整引用优先，避免不同目录的同名效果音也被算作 Main。
         // 文件名回退仅兼容没有精确引用的旧谱面，不能扩大已确认资源的身份。
-        bool hasExactMainReference = false;
+        // 另存时元数据可能使用原生分隔符，SOUND 使用通用分隔符。
+        // 两边按路径组件比较，不能因 Windows 上的不同拼写而丢失 Main 身份。
+        // 只做词法规范化，不访问文件系统，不把不同目录的同名文件合并。
+        const auto songPath = Config::utf8ToPath(songFile).lexically_normal();
+        const auto songName = songPath.filename();
+        bool       hasExactMainReference = false;
         for ( const auto& node : document["note"] ) {
-            // JSON 节点识别和字段读取包含多层调用，匹配后直接结束本次扫描。
-            if ( isMalodyAutomaticAudioNode(node) &&
-                 node.value("sound", std::string{}) == songFile ) {
+            // 只有字符串引用可解释为路径；带 sound 的玩家音符不参与 Main 判定。
+            if ( !isMalodyAutomaticAudioNode(node) ) continue;
+            const auto sound = node.find("sound");
+            if ( sound != node.end() && sound->is_string() &&
+                 Config::utf8ToPath(sound->get_ref<const std::string&>())
+                         .lexically_normal() == songPath ) {
                 hasExactMainReference = true;
                 break;
             }
@@ -107,11 +115,12 @@ bool writeMalodyExportWithAudio(const BeatMap&               beatMap,
             if ( !isMalodyAutomaticAudioNode(node) || !node.contains("sound") ||
                  !node["sound"].is_string() )
                 continue;
-            const auto& sound = node["sound"].get_ref<const std::string&>();
-            if ( sound != songFile &&
-                 (hasExactMainReference ||
-                  Config::utf8ToPath(sound).filename() !=
-                      Config::utf8ToPath(songFile).filename()) )
+            const auto soundPath =
+                Config::utf8ToPath(node["sound"].get_ref<const std::string&>())
+                    .lexically_normal();
+            // 两轮共用相同的规范化规则；先匹配完整身份，再应用旧版文件名回退。
+            if ( soundPath != songPath &&
+                 (hasExactMainReference || soundPath.filename() != songName) )
                 continue;
             if ( pairedMain ) {
                 errorMessage = "MC 前导补偿需要唯一的主音轨自动采样";
