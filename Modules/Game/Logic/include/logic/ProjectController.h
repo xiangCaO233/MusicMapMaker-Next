@@ -6,6 +6,7 @@
 #include "logic/ProjectResourceTypes.h"
 #include "logic/ProjectTypes.h"
 #include "logic/ProjectUiState.h"
+#include "logic/PublishedSharedPtr.h"
 #include "mmm/project/Project.h"
 
 #include <atomic>
@@ -303,8 +304,8 @@ public:
         const std::vector<BeatmapAudioReference>& openBeatmapReferences = {});
 
     /// @brief 读取用于 UI 的不可变活动项目视图。
-    /// @warning 界面可见时每帧读取；一次 acquire 保证并发关闭后仍能绘制旧页，
-    /// 不等待会话锁也不访问可变 Project。仅借用同一帧内的结果引用。
+    /// @warning 界面可见时每帧读取；共享句柄保证并发关闭后仍能绘制旧页。
+    /// 兼容路径只锁住句柄复制，不等待会话锁或访问可变 Project。
     [[nodiscard]] std::shared_ptr<const ProjectUiState> uiSnapshot() const;
 
     /// @brief 合并同一工程的设置改动，供逻辑线程处理。
@@ -342,9 +343,10 @@ private:
     std::uint64_t m_projectGeneration{};
     /// @brief 仅逻辑线程访问；同一批目录通知可共享一个代次。
     std::uint64_t m_directoryRevision{};
-    /// @brief 工程所有者 release 发布，UI 可见页每帧 acquire 读取。
-    /// @warning 不可变结果跨越工程关闭，不能使用不会延长寿命的裸指针代替。
-    std::atomic<std::shared_ptr<const ProjectUiState>> m_uiSnapshot;
+    /// @brief 工程所有者发布不可变快照，供 UI 和其他读者获取共享句柄。
+    /// @warning 原子实现采用 release/acquire；兼容实现只同步句柄交换与复制。
+    /// 读者持有旧值可跨越工程关闭，快照构造与回收均不占用发布槽的锁。
+    PublishedSharedPtr<const ProjectUiState> m_uiSnapshot;
     /// @brief 短锁，仅保护待处理设置，不覆盖业务逻辑与磁盘保存。
     std::mutex m_uiSettingsMutex;
     /// @brief 同一代次未提交的配置字段。
