@@ -77,9 +77,16 @@ else()
         "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-flto=thin>")
 
       # --- Release 模式额外优化 ---
-      add_compile_options(
-        "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-fwhole-program-vtables>"
-      )
+      # MinGW 预编译静态依赖位于 ThinLTO 单元之外，可能实例化与主程序相同的虚接口。 例如 RTC 和业务线程池共享
+      # std::packaged_task，不能只凭业务模块内的虚表 把间接调用改成直调用。保留 ThinLTO，其余平台沿用原有优化策略。
+      if(NOT
+         (WIN32
+          AND MINGW
+          AND NOT SOURCES_BUILD))
+        add_compile_options(
+          "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-fwhole-program-vtables>"
+        )
+      endif()
       add_compile_options(
         "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-Xclang;-fmerge-functions>"
       )
