@@ -3,7 +3,9 @@
 #include "canvas/Basic2DCanvas.h"
 #include "canvas/CanvasSnapshotPrepare.h"
 #include "common/render/RenderSnapshotBuffer.h"
+#include "config/skin/translation/Translation.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "mmm/project/AudioResource.h"
@@ -27,6 +29,8 @@ struct AudioSpectrumViewTestAccess {
     static bool checkSourceChanges()
     {
         AudioSpectrumView view("SpectrumSourceTest");
+        // 已可见的旧图和未完成的旧计算同时存在，换轨时必须分别撤销。
+        // 无纹理的占位绘制项足以检测状态清理，不依赖图形后端。
         view.retarget(11, true);
         view.m_spectrumReady      = true;
         view.m_texturesNeedReload = true;
@@ -50,11 +54,13 @@ struct AudioSpectrumViewTestAccess {
         // 手工交付成功结果，覆盖与取消状态竞争时的优先级。
         oldResult.set_value(true);
         view.pollCalculation();
+        // 丢弃旧结果时必须回收 future，否则新任务仍会被进行中的标志挡住。
         if ( !hidden || view.m_calcFuture.valid() || view.m_texturesNeedReload )
             return false;
 
         // 同样的数据只有从当前任务返回时才可进入上传阶段。
         std::promise<bool> currentResult;
+        // 新世代使用独立取消源，才能区分拒绝旧结果与拒绝所有结果。
         view.m_calcStopSource = std::stop_source{};
         view.m_calcFuture     = currentResult.get_future();
         // 新任务交付后先进入纹理上传队列，不能提前标记已绘制。
@@ -203,27 +209,50 @@ void drawController(MMM::UI::UIManager&              manager,
 }
 
 /// @brief 通过真实鼠标点击验证只读控制器的分析入口仍可用。
-/// @param x 波形或频谱按钮所在半区的横坐标。
+/// @param label 生产按钮的本地化标签，用于计算该窗口内的控件 ID。
+/// @param widthFraction 按钮所在半区的中心在实际内容宽度中的比例。
 /// @param name 分析窗口稳定注册键。
 /// @return 控件实际注册目标分析窗口时返回 true。
-/// @details 扫描纵向位置以容忍字体和翻译造成的行高变化。
-/// 只读参数区同样受到点击，不能因此写入音轨配置或播放参数。
+/// @details 只悬浮查找目标，避免误触折叠区或改变后续控件的布局。
+/// @warning 仅测试中扫描可见帧；通过正常输入触发真实控件回调。
 bool clickAnalysis(MMM::UI::UIManager&              manager,
-                   MMM::UI::AudioTrackControllerUI& controller, float x,
+                   MMM::UI::AudioTrackControllerUI& controller,
+                   const char* label, float widthFraction,
                    const std::string& name)
 {
-    // 每次完整按下释放，并提前悬浮一帧供 ImGui 更新命中窗口。
-    // 只在控制器内容区点击，不触发窗口关闭或移动。
-    for ( float y = 95; y < 630; y += 8 ) {
+    // 首次窗口大小由控制器本身设置，不能从夹具请求的尺寸推算命中范围。
+    const auto windowName =
+        "###" +
+        MMM::UI::AudioTrackControllerUI::makeViewName(controller.getTrackId());
+    auto* window = ImGui::FindWindowByName(windowName.c_str());
+    if ( !window ) {
+        XERROR("Read-only audio controller window was not submitted");
+        return false;
+    }
+    // Clay 在控制器窗口中直接提交按钮，控件 ID 从该窗口的根栈计算。
+    // 只用翻译文本识别按钮，最终的打开状态仍由稳定注册键检查。
+    const auto  clip   = window->InnerClipRect;
+    const auto  target = window->GetID(label);
+    const float x      = clip.Min.x + clip.GetWidth() * widthFraction;
+    // 使用实际内容裁剪区，容忍字体、主题和额外参数区造成的行位置变化。
+    // ImGui 只给未裁剪、可交互的控件分配 HoveredId。
+    // 先提交无按键的指针帧，让窗口命中在下一帧按下前完成更新。
+    for ( float y = clip.Min.y + 2; y < clip.Max.y; y += 4 ) {
         const ImVec2 pointer(x, y);
         drawController(manager, controller, pointer, false);
+        const auto& context = *ImGui::GetCurrentContext();
+        if ( context.HoveredWindow != window || context.HoveredId != target )
+            continue;
+        // 只在确认命中真实按钮后发送按下与释放，保持生产点击语义。
         drawController(manager, controller, pointer, true);
         drawController(manager, controller, pointer, false);
-        // 注册表中存在真实窗口才能证明按钮可用，单纯渲染不算成功。
-        // 找到目标即停止，避免继续点击已经成功的按钮造成重复打开。
         if ( manager.getView<MMM::UI::IUIView>(name) ) return true;
+        // 已经命中却没有打开时立即判为交互失败，继续搜索会掩盖此处回归。
+        XERROR("Read-only audio analysis button did not open {}", name);
+        return false;
     }
-    XERROR("Read-only audio analysis button did not open {}", name);
+    // 将不可点击与回调失败分开报告，便于定位裁剪或禁用范围的变化。
+    XERROR("No clickable {} button in the read-only audio controller", name);
     return false;
 }
 
@@ -264,8 +293,18 @@ bool checkGuestAudio(MMM::UI::UIManager& manager)
     drawController(manager, controller, ImVec2(-1, -1), false);
     // 两个按钮位于不同半区，都要通过实际点击验证，不能只检查绘制成功。
     // 同一访客仍需能够查看两种分析结果，不能以另一个按钮的打开状态代替。
-    passed &= clickAnalysis(manager, controller, 520, "AudioSpectrum");
-    passed &= clickAnalysis(manager, controller, 220, "AudioWaveform");
+    // 先检查频谱，保证它可以从初始访客界面打开，无需先注册波形窗口。
+    // 保留后续只读配置断言，验证分析入口不改变音轨编辑权限。
+    passed &= clickAnalysis(manager,
+                            controller,
+                            TR("ui.audio_manager.open_spectrum").data(),
+                            .75F,
+                            "AudioSpectrum");
+    passed &= clickAnalysis(manager,
+                            controller,
+                            TR("ui.audio_manager.open_waveform").data(),
+                            .25F,
+                            "AudioWaveform");
     // 点击禁用区不能改资源；退出绑定应同时恢复本机数据源并释放缓存所有权。
     passed &= original->m_audioResources.front().m_config.volume == 0.37F &&
               !original->m_audioResources.front().m_config.muted;
