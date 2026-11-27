@@ -1,5 +1,25 @@
 #include "config/StagedFile.h"
 
+#if defined(_WIN32)
+#    include <sdkddkver.h>
+// 仅在此文件开放较新的枚举声明；实际调用的函数自 Vista 即存在。
+// 旧系统会拒绝扩展信息类，运行时仍走兼容重命名。
+// 宏作用域恢复后，随后包含的头文件仍按构建配置的目标版本选择声明。
+#    pragma push_macro("NTDDI_VERSION")
+#    if NTDDI_VERSION < NTDDI_WIN10_RS1
+#        undef NTDDI_VERSION
+#        define NTDDI_VERSION NTDDI_WIN10_RS1
+#    endif
+#    include <windows.h>
+#    pragma pop_macro("NTDDI_VERSION")
+
+#    include <cstddef>
+#    include <cstring>
+#    include <limits>
+#    include <mutex>
+#    include <vector>
+#endif
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -14,6 +34,86 @@ namespace MMM::Config
 /// @details 正式文件在最后一次操作才成为写目标；目录创建、内容写入、关闭和
 /// 权限准备分别具有独立失败点。重命名使用操作系统的同卷替换语义。
 ///
+#if defined(_WIN32)
+namespace
+{
+/// @brief 使用文件句柄将完整暂存文件替换到正式路径。
+/// @param staged 已关闭并位于目标同卷的暂存文件。
+/// @param target 最终文件路径，可能相对于当前目录。
+/// @return 发布失败的系统错误；成功时为空。
+/// @details POSIX 替换允许具有兼容共享权限的旧句柄继续访问旧文件；
+/// 之后按目标名称打开的读者直接得到新文件，避免并发发布互相拒绝。
+/// 源和目标的共享权限由内核判定，不能通过覆盖复制或先删除目标规避。
+/// 失败不改变正式名称，暂存目录仍由事务对象清理。
+/// @warning 低频文件提交。仅旧式接口回退需要同步重命名，流操作不在锁内。
+std::error_code replaceStagedFile(const std::filesystem::path& staged,
+                                  const std::filesystem::path& target)
+{
+    // Windows 以绝对路径解析目标，避免用额外目录句柄绑定相对名称。
+    // 构造阶段可能已把文件链接解析到实际目标；这里不再做链接或权限查询。
+    std::error_code error;
+    auto            absoluteTarget = std::filesystem::absolute(target, error);
+    if ( error ) return error;
+    // 使用路径提供的原生 UTF-16，不能经过系统 ANSI 代码页丢失名称字符。
+    const auto&    name        = absoluteTarget.make_preferred().native();
+    constexpr auto NAME_OFFSET = offsetof(FILE_RENAME_INFO, FileName);
+    constexpr auto MAX_NAME_SIZE =
+        ((std::numeric_limits<DWORD>::max)() - NAME_OFFSET) / sizeof(wchar_t) -
+        1;
+    // 请求长度是 DWORD，先校验再计算，末尾另留一个宽字符作为终止符。
+    if ( name.size() > MAX_NAME_SIZE )
+        return std::make_error_code(std::errc::filename_too_long);
+    const auto nameBytes = name.size() * sizeof(wchar_t);
+    const auto size      = NAME_OFFSET + nameBytes + sizeof(wchar_t);
+    // 请求缓冲在取得句柄前完成构造，打开期间不分配内存或访问其他路径。
+    std::vector<std::byte> request(size);
+    FILE_RENAME_INFO       info{};
+    // 允许替换已有目标，但保留系统对实际只读属性与访问权限的检查。
+    info.Flags =
+        FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS;
+    info.FileNameLength = static_cast<DWORD>(nameBytes);
+    // 分开复制固定头与变长部分，避免访问 FILE_RENAME_INFO 单元素数组的边界外。
+    // 缓冲区初始化为零，终止字符未计入 FileNameLength。
+    std::memcpy(request.data(), &info, NAME_OFFSET);
+    std::memcpy(request.data() + NAME_OFFSET, name.c_str(), nameBytes);
+
+    // DELETE 用于改名，允许其他读写及删除共享。本句柄不能阻拦下一次发布。
+    // 流已经关闭，这个句柄只负责把同卷文件发布到目标，新内容不再写入。
+    // 打开暂存项本身即可提交，若路径意外变成重解析点也不跟随到外部文件。
+    const auto handle =
+        CreateFileW(staged.c_str(),
+                    DELETE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    nullptr,
+                    OPEN_EXISTING,
+                    FILE_FLAG_OPEN_REPARSE_POINT,
+                    nullptr);
+    if ( handle == INVALID_HANDLE_VALUE )
+        return { static_cast<int>(GetLastError()), std::system_category() };
+    const bool renamed = SetFileInformationByHandle(
+        handle, FileRenameInfoEx, request.data(), static_cast<DWORD>(size));
+    // 在关闭句柄前捕获失败码，保持调用方看到的是发布错误。
+    // 兼容回退重新按路径打开源，因此无论如何都先还给系统这个句柄。
+    const auto reason = renamed ? ERROR_SUCCESS : GetLastError();
+    CloseHandle(handle);
+    if ( renamed ) return {};
+
+    // 系统或卷不支持扩展信息类时沿用原路径。访问拒绝保留原始失败诊断。
+    // 扩展参数被拒绝时旧操作仍负责验证实际路径，且不会清除原有目标。
+    if ( reason != ERROR_INVALID_PARAMETER && reason != ERROR_NOT_SUPPORTED &&
+         reason != ERROR_INVALID_FUNCTION )
+        return { static_cast<int>(reason), std::system_category() };
+
+    // 旧接口并发调用时可能暂时持有目标。只串行化本进程内的回退重命名。
+    // 回退临界区不能覆盖调用方序列化或下一阶段的暂存目录清理。
+    static std::mutex     renameMutex;
+    const std::lock_guard lock(renameMutex);
+    std::filesystem::rename(staged, target, error);
+    return error;
+}
+}  // namespace
+#endif
+
 /// @brief 通过文件系统排他确认目录归属，碰撞只重试下一候选。
 ScopedTemporaryDirectory::ScopedTemporaryDirectory(
     const std::filesystem::path& parent, std::string_view prefix)
@@ -101,6 +201,7 @@ StagedOutputFile::StagedOutputFile(const std::filesystem::path& target,
 }
 
 /// @brief 校验写出和关闭，保留权限后通过同卷重命名提交。
+/// @warning 低频 I/O；Windows 使用句柄替换，旧式回退只同步重命名调用。
 bool StagedOutputFile::commit()
 {
     // 已完成的事务不能重复发布，关闭前仍需确保流确实打开。
@@ -118,9 +219,13 @@ bool StagedOutputFile::commit()
         if ( m_error ) return false;
     }
     // 任何重命名错误保留旧目标，作用域清理只删除自己的暂存路径。
-    // 同一目标的两个调用不共享流。重命名成功的次序就是文件版本生效的次序，
-    // 早先写得较慢的调用可以最后提交，不会与另一份文件内容混合。
+    // 重命名成功的次序就是文件版本生效的次序，两次保存的字节不会混合。
+    // 两条平台路径共用已关闭、已准备好权限的源文件，不能在失败时重新写入。
+#if defined(_WIN32)
+    m_error = replaceStagedFile(m_staged, m_target);
+#else
     std::filesystem::rename(m_staged, m_target, m_error);
+#endif
     return !m_error;
 }
 

@@ -7,6 +7,7 @@
 #include "log/colorful-log.h"
 #include <algorithm>
 #include <array>
+#include <barrier>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -525,37 +526,54 @@ bool stagedFilePublication(const std::filesystem::path& root)
     const ScopedTemporaryDirectory fixture(root, ".staged-file-test-");
     if ( fixture.error() ) return false;
     // 只使用临时目录内的最终文件，两份调用除最终文件名外没有共享的流或状态。
-    const auto target = fixture.path() / "layout.json";
-    // 两个长度都足以越过常见的流缓冲上限，确保同时写入真实文件而非仅竞争内存。
-    const std::string first(8192, 'a');
-    const std::string second(12288, 'b');
-    {
+    const auto  target = fixture.path() / "layout.json";
+    std::string previous;
+    // 首轮竞争创建目标，后续轮次竞争替换已有目标，两种路径都应完整发布。
+    // 重复有限轮次覆盖不同的系统调度顺序，不依赖 CTest 调度制造 I/O 竞争。
+    constexpr int COMMIT_ROUNDS = 48;
+    for ( int round = 0; round < COMMIT_ROUNDS; ++round ) {
+        // 两个长度越过常见流缓冲上限；每轮改变后缀，防止读到上轮的文件。
+        // 两版本的长度也不同，能发现短版本替换后意外保留长版本尾部。
+        const auto suffix = std::to_string(round);
+        const auto first  = std::string(8192, 'a') + suffix;
+        const auto second = std::string(12288, 'b') + suffix;
         // 两份流都在任何一次提交之前打开；固定暂存名会导致互相截断，
         // 即使操作系统碰巧把两次正式发布串行化也无法隐藏竞争。
         StagedOutputFile a(target);
         StagedOutputFile b(target);
         if ( !a.stream().is_open() || !b.stream().is_open() ) return false;
-        bool firstOK  = false;
-        bool secondOK = false;
-        // 每个线程只拥有一份流；允许任意提交顺序，但结果必须是完整版本。
-        // 两个输出对象已绑定不同暂存文件；实际序列化和发布在两个线程中独立完成。
-        // 不强制调度次序，任一版本只要完整都符合最后一个成功提交生效的契约。
+        a.stream() << first;
+        b.stream() << second;
+        bool         firstOK  = false;
+        bool         secondOK = false;
+        std::barrier ready(2);
+        // 写出内容后让两个线程在同一阶段进入 commit，避免启动顺序掩盖竞争。
+        // 每个线程拥有不同的流和暂存文件，屏障之后仍保留真实关闭与发布路径。
         std::jthread left([&] {
-            a.stream() << first;
+            ready.arrive_and_wait();
             firstOK = a.commit();
         });
         std::jthread right([&] {
-            b.stream() << second;
+            ready.arrive_and_wait();
             secondOK = b.commit();
         });
         // join 之后再读取结果，子线程中的提交状态通过线程终止同步。
         left.join();
         right.join();
-        if ( !firstOK || !secondOK ) return false;
+        if ( !firstOK || !secondOK ) {
+            // 同时记录两边的结果，区分关闭失败和重命名遭拒。
+            XERROR("Concurrent staged publication failed in round {}: {}, {}",
+                   round,
+                   a.error().value(),
+                   b.error().value());
+            return false;
+        }
+        // 每轮都允许任一提交最后完成，但输出必须与该轮的完整版本相同。
+        // 不用 JSON 解析作替代，因为某些部分输出也可能是合法的 JSON。
+        previous = fileBytes(target);
+        if ( previous != first && previous != second ) return false;
     }
-    // 直接比较保存后的字节。即使某个前缀恰好仍可解析为 JSON，也不能算通过。
-    const auto previous = fileBytes(target);
-    if ( previous != first && previous != second ) return false;
+    // 失败注入沿用最近一次提交的确切字节，确认它没有被空文件或部分内容替换。
     {
         StagedOutputFile output(target);
         if ( !output.stream().is_open() ) return false;
