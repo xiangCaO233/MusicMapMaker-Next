@@ -232,6 +232,10 @@ bool checkExport(const std::filesystem::path& root, double referenceBpm,
         MMM::Logic::CmdLoadBeatmap{ .beatmap = source } });
     session.update(0, MMM::Config::EditorConfig{}, false);
     const auto chartPath = exportDirectory / "chart.mc";
+    // 只清除上轮谱面，避免导出失败时把旧文件当成本轮成功结果。
+    // 保留已编码音频，重复执行仍可覆盖正式事务的文件名避让。
+    std::filesystem::remove(chartPath, error);
+    if ( error ) return false;
     // 跨目录输出覆盖实际引用改写，避免测试仅在源音频旁边恰好找到同名文件。
     session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdSaveBeatmapAs{
         .path = MMM::Config::pathToUtf8(chartPath) } });
@@ -269,12 +273,14 @@ bool checkExport(const std::filesystem::path& root, double referenceBpm,
         // Main 仍位于零点排在前面；第二个采样保留局部身份和相同的时间位移。
         // 源效果音字节必须不变，不能因文件名相同而被编码为前导音乐副本。
         const auto& effect = loaded.m_audioSamples.back();
-        // 音效仍引用原始 input.wav，生成的主音轨文件另有 lead-in 文件名。
+        // 别只检查文件名：主音轨同名，误指向它也会通过原来的断言。
+        // 以 MC 所在目录解析输出引用，确认跨目录重写后仍指向原音效路径。
+        const auto resolvedEffect =
+            exportDirectory / MMM::Config::utf8ToPath(effect.m_audioResourceId);
         if ( std::abs(effect.effectiveTimestamp() - 750 - expectedPadding) >
                  .1 ||
-             MMM::Config::utf8ToPath(effect.m_audioResourceId).filename() !=
-                 "input.wav" ||
-             readBytes(effectPath) != original )
+             !std::filesystem::equivalent(resolvedEffect, effectPath, error) ||
+             error || readBytes(effectPath) != original )
             return false;
     }
     // Main 触发时间保持原值，因为音乐内容的后移已经写入文件前导静音。
