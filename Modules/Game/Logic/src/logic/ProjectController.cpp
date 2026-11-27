@@ -1263,11 +1263,12 @@ const Project* ProjectController::currentProject() const
 /// @return 当前已发布的不可变项目视图，关闭完成后为 nullptr。
 /// @details 工程接管和存储逻辑写入发布槽，UI 持有结果直到绘制完成；
 /// 原工程及时释放，旧帧的设置写入由代次检查拒绝。
-/// @warning 每个可见帧最多取得一次共享所有权；普通 UI 不等待业务锁。
+/// @warning 每个可见帧最多取得一次共享所有权；兼容路径只同步句柄复制，
+/// 不等待工程切换、快照构造或旧快照回收。
 std::shared_ptr<const ProjectUiState> ProjectController::uiSnapshot() const
 {
     // 关闭只替换发布槽；正在使用这个不可变版本的控件仍持有原始值。
-    return m_uiSnapshot.load(std::memory_order_acquire);
+    return m_uiSnapshot.load();
 }
 
 /// @brief 用已接管的项目值构建独立读模型；无项目时撤下快照。
@@ -1333,8 +1334,8 @@ void ProjectController::publishUiSnapshot()
             state->m_beatmapNames.push_back(beatmap.m_name);
     }
     // nullptr 与已完成的投影走同一发布边界，界面无需另读工程存在标志。
-    // release 同时发布资源、设置和代次，禁止界面把这些字段拆成独立可变来源。
-    m_uiSnapshot.store(std::move(state), std::memory_order_release);
+    // 先在发布槽外完成资源、设置和代次的投影，再一次交换整个句柄。
+    m_uiSnapshot.store(std::move(state));
 }
 
 /// @brief 合并同代次的字段修改；更晚到达的同字段值优先。
