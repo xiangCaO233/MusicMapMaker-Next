@@ -4927,8 +4927,8 @@ static void applyMoonlightStyle(ImGuiStyle& style)
 
     // 全局透明度会乘到整套颜色上，主题在此保持最终合成基准。
     style.Alpha = 1.0f;
-    // 禁用态通过统一衰减与可交互控件拉开层级，无需逐项改写颜色。
-    style.DisabledAlpha = 1.0f;
+    // 菜单项沿用正文字色；禁用域衰减透明度后，白色标签在暗底上显示为灰色。
+    style.DisabledAlpha = 0.55f;
     // 窗口内边距同时决定内容密度和停靠面板的呼吸空间。
     style.WindowPadding            = ImVec2(12.0f, 12.0f);
     style.WindowRounding           = 11.5f;
@@ -5142,7 +5142,9 @@ static void applyCeciliaStyle(ImGuiStyle& style)
 static void applyCeciliaPalette(ImGuiStyle& style, ImVec4 nodeColor)
 {
     applyMoonlightStyle(style);
-    auto rgb = [](int r, int g, int b) {
+    // 浅色主题沿用自己的禁用透明度，避免继承暗色菜单的衰减。
+    style.DisabledAlpha = 1.0f;
+    auto rgb            = [](int r, int g, int b) {
         return ImVec4(static_cast<float>(r) / 255.0f,
                       static_cast<float>(g) / 255.0f,
                       static_cast<float>(b) / 255.0f,
