@@ -148,6 +148,48 @@ applyCompilerPreset() {
     esac
 }
 
+# 为原生 Clang 配置同一 LLVM 安装中的辅助工具。
+# Windows 交叉工具可以出现在共享 Runner 的 PATH 中，不能作为回退。
+# 开启 ThinLTO 时归档器还要识别该 Clang 生成的 LLVM bitcode。
+# 用同一发行版的 Clang 工具包提供扫描器，并使符号拆分与归档工具来自同一版本。
+# 结果只通过 CMake 参数传递，不修改后续 Windows 构建的环境。
+setNativeClangTools() {
+    local compilerPath
+    local toolDir
+    local name
+    local tool
+    local path
+
+    # 解析 Debian 的版本化符号链接，定位 /usr/lib/llvm-<版本>/bin。
+    # 保留 CC/CXX 原始名字本身，clang++ 的调用名用于选择 C++ 驱动模式。
+    compilerPath="$(realpath -- "$(command -v "${cxxCompiler}")")"
+    toolDir="$(dirname -- "${compilerPath}")"
+    nativeClangToolDir="${toolDir}"
+
+    # 显式给 CMake 指定工具，保留同一目录内的 Ninja 状态。
+    # 编译器专用归档项与通用归档项分别使用，LTO 和非 LTO 都要更新。
+    # 从编译器目录直接取工具而不查 PATH，防止旧的交叉工具路径重新进入 cache。
+    for name in AR RANLIB NM OBJCOPY OBJDUMP READELF STRIP ADDR2LINE DLLTOOL \
+        C_COMPILER_AR CXX_COMPILER_AR C_COMPILER_RANLIB CXX_COMPILER_RANLIB \
+        C_COMPILER_CLANG_SCAN_DEPS CXX_COMPILER_CLANG_SCAN_DEPS; do
+        case "${name}" in
+            *_CLANG_SCAN_DEPS) tool=clang-scan-deps ;;
+            *_AR) tool=llvm-ar ;;
+            *_RANLIB) tool=llvm-ranlib ;;
+            *) tool="llvm-${name,,}" ;;
+        esac
+        path="${toolDir}/${tool}"
+        # 找不到宿主工具时在 CMake 配置前报错，避免再次选中交叉工具链。
+        # 同一个目录内的普通文件和可执行符号链接均可用。
+        if [[ ! -x "${path}" ]]; then
+            printf 'error: native Clang tool not found: %s (compiler: %s)\n' \
+                "${path}" "${cxxCompiler}" >&2
+            exit 1
+        fi
+        nativeToolArgs+=("-DCMAKE_${name}:FILEPATH=${path}")
+    done
+}
+
 # 通过脚本位置定位仓库，支持任意工作目录调用。
 scriptDir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 projectRoot="$(cd "${scriptDir}/../.." && pwd)"
@@ -342,6 +384,20 @@ if [[ -z "${prebuiltToolchain}" || -z "${compilerTag}" ]]; then
     exit 1
 fi
 
+requireCommand cmake
+# 编译器可能是绝对路径，command -v 同样可以验证可执行性。
+requireCommand "${ccCompiler}"
+requireCommand "${cxxCompiler}"
+
+# GCC 继续使用原有的 GCC/binutils 探测。Clang 的同版本工具约束只在原生预设生效。
+# 空数组在 GCC 路径上不会给 CMake 传递空参数。
+nativeToolArgs=()
+nativeClangToolDir=""
+if [[ "${compilerPreset}" == clang19 ]]; then
+    requireCommand realpath
+    setNativeClangTools
+fi
+
 if [[ "${sourcesBuild}" == "OFF" ]]; then
     # 消费模式只拉取当前平台、编译器、配置和链接方式所需对象。
     bash "${scriptDir}/pull-lfs-for-build.sh" \
@@ -353,11 +409,6 @@ if [[ "${sourcesBuild}" == "OFF" ]]; then
         --linkage "${projectLinkage}" \
         --include-tests
 fi
-
-requireCommand cmake
-# 编译器可能是绝对路径，command -v 同样可以验证可执行性。
-requireCommand "${ccCompiler}"
-requireCommand "${cxxCompiler}"
 
 buildDir="$(projectPath "${buildDir}")"
 
@@ -390,11 +441,25 @@ export CXX="${cxxCompiler}"
 # 原生 Linux 构建必须使用系统 Vulkan，避免 Runner 注入的 Windows SDK 污染头文件搜索路径。
 unset VULKAN_SDK VK_SDK_PATH
 
+# 老构建树还会从 CMakeFiles 读取已生成的编译器元数据，覆盖命令行 cache 变量。
+# 首次迁移或 LLVM 安装路径变化时只重置 CMake 配置与探测结果，保留构建目录。
+# 迁移标记仅在生成成功后写入；配置失败时需在下一次继续执行迁移。
+# 该检查与 CMake 生成共用构建锁，两个构建不会同时重置同一份编译器元数据。
+# 用户显式要求 --fresh 时按原规则清理整棵构建树，此处不会再重复清理。
+cmakeFreshArgs=()
+nativeToolStamp="${buildDir}/.mmm-native-clang-tool-dir"
+if [[ -n "${nativeClangToolDir}" && -f "${buildDir}/CMakeCache.txt" ]] &&
+    { [[ ! -f "${nativeToolStamp}" ]] ||
+      [[ "$(<"${nativeToolStamp}")" != "${nativeClangToolDir}" ]]; }; then
+    cmakeFreshArgs+=(--fresh)
+fi
+
 # CI 与预编译构建不得写入 Runner 的用户配置目录。
 # 每轮清除外部 ELF 与旧源码身份覆盖，DEB 必须对应本次 Debian 13 的原生编译。
 # 清除旧 Vulkan cache 项，避免构建目录复用遗留 Windows SDK 路径。
 # 每次配置都覆盖缓存中的验证层状态，确保诊断开关按本次参数生效。
-cmake -U "Vulkan_*" \
+cmake "${cmakeFreshArgs[@]}" -U "Vulkan_*" \
+    "${nativeToolArgs[@]}" \
     -G "${CMAKE_GENERATOR:-Ninja}" \
     -DCMAKE_BUILD_TYPE="${buildType}" \
     -DBUILD_TESTING=ON \
@@ -419,6 +484,10 @@ cmake -U "Vulkan_*" \
     -DMMM_ENABLE_BUILD_TIMING=OFF \
     -S "${projectRoot}" \
     -B "${buildDir}"
+
+if [[ -n "${nativeClangToolDir}" ]]; then
+    printf '%s\n' "${nativeClangToolDir}" > "${nativeToolStamp}"
+fi
 
 if (( configureOnly )); then
     # 配置探针成功后立即退出，不要求生成任何目标文件。
