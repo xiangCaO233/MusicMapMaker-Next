@@ -4,6 +4,7 @@
 #include "config/StagedFile.h"
 #include "config/Utf8Path.h"
 
+#include <fmt/format.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -18,6 +19,9 @@ namespace MMM::Audio
 {
 namespace
 {
+// 源目录按规范路径聚合，清单身份另含大小和原文件时钟计数。
+// 同一路径的新版本可以复用目录布局，但只有完整身份匹配才恢复分轨。
+// 缓存选择、代次发布和调音台写入使用各自 JSON，避免进度互相覆盖。
 using Json = nlohmann::json;
 /// @brief 串行化缓存目录的统计、发布和删除，覆盖同路径源文件的不同版本。
 /// @warning 仅后台文件操作使用；不得持有混音锁时等待本锁。
@@ -28,6 +32,10 @@ std::mutex cacheMutationMutex;
 // 旧代次可能仍被另一个已捕获清单的进程读取，新发布不清理这些文件。
 
 /// @brief 固定路径哈希，保持旧版源目录兼容并生成安全的模型目录名。
+/// @param identity 已规范化的源路径或模型标识。
+/// @return 固定格式的十进制目录键，可直接作为单个路径组件。
+/// @details 目录名须对以前版本计算出的值保持稳定，不能换成实现相关的
+/// std::hash。
 std::string cacheKey(std::string_view identity)
 {
     std::uint64_t hash = 14695981039346656037ULL;
@@ -39,11 +47,15 @@ std::string cacheKey(std::string_view identity)
 /// @brief 按源文件规范路径查找缓存，清单另行校验具体文件版本。
 std::filesystem::path sourceDirectory(const StemSourceIdentity& identity)
 {
+    // 缓存在本机配置根下；源项目可能只读，目录键也不能泄露原路径层级。
     return Config::AppPaths::configRootPath() / "stem-playback" /
            cacheKey(identity.path);
 }
 
 /// @brief 旧版清单和 WAV 位于源目录；新结果按模型键独立存放。
+/// @param source 源身份对应的缓存根。
+/// @param modelKey 已校验的模型键，空值表示旧版布局。
+/// @details 新旧目录可以共存；模型缓存的子目录不会被识别为旧代次。
 std::filesystem::path modelDirectory(const std::filesystem::path& source,
                                      std::string_view             modelKey)
 {
@@ -87,6 +99,8 @@ bool writeMetadata(const std::filesystem::path& path, const Json& json)
 /// @note 目录哈希只用于查找，不能单独决定原曲匹配。
 Json identityJson(const StemSourceIdentity& identity)
 {
+    // 时间戳仍存十进制字符串，避免 JSON 数字的表示范围压缩文件时钟计数。
+    // 此值只用于同机精确比较，不解释为 Unix 时间或用于排序。
     return { { "source", identity.path },
              { "size", identity.size },
              { "modified", identity.modified } };
@@ -106,11 +120,15 @@ bool safeName(const std::string& name)
 }
 
 /// @brief 有显式选择时严格使用该模型；旧目录没有选择文件时读取旧清单。
+/// @return 空字符串表示旧版目录，空可选值表示选择文件不可用。
+/// @details 文件存在但损坏时不猜测最近模型，防止把曾停用的分轨接入播放。
+/// 显式指定模型的恢复路径独立于此选择文件。
 std::optional<std::string> activeModel(const std::filesystem::path& source)
 {
     const auto      selection = source / "active-model.json";
     const auto      value     = readMetadata(selection);
     std::error_code error;
+    // 区分缺失和无法读取，否则权限失败时可能被误当作旧缓存选择。
     if ( !std::filesystem::exists(selection, error) && !error )
         return std::string{};
     if ( !value.is_string() ) return std::nullopt;
@@ -120,6 +138,8 @@ std::optional<std::string> activeModel(const std::filesystem::path& source)
 }
 
 /// @brief 只认设备原有的分轨目录名或旧版清单，排除模型子树和选择文件。
+/// @param filename 来源目录扫描得到的单个末级路径。
+/// @details 本规则也供旧版删除使用，其他子目录和暂存项不会进入删除清单。
 bool isLegacyCacheEntry(const std::filesystem::path& filename)
 {
     const auto name = Config::pathToUtf8(filename);
@@ -129,6 +149,9 @@ bool isLegacyCacheEntry(const std::filesystem::path& filename)
 }
 
 /// @brief 统计常规文件或目录树中的逻辑大小，不跟随符号链接。
+/// @param path 已发现的缓存文件或代次目录。
+/// @param error 透传枚举、属性或文件大小查询失败。
+/// @details 统计用于提示占用；权限错误或遍历中断时由调用者舍弃不完整结果。
 std::uintmax_t cacheBytes(const std::filesystem::path& path,
                           std::error_code&             error)
 {
@@ -136,6 +159,7 @@ std::uintmax_t cacheBytes(const std::filesystem::path& path,
     if ( error ) return 0;
     if ( std::filesystem::is_regular_file(status) )
         return std::filesystem::file_size(path, error);
+    // symlink_status 保留链接本身的类型，防止扫描跳到缓存根之外。
     if ( !std::filesystem::is_directory(status) ) return 0;
     std::uintmax_t                                      bytes{};
     std::filesystem::recursive_directory_iterator       entry(path, error);
@@ -153,6 +177,7 @@ std::uintmax_t cacheBytes(const std::filesystem::path& path,
 /// @note 用 null 区分未独听和独听编号为零的首轨。
 Json settingsJson(const StemPlaybackMix& mix)
 {
+    // 设置属于代次，未混入源版本或路径身份；当前模型另由选择文件确定。
     return { { "useStems", mix.useStems },
              { "gains", mix.gains },
              { "enabled", mix.enabled },
@@ -166,6 +191,7 @@ void restoreSettings(StemPlaybackMix& mix)
 {
     // 即使恢复了 WAV，也只有同轨数的设置才能参与首次播放。
     // JSON 类型不匹配时不做隐式值转换，避免误把字符串解释为启用状态。
+    // 缓存加载已经建立了默认混音，任何提前返回都不移除可解码的声部。
     auto value = readMetadata(mix.settingsPath);
     if ( !value.is_object() || !value.contains("useStems") ||
          !value["useStems"].is_boolean() || !value.contains("gains") ||
@@ -186,6 +212,7 @@ void restoreSettings(StemPlaybackMix& mix)
             std::clamp(value["gains"][index].get<float>(), 0.0F, 1.0F);
         mix.enabled[index] = value["enabled"][index].get<bool>();
     }
+    // 独听索引独立于静音位；越界时保留默认无独听，不让损坏索引进入混音。
     if ( value.contains("solo") && value["solo"].is_number_unsigned() ) {
         const auto solo = value["solo"].get<std::uint64_t>();
         if ( solo < mix.gains.size() )
@@ -201,6 +228,8 @@ void restoreSettings(StemPlaybackMix& mix)
 /// @return 路径、大小和修改时间共同组成的本机版本。
 /// @note 只接受已存在的规则文件，失效链接不会产生可用的缓存身份。
 /// @note 修改时间使用本机文件系统精度，不尝试在机器之间迁移缓存。
+/// @details 文件时钟的纪元及计数类型由标准库决定；磁盘字段保留该计数，
+/// 使更换格式化接口后的同一源文件仍能匹配先前写下的清单。
 std::optional<StemSourceIdentity> readStemSourceIdentity(
     const std::string& filePath)
 {
@@ -215,10 +244,12 @@ std::optional<StemSourceIdentity> readStemSourceIdentity(
     // 大小和修改时间是轻量版本戳，准备路径不额外顺序读取整首歌。
     const auto time = std::filesystem::last_write_time(canonical, error);
     if ( error ) return std::nullopt;
+    // Apple libc++ 的文件时钟计数是扩展整数，std::to_string 无对应重载。
+    // 直接按原始计数输出十进制整数，保留符号与完整精度，兼容已有清单。
     return StemSourceIdentity{ Config::pathToUtf8(canonical),
                                size,
-                               std::to_string(
-                                   time.time_since_epoch().count()) };
+                               fmt::format("{}",
+                                           time.time_since_epoch().count()) };
 }
 
 /// @brief 生成与缓存路径格式兼容的模型标识。
@@ -228,6 +259,11 @@ std::string makeStemCacheModelKey(std::string_view modelIdentity)
 }
 
 /// @brief 在锁内统计各模型的独立目录；旧版数据单独列出。
+/// @param filePath 用来确定源目录及检查缓存是否仍匹配的原音频路径。
+/// @return 成功时为所有已发现的模型结果；无法完整扫描时返回空可选值。
+/// @details 可复用性是清单与源身份的轻量判断。点击载入后仍须验证 WAV
+/// 和声部设置。
+/// @warning 目录枚举及容量统计只在后台文件任务执行。
 std::optional<std::vector<StemPlaybackCacheInfo>> readStemPlaybackCache(
     const std::string& filePath)
 {
@@ -237,6 +273,7 @@ std::optional<std::vector<StemPlaybackCacheInfo>> readStemPlaybackCache(
     const auto                         source = sourceDirectory(*identity);
     std::vector<StemPlaybackCacheInfo> result;
     std::error_code                    error;
+    // 没有缓存目录是正常的空列表，存在性检查报错则继续交由遍历错误处理。
     if ( !std::filesystem::exists(source, error) && !error ) return result;
 
     // 旧版从未记录模型名，只能如实放到独立行，不能归到当前部署的模型。
@@ -251,6 +288,7 @@ std::optional<std::vector<StemPlaybackCacheInfo>> readStemPlaybackCache(
         legacy.bytes += cacheBytes(entry->path(), error);
     }
     if ( error ) return std::nullopt;
+    // 旧代次有文件就可管理，只有身份仍匹配的清单才能提供恢复入口。
     if ( hasLegacy ) {
         const auto manifest = readMetadata(source / "current.json");
         legacy.reusable     = manifest.is_object() &&
@@ -270,6 +308,7 @@ std::optional<std::vector<StemPlaybackCacheInfo>> readStemPlaybackCache(
             continue;
         const auto manifest    = readMetadata(entry->path() / "current.json");
         const bool hasManifest = manifest.is_object();
+        // 清单缺损不隐藏目录：用户仍能按稳定键识别并清除占用。
         auto       name     = hasManifest && manifest.contains("modelName") &&
                                       manifest["modelName"].is_string()
                                   ? manifest["modelName"].get<std::string>()
@@ -284,11 +323,17 @@ std::optional<std::vector<StemPlaybackCacheInfo>> readStemPlaybackCache(
                            reusable });
     }
     if ( error ) return std::nullopt;
+    // 文件系统枚举不保证顺序，展示顺序独立于模型的活动选择。
     std::ranges::sort(result, {}, &StemPlaybackCacheInfo::modelName);
     return result;
 }
 
 /// @brief 删除单个模型的所有结果，避免影响同源其他模型和选择信息。
+/// @param filePath 用于定位规范路径缓存根的原音频。
+/// @param modelKey 目标模型键，空值只处理来源目录中的旧版条目。
+/// @return 该结果是否原先被选为活动模型；文件操作失败时返回错误码。
+/// @details 调用方据返回值处理播放回退，删除操作不接触正在使用的内存目录。
+/// @warning 可能递归删除目录，只在用户确认后的文件线程执行。
 std::expected<bool, std::error_code> removeStemPlaybackCache(
     const std::string& filePath, std::string_view modelKey)
 {
@@ -301,9 +346,10 @@ std::expected<bool, std::error_code> removeStemPlaybackCache(
         return std::unexpected(
             std::make_error_code(std::errc::no_such_file_or_directory));
     const std::lock_guard lock(cacheMutationMutex);
-    const auto            source    = sourceDirectory(*identity);
-    const bool            wasActive = activeModel(source) == modelKey;
-    std::error_code       error;
+    const auto            source = sourceDirectory(*identity);
+    // 删目录前记录活动关系，完成后由音源决定是否需要退回原版播放。
+    const bool      wasActive = activeModel(source) == modelKey;
+    std::error_code error;
     if ( !modelKey.empty() ) {
         remove_all(modelDirectory(source, modelKey), error);
     } else if ( exists(source, error) && !error ) {
@@ -315,6 +361,7 @@ std::expected<bool, std::error_code> removeStemPlaybackCache(
             if ( isLegacyCacheEntry(entry->path().filename()) )
                 legacy.push_back(entry->path());
         }
+        // 枚举完整后才开始删除，避免遍历器读着一半就失去同层目录项。
         for ( const auto& path : legacy ) {
             if ( error ) break;
             remove_all(path, error);
@@ -333,6 +380,9 @@ std::expected<bool, std::error_code> removeStemPlaybackCache(
 /// @warning 批量复制只允许在后台文件池执行。
 /// @note 原曲只用于标识；应用不在源文件夹创建分轨工程资产。
 /// @note 调用方可在保存失败后继续使用已经解码的内存结果。
+/// @details 发布过程中需要同时满足源文件身份和停止令牌的约束。
+/// 新的代次目录先就绪，再替换模型清单；最后才更新全局活动模型选择。
+/// 选择文件失败后可能留下已完成的非活动模型结果，仍可从目录载入。
 std::filesystem::path storeStemPlaybackResult(
     const StemSourceIdentity& identity, std::span<const std::string> files,
     const StemPlaybackMix& mix, std::stop_token stop)
@@ -375,6 +425,8 @@ std::filesystem::path storeStemPlaybackResult(
             return {};
         names.push_back(std::move(name));
     }
+    // 整批轨道复制完才写推子文件。源版本再核对一次，缩小推理期间替换
+    // 原曲导致的失配窗口；此时退出只会清理私有暂存目录。
     if ( stop.stop_requested() ||
          !writeMetadata(stagedFiles / "mix.json", settingsJson(mix)) ||
          readStemSourceIdentity(identity.path) != identity )
@@ -386,6 +438,8 @@ std::filesystem::path storeStemPlaybackResult(
     const auto published = directory / Config::utf8ToPath(generation);
     std::filesystem::rename(stagedFiles, published, error);
     if ( error ) return {};
+    // 现在目录已存在但尚未被指向。停止或清单写入失败只回收本次产物，
+    // 保留上一清单及其所引用代次。
     if ( stop.stop_requested() ||
          !writeMetadata(directory / "current.json",
                         { { "version", 1 },
@@ -410,6 +464,10 @@ std::filesystem::path storeStemPlaybackResult(
 /// @note 加载直接读取 WAV，不查找或执行分离模型。
 /// @note 只承诺恢复完整分轨。丢失一个文件也不能发布部分混音。
 /// @note 无持久化播放状态时返回空，由已有主轨负责继续播放原曲。
+/// @param modelKey 手动指定缓存模型时使用；空可选值读取当前活动模型。
+/// @details 读取期间可能在其他线程交接新代次，整个解码过程固定已读清单指向
+/// 的代次路径；准备结束再检查原曲身份是否变更。
+/// @warning 持续文件读取和音频解码由后台任务执行。
 std::optional<StemPlaybackMix> loadStoredStemPlayback(
     const std::string& filePath, ice::ThreadPool& decodePool,
     std::optional<std::string_view> modelKey)
@@ -422,6 +480,8 @@ std::optional<StemPlaybackMix> loadStoredStemPlayback(
     if ( !model || (!model->empty() && !safeName(*model)) ) return std::nullopt;
     const auto directory = modelDirectory(source, *model);
     auto       manifest  = readMetadata(directory / "current.json");
+    // 版本、轨道数组和原曲身份是硬性门槛。旧版清单可缺模型显示名，
+    // 但仍必须提供受支持的版本以及可定位的完整代次。
     if ( !manifest.is_object() || manifest["version"] != 1 ||
          manifest["identity"] != identityJson(*identity) ||
          !manifest["generation"].is_string() ||
@@ -429,6 +489,7 @@ std::optional<StemPlaybackMix> loadStoredStemPlayback(
         return std::nullopt;
     const auto& generation =
         manifest["generation"].get_ref<const std::string&>();
+    // 只查找已经完成发布的末级目录，暂存路径和任意用户路径不能作为代次。
     if ( !safeName(generation) || !generation.ends_with("-ready") )
         return std::nullopt;
     const auto published = directory / Config::utf8ToPath(generation);
@@ -447,6 +508,7 @@ std::optional<StemPlaybackMix> loadStoredStemPlayback(
     auto catalog = StemAudition::loadAlignedFiles(files, decodePool);
     if ( !catalog || readStemSourceIdentity(identity->path) != identity )
         return std::nullopt;
+    // 默认全开、单位增益；只有完整匹配的设置文件才能把模式恢复为分轨。
     StemPlaybackMix mix{
         .catalog = std::make_shared<const StemAudition>(std::move(*catalog)),
         .gains   = std::vector<float>(files.size(), 1.0F),
@@ -463,6 +525,10 @@ std::optional<StemPlaybackMix> loadStoredStemPlayback(
 }
 
 /// @brief 选定一个已验证代次，配置先落盘，重启时才能直接进入分轨模式。
+/// @param filePath 当前音源身份，用于重新匹配最新模型清单。
+/// @param mix 已解码的候选代次和待保存的播放状态。
+/// @return 清单仍指向同一代次且混音和模型选择都写入时为真。
+/// @warning 仅显式复用缓存时调用，磁盘操作在文件线程执行。
 bool selectStoredStemPlayback(const std::string&     filePath,
                               const StemPlaybackMix& mix)
 {
@@ -478,12 +544,14 @@ bool selectStoredStemPlayback(const std::string&     filePath,
          manifest["identity"] != identityJson(*identity) ||
          !manifest["generation"].is_string() )
         return false;
+    // 已解码后的候选可能过时，锁内按最新清单重新定位期望的设置路径。
     const auto& generation =
         manifest["generation"].get_ref<const std::string&>();
     if ( !safeName(generation) ||
          mix.settingsPath !=
              directory / Config::utf8ToPath(generation) / "mix.json" )
         return false;
+    // 先写入分轨模式，再让重启后的入口指向它；旧选择仍可在第二步失败时保留。
     return writeMetadata(mix.settingsPath, settingsJson(mix)) &&
            writeMetadata(source / "active-model.json", Json(mix.cacheModelKey));
 }
