@@ -35,6 +35,7 @@ class AuditionSourceMixerNode;
 class AudioTimelineMixerNode;
 class KeySoundControlBank;
 class PreparedTimelineAudio;
+class StemPlaybackSource;
 struct PreparedAudioTimeline;
 struct BackgroundSpectrumLevels;
 class BackgroundSpectrumAnalyzer;
@@ -148,6 +149,11 @@ public:
 
     /// @brief 判断当前是否存在已构造的时间线时钟。
     [[nodiscard]] bool hasLoadedAudioTimeline() const;
+
+    /// @brief 查找同一源文件共用的本机分轨配置。
+    /// @warning 低频主轨绑定路径；规范化文件路径并短暂访问配置索引。
+    [[nodiscard]] std::shared_ptr<StemPlaybackSource> getStemPlaybackSource(
+        const std::string& filePath);
 
     /// @brief 设置整个玩家打击音区的运行时静音覆盖。
     /// @param muted 是否静音。

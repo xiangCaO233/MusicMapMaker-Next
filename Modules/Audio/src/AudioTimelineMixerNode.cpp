@@ -1,6 +1,7 @@
 #include "audio/AudioTimelineMixerNode.h"
 
 #include "audio/KeySoundControl.h"
+#include "audio/StemAudition.h"
 
 #include <algorithm>
 #include <chrono>
@@ -78,8 +79,8 @@ namespace
     AudioTimelineFrame position, AudioTimelineFrame boundary) noexcept
 {
     if ( position >= boundary ) return 0;
-    const auto distance = static_cast<std::uint64_t>(boundary) -
-                          static_cast<std::uint64_t>(position);
+    const auto     distance  = static_cast<std::uint64_t>(boundary) -
+                               static_cast<std::uint64_t>(position);
     constexpr auto MAX_FRAME = static_cast<std::uint64_t>(
         std::numeric_limits<AudioTimelineFrame>::max());
     return static_cast<AudioTimelineFrame>(std::min(distance, MAX_FRAME));
@@ -1460,34 +1461,64 @@ void AudioTimelineMixerNode::mixSegment(ice::AudioBuffer& output,
         const float effectiveVolume = span.volume * runtimeGain;
         if ( effectiveVolume <= 0.0F ) continue;
 
-        // 每个 span 复用同一 scratch；先清零以覆盖流式短读和缺失声道尾部。
-        schedule.sourceScratch.clear();
         const auto requestedFrames = static_cast<std::size_t>(span.frameCount);
         const auto sourceStart =
             static_cast<std::size_t>(span.sourceStartFrame);
-        // 同步编码器允许访问磁盘，实时节点仍只使用无阻塞读取入口。
-        const auto copiedFrames =
-            m_offlineMix
-                ? clip.audio->readOffline(
-                      schedule.sourceScratch, sourceStart, requestedFrames)
-                : clip.audio->read(
-                      schedule.sourceScratch, sourceStart, requestedFrames);
-        // 设备位置由调度器决定。短读只缩短该片段的可混合前缀，
-        // 不能借用 scratch 的尾部或改变后续片段在设备块中的位置。
-        const auto readFrames = std::min(copiedFrames, requestedFrames);
-        // span.outputStartFrame 相对本段，外层偏移把它映射到整个设备 block。
         const auto destinationStart =
             outputStartFrame + static_cast<std::size_t>(span.outputStartFrame);
         const auto channels = std::min<std::size_t>(
             outputChannels, schedule.sourceScratch.num_channels());
 
-        // 按确定片段顺序累加，重叠采样自然叠加而不覆盖已有输出。
-        for ( std::size_t channel = 0U; channel < channels; ++channel ) {
-            float* destination  = output.raw_ptrs()[channel] + destinationStart;
-            const float* source = schedule.sourceScratch.raw_ptrs()[channel];
-            for ( std::size_t frame = 0U; frame < readFrames; ++frame ) {
-                destination[frame] += source[frame] * effectiveVolume;
+        /// @brief 将某个源的连续区间累加到本段，复用调度预分配的读取缓存。
+        /// @warning 音频热路径；只有离线导出节点可访问磁盘。
+        const auto mixSource = [&](const PreparedTimelineAudio& audio,
+                                   std::size_t                  first,
+                                   std::size_t                  count,
+                                   std::size_t destinationOffset,
+                                   float       gain) {
+            // 清零覆盖短读和缺失声道，不让上一声部的残留写入本声部。
+            schedule.sourceScratch.clear();
+            const auto copied =
+                m_offlineMix
+                    ? audio.readOffline(schedule.sourceScratch, first, count)
+                    : audio.read(schedule.sourceScratch, first, count);
+            const auto readFrames = std::min(copied, count);
+            for ( std::size_t channel = 0U; channel < channels; ++channel ) {
+                float*       destination = output.raw_ptrs()[channel] +
+                                           destinationStart + destinationOffset;
+                const float* source =
+                    schedule.sourceScratch.raw_ptrs()[channel];
+                for ( std::size_t frame = 0U; frame < readFrames; ++frame )
+                    destination[frame] += source[frame] * gain;
             }
+        };
+
+        // 只改变片段的输出来源，继续使用原来的起点、结束点和播放时钟。
+        // 全部声部静音也只输出静音，不回退到原曲。
+        const StemPlaybackSource::Read stems(
+            m_offlineMix ? nullptr : clip.stemSource.get());
+        const auto* mix = stems.get();
+        if ( !mix ) {
+            mixSource(
+                *clip.audio, sourceStart, requestedFrames, 0U, effectiveVolume);
+            continue;
+        }
+        const auto tracks = mix->catalog->tracks();
+        for ( std::size_t index = 0; index < tracks.size(); ++index ) {
+            const float gain = mix->gains[index] * effectiveVolume;
+            if ( gain <= 0.0F ||
+                 !(mix->solo ? *mix->solo == index : mix->enabled[index]) )
+                continue;
+            const auto& track = tracks[index];
+            // 声部使用原曲帧坐标。首帧晚到或尾部较短时自然补静音。
+            const auto trackStart = static_cast<std::size_t>(track.startFrame);
+            const auto offset =
+                trackStart > sourceStart ? trackStart - sourceStart : 0U;
+            if ( offset >= requestedFrames ) continue;
+            const auto first = sourceStart + offset - trackStart;
+            if ( first >= track.audio->numFrames() ) continue;
+            mixSource(
+                *track.audio, first, requestedFrames - offset, offset, gain);
         }
     }
 }

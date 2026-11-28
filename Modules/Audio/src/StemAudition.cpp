@@ -15,6 +15,61 @@
 
 namespace MMM::Audio
 {
+/// @brief 返回 UI 独占的状态；尚未完成分离时共享空的默认设置。
+const StemPlaybackMix& StemPlaybackSource::mix() const noexcept
+{
+    static const StemPlaybackMix empty;
+    return m_current ? *m_current : empty;
+}
+
+/// @brief 向已有谱面调度一次性发布完整分轨组合。
+/// @warning UI 控制路径，实时回调只借用不可变快照。
+bool StemPlaybackSource::publish(StemPlaybackMix mix)
+{
+    if ( !mix.catalog || mix.catalog->tracks().empty() ) return false;
+    const auto count = mix.catalog->tracks().size();
+    if ( mix.gains.size() != count || mix.enabled.size() != count ||
+         (mix.solo && *mix.solo >= count) )
+        return false;
+    for ( auto& gain : mix.gains )
+        gain = std::isfinite(gain) ? std::clamp(gain, 0.0F, 1.0F) : 0.0F;
+
+    auto next = std::make_unique<const StemPlaybackMix>(std::move(mix));
+    // 先断开旧指针，再检查读者。顺序一致保证新进入的读者只能取得新指针，
+    // 仍可持有旧指针的读者则在本次检查之前进入读区。
+    m_active.store(next->useStems ? next.get() : nullptr);
+    if ( m_readers.load() == 0U ) {
+        m_retired.clear();
+    } else if ( m_current ) {
+        m_retired.push_back(std::move(m_current));
+    }
+    m_current = std::move(next);
+    return true;
+}
+
+/// @brief 只对实际启用分轨的来源进入读区，避免原版主轨走原子读改写。
+/// @warning 音频热路径。首次查询仅为空值测试，进入读区后重新获取指针。
+StemPlaybackSource::Read::Read(const StemPlaybackSource* source) noexcept
+{
+    if ( !source || !source->m_active.load(std::memory_order_relaxed) ) return;
+    m_source = source;
+    m_source->m_readers.fetch_add(1U);
+    m_mix = m_source->m_active.load();
+}
+
+/// @brief 离开读区，最后一个读者也仅修改计数，不析构数据。
+/// @warning 音频热路径；释放所有权由 UI 在后续发布时执行。
+StemPlaybackSource::Read::~Read()
+{
+    if ( m_source ) m_source->m_readers.fetch_sub(1U);
+}
+
+/// @brief 读取已借用的完整组合，生命周期不超过读区。
+const StemPlaybackMix* StemPlaybackSource::Read::get() const noexcept
+{
+    return m_mix;
+}
+
 /// @brief 接管经过完整验证的目录。
 /// @details 输出长度取原始资源时间轴，任一声部的实际长度可更短。
 /// 轨道所有者随目录保留，发布到播放节点后由各调度状态独立持有。

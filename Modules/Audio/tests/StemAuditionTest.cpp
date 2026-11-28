@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <expected>
+#include <memory>
 #include <span>
 #include <string>
 #include <utility>
@@ -109,6 +110,71 @@ bool verifyAlignedFiles(const std::array<std::string, 2>& paths)
     // 全零也满足求和关系，但无法证明解码成功且取到了有效声音。
     return audible;
 }
+
+/// @brief 验证两个谱面在各自起播位置替换同一主轨，并保留普通采样。
+/// @details 直接驱动真实混音回调；两份调度共用分轨状态，但偏移和时钟独立。
+bool verifySharedChartPlayback(const StemAudition& catalog)
+{
+    const auto             source   = std::make_shared<StemPlaybackSource>();
+    const auto             original = track(std::vector<float>(7, 0.875F));
+    const auto             effect   = track({ 0.0625F });
+    AudioTimelineMixerNode chartA(
+        { { .eventId    = 1,
+            .startFrame = 2,
+            .audio      = original,
+            .stemSource = source },
+          { .eventId = 2, .startFrame = 5, .audio = effect } },
+        10,
+        2);
+    AudioTimelineMixerNode chartB({ { .eventId    = 1,
+                                      .startFrame = 1,
+                                      .audio      = original,
+                                      .stemSource = source } },
+                                  10,
+                                  2);
+    ice::AudioBuffer       output(ice::ICEConfig::internal_format, 2);
+    chartA.seek(2);
+    chartA.play();
+    chartA.process(output);
+    if ( !matches(output, std::array{ 0.875F, 0.875F }) ) return false;
+    const auto generation = chartA.clockSnapshot().scheduleGeneration;
+
+    StemPlaybackMix mix{ .catalog =
+                             std::make_shared<const StemAudition>(catalog),
+                         .gains    = { 0.5F, 1.0F },
+                         .enabled  = { true, true },
+                         .useStems = true };
+    if ( !source->publish(mix) ) return false;
+    // 不定位便切换到分轨，验证同一调度从原播放头继续。
+    // 第 5 帧还有一次普通采样，其电平不应受到分轨替换影响。
+    chartA.process(output);
+    if ( !matches(output, std::array{ 0.125F, 0.75F }) ||
+         chartA.positionFrame() != 6 ||
+         chartA.clockSnapshot().scheduleGeneration != generation )
+        return false;
+
+    chartB.seek(2);
+    chartB.play();
+    chartB.process(output);
+    if ( !matches(output, std::array{ 0.0625F, 0.125F }) ) return false;
+    mix.solo = 1;
+    if ( !source->publish(mix) ) return false;
+    chartB.process(output);
+    if ( !matches(output, std::array{ 0.5F, 0.625F }) ) return false;
+
+    // 全关仍推进原有播放时钟，不泄漏原版或上一音频块的残留。
+    mix.solo.reset();
+    mix.enabled = { false, false };
+    if ( !source->publish(mix) ) return false;
+    chartA.process(output);
+    if ( !matches(output, std::array{ 0.0F, 0.0F }) ||
+         chartA.positionFrame() != 8 )
+        return false;
+    mix.useStems = false;
+    if ( !source->publish(std::move(mix)) ) return false;
+    chartB.process(output);
+    return matches(output, std::array{ 0.875F, 0.875F });
+}
 }  // namespace
 
 /// @brief 使用错位且长度不同的两个声部验证公共帧坐标和块边界切换。
@@ -128,6 +194,7 @@ int main(int argc, char** argv)
     if ( !stems || stems->tracks().size() != 2 ) {
         return 1;
     }
+    if ( !verifySharedChartPlayback(*stems) ) return 20;
 
     // 请求顺序特意与目录相反，混音结果应仍遵循节点的固定顺序。
     const std::array combined{ std::string("drums"), std::string("voice") };
