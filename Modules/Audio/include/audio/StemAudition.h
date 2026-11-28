@@ -7,11 +7,14 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace ice
@@ -128,6 +131,10 @@ struct StemPlaybackMix {
     bool useStems{};
     /// @brief 本代分轨的本机设置路径。空路径表示未能持久化的会话结果。
     std::filesystem::path settingsPath;
+    /// @brief 当前缓存的模型键；旧版未记录模型的结果使用空键。
+    std::string cacheModelKey;
+    /// @brief 写入缓存清单的模型显示名。
+    std::string cacheModelName;
 };
 
 /// @brief 共享主音轨的 UI 状态及传给谱面混音器的不可变快照。
@@ -144,6 +151,25 @@ public:
     /// @brief 发布完整调音台状态，未通过目录和参数校验时保留当前状态。
     /// @warning 控制或准备线程调用；文件读取和快照析构均在锁外。
     [[nodiscard]] bool publish(StemPlaybackMix mix);
+
+    /// @brief 仅当所属分轨仍在播放源内时更新设置，丢弃已删除代次的编辑。
+    /// @warning 仅界面实际更改控件时调用；不等待文件任务。
+    [[nodiscard]] bool publishSettings(StemPlaybackMix mix);
+
+    /// @brief 尝试独占同一源的分离及删除事务。
+    /// @warning 仅文件线程调用，锁须在同一线程释放。
+    [[nodiscard]] std::unique_lock<std::mutex> tryLockCache();
+
+    /// @brief 删除指定模型；仅移除当前模型时恢复原版播放。
+    /// @warning 后台文件操作；分离事务进行中时立即返回忙。
+    [[nodiscard]] std::error_code deleteCachedPlayback(
+        const std::string& filePath, std::string_view modelKey);
+
+    /// @brief 从磁盘激活指定模型，无需再次运行分离。
+    /// @warning 后台文件与解码操作，不在持有混音状态锁时读取磁盘。
+    [[nodiscard]] std::error_code activateCachedPlayback(
+        const std::string& filePath, std::string_view modelKey,
+        ice::ThreadPool& decodePool);
 
     /// @brief 从本机保存的结果恢复一次；已经发布的结果优先。
     /// @warning 仅资源准备或独立文件线程调用，可能等待解码。
@@ -176,16 +202,24 @@ public:
 
 private:
     /// @brief 内部发布入口，后台恢复不得覆盖用户已完成的新结果。
-    [[nodiscard]] bool publishMix(StemPlaybackMix mix, bool onlyIfEmpty);
+    [[nodiscard]] bool publishMix(StemPlaybackMix mix, bool onlyIfEmpty,
+                                  bool settingsOnly = false);
     /// @brief 写出最新快照，保持同一来源的设置写入有序。
     /// @warning 仅文件工作线程执行，落盘期间不持有混音状态锁。
     void saveQueuedSettings();
     /// @brief 短时保护非实时快照及保存任务状态。
     mutable std::mutex m_mixMutex;
+    /// @brief 仅文件线程访问，覆盖从推理开始到内存发布的完整事务。
+    std::mutex m_cacheMutex;
+    /// @brief 串行化设置落盘与切换前的保存任务，只在后台获取。
+    std::mutex m_settingsWriteMutex;
     /// @brief 归并同一来源的并发加载，不重复解码整组分离文件。
     std::once_flag m_restored;
     /// @brief 已经有文件任务负责处理本源后续更新。
     bool m_saveQueued{};
+    /// @brief 每代混音文件保留最后一份待保存快照，模型切换不会覆盖另一代。
+    std::map<std::filesystem::path, std::shared_ptr<const StemPlaybackMix>>
+        m_pendingSettings;
     /// @brief 最新发布状态，可为空；普通线程通过短锁复制持有权。
     std::shared_ptr<const StemPlaybackMix> m_current;
     /// @brief 保存可能仍被回调借用的旧快照，析构移到发布锁外。

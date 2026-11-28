@@ -17,6 +17,8 @@ struct StemSeparationModel {
     std::vector<std::string> stems;
     /// @brief 已解析相对路径的原始模型包快照。
     std::string plan;
+    /// @brief 模型描述与声部计划对应的稳定缓存键。
+    std::string cacheKey;
 };
 
 /// @brief 用户选择的可复用模型运行环境。

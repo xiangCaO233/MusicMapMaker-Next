@@ -13,7 +13,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
+#include <mutex>
 #include <string_view>
+#include <system_error>
 #include <unordered_set>
 #include <utility>
 
@@ -30,17 +33,70 @@ std::shared_ptr<const StemPlaybackMix> StemPlaybackSource::mix() const
 /// @brief 发布由用户调整或新任务准备的完整调音台状态。
 bool StemPlaybackSource::publish(StemPlaybackMix mix)
 {
+    if ( !mix.catalog ) return false;
     return publishMix(std::move(mix), false);
 }
 
-/// @brief 串行发布控制快照，恢复作业只填充仍为空的来源。
-bool StemPlaybackSource::publishMix(StemPlaybackMix mix, bool onlyIfEmpty)
+/// @brief 以声部目录身份校验编辑仍适用于当前代次。
+bool StemPlaybackSource::publishSettings(StemPlaybackMix mix)
 {
-    if ( !mix.catalog || mix.catalog->tracks().empty() ) return false;
-    const auto count = mix.catalog->tracks().size();
-    if ( mix.gains.size() != count || mix.enabled.size() != count ||
-         (mix.solo && *mix.solo >= count) )
-        return false;
+    if ( !mix.catalog ) return false;
+    return publishMix(std::move(mix), false, true);
+}
+
+/// @brief 文件任务竞争同一音轨时立即返回忙，避免阻塞线程池。
+std::unique_lock<std::mutex> StemPlaybackSource::tryLockCache()
+{
+    return std::unique_lock(m_cacheMutex, std::try_to_lock);
+}
+
+/// @brief 删除成功后取消实时替代，保留空快照阻止在途恢复重新发布。
+std::error_code StemPlaybackSource::deleteCachedPlayback(
+    const std::string& filePath, std::string_view modelKey)
+{
+    const auto lock = tryLockCache();
+    if ( !lock )
+        return std::make_error_code(std::errc::device_or_resource_busy);
+    const auto removed = removeStemPlaybackCache(filePath, modelKey);
+    if ( !removed ) return removed.error();
+    const auto current = mix();
+    // 阻止正在解码已删模型的恢复任务重新发布，同时保留其他活动模型。
+    if ( (current->catalog && current->cacheModelKey == modelKey) ||
+         (!current->catalog && *removed) )
+        static_cast<void>(publishMix({}, false));
+    return {};
+}
+
+/// @brief 载入目标模型自身的推子，启用实时分轨并保存重启选择。
+std::error_code StemPlaybackSource::activateCachedPlayback(
+    const std::string& filePath, std::string_view modelKey,
+    ice::ThreadPool& decodePool)
+{
+    const auto lock = tryLockCache();
+    if ( !lock )
+        return std::make_error_code(std::errc::device_or_resource_busy);
+    // 之前离开的模型可能还有待落盘的推子，先保存再重新解码其缓存。
+    saveQueuedSettings();
+    auto loaded = loadStoredStemPlayback(filePath, decodePool, modelKey);
+    if ( !loaded )
+        return std::make_error_code(std::errc::no_such_file_or_directory);
+    loaded->useStems = true;
+    if ( !selectStoredStemPlayback(filePath, *loaded) ||
+         !publish(std::move(*loaded)) )
+        return std::make_error_code(std::errc::io_error);
+    return {};
+}
+
+/// @brief 串行发布控制快照，恢复作业只填充仍为空的来源。
+bool StemPlaybackSource::publishMix(StemPlaybackMix mix, bool onlyIfEmpty,
+                                    bool settingsOnly)
+{
+    if ( mix.catalog ) {
+        const auto count = mix.catalog->tracks().size();
+        if ( count == 0 || mix.gains.size() != count ||
+             mix.enabled.size() != count || (mix.solo && *mix.solo >= count) )
+            return false;
+    }
     for ( auto& gain : mix.gains )
         gain = std::isfinite(gain) ? std::clamp(gain, 0.0F, 1.0F) : 0.0F;
 
@@ -50,10 +106,18 @@ bool StemPlaybackSource::publishMix(StemPlaybackMix mix, bool onlyIfEmpty)
     {
         const std::lock_guard lock(m_mixMutex);
         if ( onlyIfEmpty && m_current ) return false;
+        // 文件线程可能刚删除或替换了快照，界面不能把手中的旧目录装回。
+        if ( settingsOnly &&
+             (!m_current || m_current->catalog != next->catalog) )
+            return false;
         // 先断开旧指针，再检查读者。顺序一致保证仍可持有旧指针的读者
         // 必然在本次检查之前进入读区。
         m_active.store(next->useStems ? next.get() : nullptr);
         previous = std::exchange(m_current, std::move(next));
+        // 保存操作可能在另一模型已发布后排队，先记下编辑所属的物理文件。
+        if ( settingsOnly && !m_current->settingsPath.empty() )
+            m_pendingSettings.insert_or_assign(m_current->settingsPath,
+                                               m_current);
         if ( m_readers.load() == 0U ) {
             reclaimed.swap(m_retired);
         } else if ( previous ) {
@@ -83,8 +147,10 @@ void StemPlaybackSource::queueSettingsSave()
     if ( !files || !source ) return;
     {
         const std::lock_guard lock(m_mixMutex);
-        if ( m_saveQueued || !m_current || m_current->settingsPath.empty() )
-            return;
+        if ( m_current && !m_current->settingsPath.empty() )
+            m_pendingSettings.insert_or_assign(m_current->settingsPath,
+                                               m_current);
+        if ( m_saveQueued || m_pendingSettings.empty() ) return;
         m_saveQueued = true;
     }
     auto job = files->enqueue(
@@ -98,16 +164,21 @@ void StemPlaybackSource::queueSettingsSave()
 /// @brief 磁盘只接收有序快照；保存期间的变化合并到最新一次状态。
 void StemPlaybackSource::saveQueuedSettings()
 {
+    const std::lock_guard writer(m_settingsWriteMutex);
     for ( ;; ) {
-        const auto snapshot = mix();
-        if ( !snapshot->settingsPath.empty() &&
-             !storeStemPlaybackSettings(*snapshot) )
-            XWARN("Could not save stem playback settings");
-        const std::lock_guard lock(m_mixMutex);
-        if ( m_current == snapshot ) {
-            m_saveQueued = false;
-            return;
+        decltype(m_pendingSettings) pending;
+        {
+            const std::lock_guard lock(m_mixMutex);
+            if ( m_pendingSettings.empty() ) {
+                m_saveQueued = false;
+                return;
+            }
+            pending.swap(m_pendingSettings);
         }
+        // 不同缓存各用自己的配置文件，新编辑只合并同一个文件的更新。
+        for ( const auto& entry : pending )
+            if ( !storeStemPlaybackSettings(*entry.second) )
+                XWARN("Could not save stem playback settings");
     }
 }
 

@@ -6,6 +6,7 @@
 #    include "StemSeparationJob.h"
 #    include "audio/AudioManager.h"
 #    include "audio/StemAudition.h"
+#    include "audio/StemPlaybackStorage.h"
 #    include "config/Utf8Path.h"
 #    include "runtime/AppThreadPool.h"
 #    include "ui/utils/NativeFileDialog.h"
@@ -27,6 +28,7 @@
 #    include <stop_token>
 #    include <string>
 #    include <string_view>
+#    include <system_error>
 #    include <utility>
 #    include <vector>
 
@@ -77,6 +79,12 @@ public:
             }
             m_restorePlaybackTab = true;
             m_lastPlaybackTab.reset();
+            // 旧作业只持有原绑定的快照，切换后不再显示它们的状态。
+            m_cacheInfo    = {};
+            m_cacheQuery   = {};
+            m_cacheAction  = {};
+            m_refreshCache = true;
+            m_cacheError.clear();
             m_error.clear();
         }
         // 先收取结果，成功后分轨页可用；模式仍由用户切换。
@@ -86,6 +94,8 @@ public:
             // 重新展开可读取其他音轨控制器新部署的模型。
             if ( !m_expanded ) restoreBindings();
             drawWorkspace(dpiScale);
+        } else {
+            m_cacheVisible = false;
         }
         m_expanded = expanded;
     }
@@ -126,7 +136,34 @@ private:
              m_load.wait_for(0s) == std::future_status::ready ) {
             // 任务提交后路径发生变化时只清空 future，不播放旧主轨。
             auto result = m_load.get();
-            if ( !m_discardLoad ) install(std::move(result));
+            if ( !m_discardLoad ) {
+                if ( !result )
+                    m_error = result.error();
+                else if ( !*result )
+                    m_error = "分离结果可在本次运行使用，但写入本机缓存失败。";
+                m_refreshCache = true;
+            }
+        }
+        if ( m_cacheQuery.valid() &&
+             m_cacheQuery.wait_for(0s) == std::future_status::ready ) {
+            m_cacheInfo = m_cacheQuery.get();
+            if ( !m_cacheInfo && m_cacheError.empty() )
+                m_cacheError = "无法读取分轨缓存。";
+        }
+        if ( m_cacheAction.valid() &&
+             m_cacheAction.wait_for(0s) == std::future_status::ready ) {
+            const auto error = m_cacheAction.get();
+            if ( error == std::errc::device_or_resource_busy )
+                m_cacheError = "此音轨有其他缓存或分离任务，请稍后重试。";
+            else if ( error )
+                m_cacheError = m_activatingCache
+                                   ? "无法使用该分轨缓存，请检查文件是否完整。"
+                                   : "删除分轨缓存失败，请检查目录权限后重试。";
+            else {
+                m_labelCatalog.reset();
+                m_restorePlaybackTab = true;
+            }
+            m_refreshCache = true;
         }
         // 部署不依赖主轨路径。面板折叠时也可保存已就绪的模型。
         if ( m_deployment.valid() &&
@@ -142,8 +179,8 @@ private:
         }
     }
 
-    /// @brief 文件任务返回的不可变目录，错误在 UI 线程显示。
-    using LoadResult = std::expected<Audio::StemPlaybackMix, std::string>;
+    /// @brief 分离结果是否已落盘，失败原因在 UI 线程显示。
+    using LoadResult = std::expected<bool, std::string>;
 
     /// @brief 切换原版、分轨播放和模型设置。
     /// @warning UI 热路径；仅在播放页改变时发布新状态。
@@ -151,12 +188,15 @@ private:
     {
         if ( !m_stemSource ) return;
         const auto current = m_stemSource->mix();
+        // 同源的其他窗口也可能删除缓存，释放本窗口保留的目录引用。
+        if ( !current->catalog ) m_labelCatalog.reset();
         // 同一个源可能有不止一个控制器。另一处切换后同步当前播放页；
         // 设置页没有选中的播放页，因此仍停在原来的设置界面。
         if ( m_lastPlaybackTab && *m_lastPlaybackTab != current->useStems )
             m_restorePlaybackTab = true;
         // 用源路径隔离 ImGui 的上一次选页，避免切换主音轨时沿用另一首歌的标签。
         ImGui::PushID(m_sourcePath.c_str());
+        bool cacheVisible = false;
         if ( ImGui::BeginTabBar("StemWorkspace") ) {
             if ( ImGui::BeginTabItem(
                      "原版播放",
@@ -177,13 +217,15 @@ private:
             if ( ImGui::BeginTabItem("分离设置") ) {
                 // 返回设置页后，下次进入播放页算作新的模式选择。
                 m_lastPlaybackTab.reset();
-                drawSetup();
+                drawSetup(*current, dpiScale);
+                cacheVisible = true;
                 if ( current->catalog )
                     ImGui::TextUnformatted("分离完成，可切换到分轨播放。");
                 ImGui::EndTabItem();
             }
             ImGui::EndTabBar();
         }
+        m_cacheVisible = cacheVisible;
         ImGui::PopID();
     }
 
@@ -214,7 +256,7 @@ private:
         if ( stems == current.useStems || !current.catalog ) return;
         auto edited     = current;
         edited.useStems = stems;
-        if ( m_stemSource->publish(std::move(edited)) )
+        if ( m_stemSource->publishSettings(std::move(edited)) )
             m_stemSource->queueSettingsSave();
     }
 
@@ -222,13 +264,16 @@ private:
     /// @details 同一窗口一次只准备一个任务。运行时可取消当前部署或推理。
     /// 部署结果只参与模型选择，不更换本次分离的来源。
     /// @warning UI 热路径，仅在用户操作时提交命令。
-    void drawSetup()
+    void drawSetup(const Audio::StemPlaybackMix& current, float dpiScale)
     {
         ImGui::Spacing();
+        drawCacheControls(current);
+        ImGui::Separator();
         // 后台任务持有已经冻结的输入，禁用操作可避免进度与新选择相互矛盾。
         // 取消按钮留在禁用区域外，无需中断播放即可结束文件任务。
-        ImGui::BeginDisabled(m_load.valid() || m_deployment.valid());
-        drawSeparationControls();
+        ImGui::BeginDisabled(m_load.valid() || m_deployment.valid() ||
+                             m_cacheAction.valid());
+        drawSeparationControls(dpiScale);
         ImGui::EndDisabled();
 
         // 安装和推理的取消信号独立，各自只影响当前作业。
@@ -245,6 +290,127 @@ private:
         }
         // 统一在触发入口下方报告结果，失败时不清理已有效的模型或音轨。
         if ( !m_error.empty() ) ImGui::TextWrapped("%s", m_error.c_str());
+    }
+
+    /// @brief 展示当前音轨的所有模型缓存，由后台任务提供统计结果。
+    /// @warning UI 热路径；仅在可见性变化、任务结束或按下刷新时提交查询。
+    void drawCacheControls(const Audio::StemPlaybackMix& current)
+    {
+        if ( (!m_cacheVisible || m_refreshCache) && !m_cacheQuery.valid() &&
+             !m_cacheAction.valid() ) {
+            m_refreshCache = false;
+            updateCacheInfo();
+        }
+
+        ImGui::TextUnformatted("分轨缓存");
+        const bool busy = m_cacheAction.valid() || m_cacheQuery.valid();
+        ImGui::BeginDisabled(busy);
+        if ( FeedbackSmallButton("刷新缓存信息") ) {
+            m_cacheError.clear();
+            m_refreshCache = true;
+        }
+        ImGui::EndDisabled();
+        if ( m_cacheQuery.valid() ) ImGui::TextDisabled("正在统计…");
+        if ( m_cacheAction.valid() )
+            ImGui::TextDisabled("%s",
+                                m_activatingCache ? "正在载入…" : "正在删除…");
+        if ( !m_cacheError.empty() )
+            ImGui::TextWrapped("%s", m_cacheError.c_str());
+        if ( !m_cacheInfo ) return;
+        if ( m_cacheInfo->empty() )
+            ImGui::TextDisabled("当前音轨暂无分轨缓存。");
+        for ( const auto& cache : *m_cacheInfo ) {
+            // 同名模型的缓存目录仍有独立的控件和确认窗口。
+            ImGui::PushID(cache.modelKey.c_str());
+            drawCacheEntry(cache, current, busy || m_load.valid());
+            ImGui::PopID();
+        }
+    }
+
+    /// @brief 展示一个模型的本机文件，并将操作限制在该模型。
+    /// @warning UI 热路径；只使用后台已取得的统计，不访问文件系统。
+    void drawCacheEntry(const Audio::StemPlaybackCacheInfo& cache,
+                        const Audio::StemPlaybackMix& current, bool busy)
+    {
+        constexpr const char* confirmation = "删除此模型缓存";
+        const bool            selected =
+            current.catalog && current.cacheModelKey == cache.modelKey;
+        ImGui::Separator();
+        ImGui::TextWrapped("%s", cache.modelName.c_str());
+        if ( selected ) ImGui::TextDisabled("当前使用");
+        ImGui::TextWrapped("位置：%s", cache.directory.c_str());
+        if ( cache.bytes < 1024 )
+            ImGui::Text("占用：%llu B",
+                        static_cast<unsigned long long>(cache.bytes));
+        else if ( cache.bytes < 1024 * 1024 )
+            ImGui::Text("占用：%.2f KiB",
+                        static_cast<double>(cache.bytes) / 1024);
+        else if ( cache.bytes < 1024 * 1024 * 1024 )
+            ImGui::Text("占用：%.2f MiB",
+                        static_cast<double>(cache.bytes) / (1024 * 1024));
+        else
+            ImGui::Text(
+                "占用：%.2f GiB",
+                static_cast<double>(cache.bytes) / (1024 * 1024 * 1024));
+        if ( !cache.reusable )
+            ImGui::TextDisabled("此缓存无法用于当前版本的原音频。");
+
+        ImGui::BeginDisabled(busy || selected || !cache.reusable);
+        if ( FeedbackSmallButton("使用此缓存") )
+            startCacheAction(cache.modelKey, true);
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(busy);
+        if ( FeedbackSmallButton(confirmation) ) ImGui::OpenPopup(confirmation);
+        ImGui::EndDisabled();
+
+        if ( ImGui::BeginPopupModal(
+                 confirmation, nullptr, ImGuiWindowFlags_AlwaysAutoResize) ) {
+            ImGui::TextWrapped("删除「%s」的分轨结果和调音台设置？",
+                               cache.modelName.c_str());
+            if ( selected ) ImGui::TextUnformatted("当前音轨将切回原版播放。");
+            if ( FeedbackButton("确认删除") ) {
+                startCacheAction(cache.modelKey, false);
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if ( FeedbackButton("取消") ) ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
+    }
+
+    /// @brief 查询磁盘状态，文件作业不借用界面或模型配置。
+    /// @warning 低频提交；目录遍历由文件线程处理。
+    void updateCacheInfo()
+    {
+        if ( auto* files =
+                 Runtime::AppThreadPool::instance().getFileThreadPool() )
+            m_cacheQuery = files->enqueue([path = m_sourcePath] {
+                return Audio::readStemPlaybackCache(path);
+            });
+        if ( !m_cacheQuery.valid() ) m_cacheError = "无法提交缓存查询。";
+    }
+
+    /// @brief 后台删除或复用当前音轨的一个模型结果。
+    /// @warning 仅控件触发；关闭窗口后作业仍持有原播放源。
+    void startCacheAction(const std::string& modelKey, bool activate)
+    {
+        m_cacheError.clear();
+        m_activatingCache = activate;
+        auto& runtime     = Runtime::AppThreadPool::instance();
+        auto* decode      = runtime.get();
+        if ( auto* files = runtime.getFileThreadPool();
+             files && (!activate || decode) )
+            m_cacheAction = files->enqueue([source = m_stemSource,
+                                            path   = m_sourcePath,
+                                            modelKey,
+                                            activate,
+                                            decode] {
+                return activate ? source->activateCachedPlayback(
+                                      path, modelKey, *decode)
+                                : source->deleteCachedPlayback(path, modelKey);
+            });
+        if ( !m_cacheAction.valid() ) m_cacheError = "无法提交缓存操作。";
     }
 
     /// @brief 只在用户点击后调用原生选择器，接管 UTF-8 路径后释放 NFD 内存。
@@ -334,95 +500,140 @@ private:
         if ( !m_deployment.valid() ) m_error = "无法提交部署任务。";
     }
 
-    /// @brief 绘制目录表，按模型显示专长、已绑定状态和可用操作。
-    /// @details 目录条目和绑定位置按固定顺序对应，长路径通过悬停查看。
-    /// @warning 每帧只绘制缓存数据；点击时才解析新路径或提交后台任务。
-    void drawCatalog()
+    /// @brief 绘制同一模型的标识、环境和声部说明，标题可重新选中已有绑定。
+    /// @warning UI 热路径；只有用户选择模型时才重新验证文件。
+    void drawCatalogDetails(std::size_t index)
     {
-        // 优先把可拉伸列宽留给声部说明，部署按钮与说明文本分列。
-        constexpr auto flags =
-            ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
-            ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY;
-        // 目录增长时只扩展滚动内容，给主轨控制器保留操作和播放器空间。
-        // 以字体行距限定内容高度，维持 DPI 切换后的空间分配。
-        const auto tableHeight = 13.0F * ImGui::GetTextLineHeightWithSpacing();
-        if ( !ImGui::BeginTable(
-                 "StemModelCatalog", 4, flags, { 0.0F, tableHeight }) )
-            return;
-        ImGui::TableSetupColumn(
-            "模型", ImGuiTableColumnFlags_WidthStretch, 1.35F);
-        ImGui::TableSetupColumn(
-            "擅长声部", ImGuiTableColumnFlags_WidthStretch, 2.3F);
-        ImGui::TableSetupColumn(
-            "环境", ImGuiTableColumnFlags_WidthStretch, 0.65F);
-        ImGui::TableSetupColumn(
-            "操作", ImGuiTableColumnFlags_WidthStretch, 1.45F);
-        // 表头和内容共用列定义，缩放时仍可对齐模型状态与按钮。
-        ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableHeadersRow();
-        // 窄控制器内按可用列宽堆叠操作，避免绑定入口被右侧 Dock 裁掉。
-        // 取自当前 DPI 与皮肤字体计算，避免用固定像素阈值。
-        const float buttonSpacing = ImGui::GetStyle().ItemInnerSpacing.x;
-        const float inlineButtonWidth =
-            ImGui::CalcTextSize("部署").x + ImGui::CalcTextSize("绑定已有").x +
-            4.0F * ImGui::GetStyle().FramePadding.x + buttonSpacing;
-        for ( std::size_t index = 0; index < STEM_MODEL_CATALOG.size();
-              ++index ) {
-            const auto& entry = STEM_MODEL_CATALOG[index];
-            // 紧凑标签按目录语义换行，完整型号始终在悬停和当前模型中可见。
-            const char* label =
-                entry.catalogName ? entry.catalogName : entry.name;
-            // 渲染不探测目录是否还在。选择已有绑定时才重新验证，
-            // 已挂载磁盘暂时离线也不会拖慢每帧模型表。
-            const bool bound = !m_bindings[index].empty();
-            // 同名按钮按模型 ID 隔离，条目在将来增删或重排也不会串状态。
-            ImGui::PushID(entry.id);
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            if ( bound ) {
-                if ( FeedbackSelectable(label, m_selectedCatalog == index) ) {
-                    // 重新解析用户可能在 MMM 之外更新的模型清单。
-                    auto model = bindStemModel(entry, m_bindings[index]);
-                    if ( model )
-                        useBoundModel(index, std::move(*model), false);
-                    else
-                        m_error = model.error();
-                }
-            } else {
-                // 未部署条目只提供目录操作，不能成为当前分离目标。
-                ImGui::TextUnformatted(label);
+        const auto& entry     = STEM_MODEL_CATALOG[index];
+        const bool  bound     = !m_bindings[index].empty();
+        const bool  selected  = m_selectedCatalog == index;
+        const float available = ImGui::GetContentRegionAvail().x;
+        // 优先用完整名；只有确实放不下才用目录内预留的短标签。
+        const char* label =
+            entry.catalogName && ImGui::CalcTextSize(entry.name).x > available
+                ? entry.catalogName
+                : entry.name;
+        const auto labelSize = ImGui::CalcTextSize(label);
+        if ( bound ) {
+            const float width = std::min(available, labelSize.x);
+            if ( FeedbackSelectable(
+                     label, selected, 0, { width, labelSize.y }) ) {
+                // 重新读取绑定，兼容用户在 MMM 之外更新模型计划。
+                auto model = bindStemModel(entry, m_bindings[index]);
+                if ( model )
+                    useBoundModel(index, std::move(*model), false);
+                else
+                    m_error = model.error();
             }
-            if ( entry.catalogName && ImGui::IsItemHovered() )
-                ImGui::SetTooltip("%s", entry.name);
-            ImGui::TableSetColumnIndex(1);
-            ImGui::TextWrapped("%s", entry.stems);
-            // 说明作为声部名称的辅助层，但仍需在深色主题和行底色上可读。
-            auto descriptionColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-            descriptionColor.w *= 0.8F;
-            ImGui::PushStyleColor(ImGuiCol_Text, descriptionColor);
-            ImGui::TextWrapped("%s", entry.strengths);
-            ImGui::PopStyleColor();
-            // 状态只是持久化绑定的存在性，运行时校验交给实际选择动作。
-            ImGui::TableSetColumnIndex(2);
-            ImGui::TextUnformatted(bound ? "已绑定" : "未部署");
-            // 长路径不挤占模型说明，悬停即可核对存在哪个目录。
-            if ( bound && ImGui::IsItemHovered() ) {
-                ImGui::SetTooltip("%s", m_bindings[index].c_str());
-            }
-            ImGui::TableSetColumnIndex(3);
-            // 使用列宽判断排版，同一工具在浮窗宽屏可并排，窄 Dock 则上下排列。
-            const bool inlineButtons =
-                ImGui::GetContentRegionAvail().x >= inlineButtonWidth;
-            // 保留部署入口以便更换磁盘；部署程序会拒绝覆盖已有目录。
-            if ( FeedbackSmallButton("部署") )
-                chooseModelDirectory(index, true);
-            // 已部署到别处时直接重新绑定，跳过下载和安装。
-            if ( inlineButtons ) ImGui::SameLine(0.0F, buttonSpacing);
-            if ( FeedbackSmallButton("绑定已有") )
-                chooseModelDirectory(index, false);
-            ImGui::PopID();
+        } else {
+            ImGui::TextWrapped("%s", label);
         }
-        ImGui::EndTable();
+        if ( label == entry.catalogName )
+            ImGui::SetItemTooltip("%s", entry.name);
+
+        const char* status = selected ? "当前模型"
+                             : bound  ? "已绑定"
+                                      : "未部署";
+        const float gap    = ImGui::GetStyle().ItemSpacing.x;
+        if ( labelSize.y <= ImGui::GetTextLineHeight() &&
+             labelSize.x + gap + ImGui::CalcTextSize(status).x <= available )
+            ImGui::SameLine(0.0F, gap);
+        ImGui::TextDisabled("%s", status);
+        if ( bound ) ImGui::SetItemTooltip("%s", m_bindings[index].c_str());
+
+        ImGui::TextWrapped("%s", entry.stems);
+        // 弱化补充说明，主信息和正文仍使用当前皮肤的对比度。
+        auto descriptionColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+        descriptionColor.w *= 0.8F;
+        ImGui::PushStyleColor(ImGuiCol_Text, descriptionColor);
+        ImGui::TextWrapped("%s", entry.strengths);
+        ImGui::PopStyleColor();
+    }
+
+    /// @brief 等宽操作按钮按可用宽度并排或堆叠，避免窄面板裁剪绑定入口。
+    /// @warning UI 热路径；只有按钮激活时进入原生目录选择器。
+    void drawCatalogActions(std::size_t index, float minWidth, float height,
+                            float detailsHeight)
+    {
+        const float available =
+            std::max(1.0F, ImGui::GetContentRegionAvail().x);
+        const float gap           = ImGui::GetStyle().ItemSpacing.x;
+        const bool  inlineButtons = available >= minWidth * 2.0F + gap;
+        const float width =
+            inlineButtons ? (available - gap) * 0.5F : available;
+        // 宽面板以左侧说明的实际换行高度居中，窄面板在说明下另起一行。
+        const float actionsHeight =
+            inlineButtons ? height
+                          : 2.0F * height + ImGui::GetStyle().ItemSpacing.y;
+        if ( detailsHeight > actionsHeight )
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() +
+                                 (detailsHeight - actionsHeight) * 0.5F);
+        if ( FeedbackButton("部署", { width, height }) )
+            chooseModelDirectory(index, true);
+        if ( inlineButtons ) ImGui::SameLine(0.0F, gap);
+        if ( FeedbackButton("绑定已有", { width, height }) )
+            chooseModelDirectory(index, false);
+    }
+
+    /// @brief 模型以分隔行呈现。宽面板右侧放操作，窄面板放在说明下方。
+    /// @warning UI 热路径；目录高度、留白和断点只使用字体、DPI 和可用空间。
+    void drawCatalog(float dpiScale)
+    {
+        const auto& style    = ImGui::GetStyle();
+        const float font     = ImGui::GetFontSize();
+        const float paddingX = std::max(12.0F * dpiScale, font * 0.65F);
+        const float paddingY = std::max(10.0F * dpiScale, font * 0.5F);
+        const float gap      = std::max(8.0F * dpiScale, style.ItemSpacing.x);
+        const float minButtonWidth =
+            ImGui::CalcTextSize("绑定已有").x + paddingX * 2.0F;
+        const float buttonHeight = std::max(32.0F * dpiScale, font + paddingY);
+        const float actionWidth  = 2.0F * minButtonWidth + gap;
+        // 右侧预留完整按钮宽度，左侧仍至少容纳足够的说明文字才拆成两列。
+        const bool wide =
+            ImGui::GetContentRegionAvail().x >=
+            actionWidth + font * 21.0F + 4.0F * paddingX + style.ScrollbarSize;
+        constexpr auto flags =
+            ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
+            ImGuiTableFlags_PadOuterX | ImGuiTableFlags_ScrollY |
+            ImGuiTableFlags_SizingStretchProp;
+        // 固定视口可让目录独立滚动，保留下方的分离操作入口。
+        const float tableHeight = 17.0F * ImGui::GetTextLineHeightWithSpacing();
+        ImGui::Spacing();
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, { paddingX, paddingY });
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                            { gap, std::max(5.0F * dpiScale, font * 0.25F) });
+        if ( ImGui::BeginTable("StemModelCatalog",
+                               wide ? 2 : 1,
+                               flags,
+                               { 0.0F, tableHeight }) ) {
+            ImGui::TableSetupColumn("模型", ImGuiTableColumnFlags_WidthStretch);
+            if ( wide )
+                ImGui::TableSetupColumn("操作",
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        actionWidth + 1.0F);
+            for ( std::size_t index = 0; index < STEM_MODEL_CATALOG.size();
+                  ++index ) {
+                ImGui::PushID(STEM_MODEL_CATALOG[index].id);
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                const float detailsTop = ImGui::GetCursorScreenPos().y;
+                drawCatalogDetails(index);
+                const float detailsHeight =
+                    ImGui::GetItemRectMax().y - detailsTop;
+                if ( wide )
+                    ImGui::TableSetColumnIndex(1);
+                else
+                    ImGui::Spacing();
+                drawCatalogActions(index,
+                                   minButtonWidth,
+                                   buttonHeight,
+                                   wide ? detailsHeight : 0.0F);
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        ImGui::PopStyleVar(2);
+        ImGui::Spacing();
     }
 
     /// @brief 展示高级外部模型导入选项，兼容已有的用户自定义 MSST 工作流。
@@ -477,12 +688,12 @@ private:
     /// @brief 按目录、音源和作业的顺序组织分离面板。
     /// @details 是否可分离由当前模型、音源及有效后端共同决定。
     /// @warning 只显示缓存状态；分离及模型部署均提交后台执行。
-    void drawSeparationControls()
+    void drawSeparationControls(float dpiScale)
     {
-        // 目录是默认入口。已知模型的声部在表格中呈现，无需再重复一份列表。
+        // 目录是默认入口。已知模型的声部在目录行中呈现，无需再重复一份列表。
         if ( ImGui::CollapsingHeader("模型目录",
                                      ImGuiTreeNodeFlags_DefaultOpen) ) {
-            drawCatalog();
+            drawCatalog(dpiScale);
         }
         // 运行时解释器只属于高级配置，普通目录模型绑定后即可使用。
         if ( ImGui::CollapsingHeader("高级 · 自定义模型") )
@@ -534,40 +745,30 @@ private:
                                                    ? *m_boundEnvironment
                                                    : *m_environment,
                                  stop        = m_separationStop.get_token(),
-                                 useStems    = m_stemSource->mix()->useStems,
-                                 decode] {
-            // 工作进程生成完一组结果后才进入解码，解码池不持有界面状态。
-            return runStemSeparation(model,
-                                     source,
-                                     environment.python,
-                                     environment.backend,
-                                     environment.cpu,
-                                     *decode,
-                                     stop,
-                                     useStems);
+                                 playback    = m_stemSource,
+                                 decode]() -> LoadResult {
+            // 同源控制器不能在推理或发布期间删除缓存，也不能并行重复推理。
+            const auto lock = playback->tryLockCache();
+            if ( !lock ) return std::unexpected("此音轨已有分离或清理任务。");
+            auto result = runStemSeparation(model,
+                                            source,
+                                            environment.python,
+                                            environment.backend,
+                                            environment.cpu,
+                                            *decode,
+                                            stop,
+                                            playback->mix()->useStems);
+            if ( !result ) return std::unexpected(std::move(result.error()));
+            if ( stop.stop_requested() ) return std::unexpected("已取消分离。");
+            result->useStems  = playback->mix()->useStems;
+            const bool stored = !result->settingsPath.empty();
+            // 发布也属于事务，防止删除后安装仍滞留在 future 内的旧结果。
+            if ( !playback->publish(std::move(*result)) )
+                return std::unexpected("无法准备分轨播放。");
+            playback->queueSettingsSave();
+            return stored;
         });
         if ( !m_load.valid() ) m_error = "无法提交分离任务。";
-    }
-
-    /// @brief 将验证成功的分离结果装入当前主轨，保留该主轨的播放模式。
-    /// @warning 仅在后台任务就绪时发布；任务失败时保留上一次结果。
-    void install(LoadResult result)
-    {
-        if ( !result ) {
-            m_error = result.error();
-            return;
-        }
-        if ( !m_stemSource ) return;
-        result->useStems  = m_stemSource->mix()->useStems;
-        const bool stored = !result->settingsPath.empty();
-        // 保留当前模式；文件任务期间仍可能切回原版。
-        if ( m_stemSource->publish(std::move(*result)) ) {
-            m_stemSource->queueSettingsSave();
-            m_error =
-                stored ? "" : "分离结果可在本次运行使用，但写入本机缓存失败。";
-        } else {
-            m_error = "无法准备分轨播放。";
-        }
     }
 
     /// @brief 绘制控制谱面主轨的声部推子、启用与独听。
@@ -576,6 +777,7 @@ private:
     {
         const auto  snapshot = m_stemSource->mix();
         const auto& current  = *snapshot;
+        if ( !current.catalog ) return;
         if ( m_labelCatalog != current.catalog ) {
             // 文件名只在目录变更时转为展示文本，连续拖动不解析路径。
             m_labelCatalog = current.catalog;
@@ -708,7 +910,7 @@ private:
         }
         ImGui::PopStyleVar();
         // 同一画面上的多项输入只产生一次更新，下一音频块可看到完整组态。
-        if ( edited && m_stemSource->publish(std::move(*edited)) )
+        if ( edited && m_stemSource->publishSettings(std::move(*edited)) )
             m_stemSource->queueSettingsSave();
     }
 
@@ -717,6 +919,21 @@ private:
     /// @brief 已提交的文件任务；仅在 ready 后消费其值。
     /// @details 销毁 future 不取消解码，任务也不捕获本对象。
     std::future<LoadResult> m_load;
+    /// @brief 当前源最近一次成功取得的磁盘状态。
+    std::optional<std::vector<Audio::StemPlaybackCacheInfo>> m_cacheInfo;
+    /// @brief 目录统计结果；未完成时保留上一份展示。
+    std::future<std::optional<std::vector<Audio::StemPlaybackCacheInfo>>>
+        m_cacheQuery;
+    /// @brief 模型缓存操作回执；空错误码表示操作已提交。
+    std::future<std::error_code> m_cacheAction;
+    /// @brief 区分正在恢复缓存和正在清理缓存两种状态。
+    bool m_activatingCache = false;
+    /// @brief 上一帧设置页是否可见，重新进入时需要再次统计。
+    bool m_cacheVisible = false;
+    /// @brief 作业改变磁盘内容后安排一次重新统计。
+    bool m_refreshCache = true;
+    /// @brief 查询或删除失败信息，与模型部署错误分别显示。
+    std::string m_cacheError;
     /// @brief 当前主轨变化后丢弃尚未返回的旧轨结果。
     /// @details 旧任务仍需消费后才允许用新主轨启动分离。
     bool m_discardLoad = false;
