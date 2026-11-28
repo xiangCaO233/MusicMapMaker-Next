@@ -205,9 +205,8 @@ private:
     /// @brief 将当前可见且允许选择的 Timing 加入选区，复用原 Ctrl+A 的范围。
     void selectAllTimingEvents();
     /// @brief 按活动方案更新命中时间点的选择；经典模式保留修饰键切换。
-    /// @return 目标仍允许开始拖动时返回真，减选与经典切出均返回假。
-    bool selectTimingTarget(entt::entity entity, bool preserveGroup,
-                            bool additiveSelection);
+    /// @return 目标允许开始拖动时为真，仅点选及减选返回假。
+    bool selectTimingTarget(entt::entity entity, bool ctrl, bool shift);
 
     /// @brief 在编辑手势及其它弹窗结束后显示格式支持度警告。
     /// @warning UI 热路径：每帧只检查本地标志；配置仅在用户确认时保存。

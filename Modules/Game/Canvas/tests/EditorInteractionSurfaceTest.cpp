@@ -1071,6 +1071,7 @@ bool testUnifiedSelectionGestureOwnership()
     int                                      deletions = 0;
     std::vector<Logic::EditTool>             switchedTools;
     std::vector<Logic::CmdStartDrag>         starts;
+    std::vector<Logic::CmdSelectEntity>      clicks;
     std::optional<Logic::SelectionOperation> marqueeOperation;
     bool                                     marqueeCtrl = false;
     int   marquees = 0, updates = 0, ends = 0;
@@ -1086,6 +1087,9 @@ bool testUnifiedSelectionGestureOwnership()
             if ( const auto* start =
                      std::get_if<Logic::CmdStartDrag>(&event.command) )
                 starts.push_back(*start);
+            if ( const auto* click =
+                     std::get_if<Logic::CmdSelectEntity>(&event.command) )
+                clicks.push_back(*click);
             deletions +=
                 std::holds_alternative<Logic::CmdDeleteSelected>(event.command);
             if ( const auto* marquee =
@@ -1236,6 +1240,77 @@ bool testUnifiedSelectionGestureOwnership()
     dragMarquee(true);
     passed &= marquees == 1 && marqueeCtrl &&
               marqueeOperation == Logic::SelectionOperation::Subtract;
+
+    // 真实鼠标命令交给同一个逻辑选择入口，验证加选与切出都保留其余实体。
+    // 这个子场景同时验证画布分派和逻辑层应用，其他样本仍只观察事件。
+    // 创建独立注册表，确保结果集合不存在来自之前手势的被选实体。
+    // 两个目标是区分「翻转一个」与「替换整组」的最小样本。
+    Logic::SessionContext selection;
+    selection.currentTool = Logic::EditTool::Marquee;
+    Logic::InteractionController selectionController(selection);
+    // 拾取框中的 ID 必须在逻辑注册表内有效，否则命令被忽略时无法检验切换。
+    const auto first  = selection.noteRegistry.create();
+    const auto second = selection.noteRegistry.create();
+    selection.noteRegistry.emplace<Logic::NoteComponent>(first);
+    selection.noteRegistry.emplace<Logic::NoteComponent>(second);
+    snapshot.hitboxes.front().y = 0;
+    snapshot.hitboxes.front().h = 180;
+    mouseProfile.setSelectionOperation(Logic::SelectionOperation::Replace);
+    // ImGui 在 macOS 行为下会按其修饰键规则投递事件。
+    // 测试发出供交互入口读取的实际键，不直接覆盖输入层的 Ctrl 标志。
+    const ImGuiKey clickModifier =
+        io.ConfigMacOSXBehaviors ? ImGuiMod_Super : ImGuiMod_Ctrl;
+    /// @brief 通过正式画布事件点击一个目标并应用唯一的选择命令。
+    /// @param entity 已注册到当前隔离会话中的目标。
+    /// @param ctrl 是否在点击前持有加减选修饰键。
+    /// @return 目标与命令语义均匹配且转交逻辑层时返回真。
+    /// @details 先用释放帧更新命中与修饰键，再推进按下和松开。
+    /// 同一控制器保留鼠标历史，第二次点击可走到 ImGui 双击分类。
+    /// 命令计数在正式按下前清空，使断言只检查当前输入序列。
+    const auto clickNote = [&](entt::entity entity, bool ctrl) {
+        // 保留命中框的几何位置，只替换实体 ID，使后面的快速点击真正处于
+        // 双击位置容差内。若改变坐标，错误的双击跳转分支可能永远无法触发。
+        snapshot.hitboxes.front().entity = entity;
+        io.AddKeyEvent(clickModifier, ctrl);
+        frame(controller, snapshot, false, { 110, 100 });
+        clicks.clear();
+        starts.clear();
+        frame(controller, snapshot, true, { 110, 100 });
+        frame(controller, snapshot, false, { 110, 100 });
+        // 控件既要发出选择，也要停止建立对象拖动事务。
+        // 未指定显式集合模式且保留其他对象，才会在逻辑层走单对象切换。
+        if ( clicks.size() != 1 || clicks.front().entity != entity ||
+             (ctrl && (clicks.front().clearOthers ||
+                       clicks.front().selectionOperation || !starts.empty())) )
+            return false;
+        // 仅应用已验收的命令；失败时不通过手写的测试用集合更新模拟结果。
+        selectionController.handleCommand(clicks.front());
+        return true;
+    };
+    // 以普通点击建立原始选区。每次操作后读取真实 ECS 选区，
+    // 排除事件参数正确而逻辑层应用结果错误的情况。
+    passed &= clickNote(first, false) &&
+              selection.selectedNoteEntities.contains(first);
+    // 快速连点同一位置必须仍能选入、切出，不能让双击定位吞掉第二次。
+    // 双击阈值只对此样本放开，前面的拖动和后面的普通点选都要验证各自入口。
+    // 两次 Ctrl 点击使用同一修饰键，验证移出物件无需切换显式减选模式。
+    io.MouseDoubleClickTime = 0.3F;
+    passed &= clickNote(second, true) &&
+              selection.selectedNoteEntities.contains(first) &&
+              selection.selectedNoteEntities.contains(second);
+    passed &= clickNote(second, true) &&
+              selection.selectedNoteEntities.contains(first) &&
+              !selection.selectedNoteEntities.contains(second);
+    io.MouseDoubleClickTime = 0.0F;
+    // 普通点击应替换为唯一目标，并核对 Ctrl 尝试没有写回永久工具状态。
+    passed &=
+        clickNote(second, false) &&
+        !selection.selectedNoteEntities.contains(first) &&
+        selection.selectedNoteEntities.contains(second) &&
+        mouseProfile.selectionOperation() == Logic::SelectionOperation::Replace;
+    frame(controller, snapshot, false);
+    // 切回经典方案前恢复先前的显式模式，后续用例可能重新启用纯鼠标。
+    // 确保最后释放帧先推进，不让测试的鼠标状态进入后续键盘绑定场景。
     if ( originalOperation )
         mouseProfile.setSelectionOperation(*originalOperation);
     Interaction::synchronizeProfile("classic-desktop", true);
@@ -1244,6 +1319,8 @@ bool testUnifiedSelectionGestureOwnership()
     // 只修改内存配置，离开本用例前恢复完整绑定，避免污染后续菜单测试。
     auto& shortcuts =
         Config::AppConfig::instance().getEditorSettings().shortcutConfig;
+    // 配置作用域与画布实例不同。保存测试入口时的对象快照后，
+    // 可在同一次运行内独立验证加载迁移、格式化和快捷键分派。
     const auto originalShortcuts = shortcuts;
     // 先加载完整旧默认配置；真实提示和物理键分派都必须使用迁移后的 1／2。
     // 只改构造默认而未迁移磁盘值的实现，不能通过这一条正式加载链路。
@@ -1275,6 +1352,8 @@ bool testUnifiedSelectionGestureOwnership()
         frame(controller, snapshot, false);
         passed &= switchedTools.size() == 1 && switchedTools.front() == tool;
     }
+    // 重绑定对照把已迁移的默认键与用户主动设置分开，后续两条断言
+    // 只改变绘制绑定是否启用，确保回退行为由冲突与否决定。
     // 本场景模拟旧配置，显式把选择绑定到 2，避免新默认 1 抢先命中。
     shortcuts.toolMarquee = { true, "2", false, false, false, false };
     shortcuts.toolMove    = { true, "1", false, false, false, false };
@@ -1299,6 +1378,8 @@ bool testUnifiedSelectionGestureOwnership()
     frame(controller, snapshot, false);
     passed &= switchedTools.size() == 1 &&
               switchedTools.front() == Logic::EditTool::Marquee;
+    // 完成工具兼容分支后才引入编辑绑定，便于区分工具之间的优先级冲突
+    // 和工具对普通命令的错误拦截。
     // 编辑动作也能占用旧键；隐藏入口不能在删除命令之前抢先切换工具。
     // 删除只观察事件，不应用到实际谱面，避免测试改变用户数据。
     shortcuts.deleteSelected = shortcuts.toolMove;
@@ -1312,6 +1393,8 @@ bool testUnifiedSelectionGestureOwnership()
     frame(controller, snapshot, false);
     passed &= switchedTools.empty() && deletions == 1;
     shortcuts = originalShortcuts;
+    // 恢复完整配置对象，旧版迁移可能同时影响未单独断言的默认字段。
+    // 事件订阅最后解除，该用例的测试回调不应观察右键菜单的后续命令。
     // 清理晚于最后一次释放，确保结束命令也被事件订阅验收。
     bus.unsubscribe<Event::LogicCommandEvent>(subscription);
     // 双击配置和方案都恢复，后续菜单测试使用其原本的交互入口。

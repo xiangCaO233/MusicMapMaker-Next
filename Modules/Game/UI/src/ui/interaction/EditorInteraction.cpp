@@ -143,6 +143,15 @@ public:
             return Logic::SelectionOperation::Add;
         return m_selectionOperation;
     }
+    /// @brief Ctrl 点选在默认模式下切换目标选中状态，显式追加或减选照常。
+    /// @warning 只读取模式，不能把当前手势的临时操作写回菜单。
+    SelectionClick clickSelection(bool ctrl) const override
+    {
+        if ( ctrl &&
+             m_selectionOperation == Logic::SelectionOperation::Replace )
+            return { std::nullopt, true };
+        return { m_selectionOperation };
+    }
     /// @brief 纯鼠标默认局部擦除，不依赖 Shift 决定是否删除整条折线。
     /// @warning 仅返回 UI 本地标量，画布起笔后不再重读该设置。
     std::optional<bool> eraseWholePolyline() const override
@@ -326,6 +335,11 @@ std::optional<Logic::SelectionOperation>
 IEditorInteractionProfile::selectionOperation() const
 {
     return std::nullopt;
+}
+/// @brief 默认沿用各方案的显式点选模式，由经典画布处理物理修饰键。
+SelectionClick IEditorInteractionProfile::clickSelection(bool) const
+{
+    return { selectionOperation() };
 }
 /// @brief 默认沿用方案的选择模式，经典桌面的修饰键仍由调用方解释。
 /// @warning 仅在框选起笔时查询 UI 线程标量，不访问会话状态。
