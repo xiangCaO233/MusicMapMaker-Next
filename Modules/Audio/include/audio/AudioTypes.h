@@ -88,6 +88,9 @@ struct AudioTimelineLoadEvent {
 
     /// @brief 被引用音频资源的持久化配置。
     AudioTrackConfig resourceConfig;
+
+    /// @brief 项目主音轨可绑定本机分轨播放，普通自动采样保持独立。
+    bool isMainTrack{ false };
 };
 
 /// @brief 音频时间线加载诊断类型。

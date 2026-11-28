@@ -5,21 +5,18 @@
 #    include "StemModelCatalog.h"
 #    include "StemSeparationJob.h"
 #    include "audio/AudioManager.h"
-#    include "audio/AudioTimelineMixerNode.h"
 #    include "audio/StemAudition.h"
 #    include "config/Utf8Path.h"
 #    include "runtime/AppThreadPool.h"
 #    include "ui/utils/NativeFileDialog.h"
 #    include "ui/utils/UIWidgetUtils.h"
 
-#    include <ice/config/config.hpp>
 #    include <ice/thread/ThreadPool.hpp>
 #    include <imgui.h>
 
 #    include <array>
 #    include <chrono>
 #    include <cstddef>
-#    include <cstdint>
 #    include <expected>
 #    include <filesystem>
 #    include <future>
@@ -34,19 +31,17 @@ namespace MMM::UI
 {
 namespace
 {
-/// @brief 管理一个项目主音轨的分离与分轨试听。
-/// @details 只接受控制器发布的主轨路径。分离结果是临时监听数据，
-/// 不覆盖原主轨文件，也不更新工程资源清单。
+/// @brief 管理同一项目主音轨的分离与谱面播放模式。
+/// @details 分轨状态按源文件共享；控制器关闭后，使用该主轨的谱面仍可播放。
 class MainTrackStemPanel final : public StemSeparationPanel
 {
 public:
-    /// @brief 停止作业并从音频总线撤下分轨试听。
+    /// @brief 停止本窗口尚未完成的作业。
     /// @details 作业持有自己的路径及停止令牌，释放控制器时无需等待。
     ~MainTrackStemPanel() override
     {
         m_separationStop.request_stop();
         m_deploymentStop.request_stop();
-        releasePlayback();
     }
 
     /// @brief 绑定当前主轨，在同一控制器内绘制分离与混音。
@@ -59,13 +54,19 @@ public:
         if ( root != m_root || relativePath != m_relativePath ) {
             // 停止信号可能晚于推理完成，因此还要标记本次结果不可用。
             m_separationStop.request_stop();
-            m_discardLoad = true;
-            releasePlayback();
+            m_discardLoad  = true;
             m_root         = root;
             m_relativePath = relativePath;
+            m_sourcePath =
+                Config::pathToUtf8(root / Config::utf8ToPath(relativePath));
+            m_stemSource =
+                Audio::AudioManager::instance().getStemPlaybackSource(
+                    m_sourcePath);
+            m_restorePlaybackTab = true;
+            m_lastPlaybackTab.reset();
             m_error.clear();
         }
-        // 收取结果先于绘制。收到新分轨的这一帧就能请求切换到混音台。
+        // 先收取结果，成功后分轨页可用；模式仍由用户切换。
         pollJobs();
         const bool expanded = ImGui::CollapsingHeader("声部分离");
         if ( expanded ) {
@@ -131,35 +132,73 @@ private:
     /// @brief 文件任务返回的不可变目录，错误在 UI 线程显示。
     using LoadResult = std::expected<Audio::StemAudition, std::string>;
 
-    /// @brief 以分离和混音两个工作区容纳模型选择及完整的推子布局。
-    /// @details 尚未准备好音轨时只提供分离页。后台结果安装后切换一次，
-    /// 已载入的音轨仍可在返回分离页时继续播放。
-    /// 切页不接触播放节点的生命周期，暂停和停止由混音控件负责。
-    /// @param dpiScale 当前界面缩放，用于保持混音推子物理尺寸一致。
-    /// @warning UI 热路径，仅绘制已有状态，并按交互请求提交低频操作。
+    /// @brief 切换原版、分轨播放和模型设置。
+    /// @warning UI 热路径；仅在播放页改变时发布新状态。
     void drawWorkspace(float dpiScale)
     {
-        // 固定标签栏 ID，避免窗口显示语言改变时丢失交互状态。
-        if ( !ImGui::BeginTabBar("StemWorkspace") ) return;
-        // 分离页始终可用，因此播放上一组的同时也可准备下一组。
-        // 启动新一轮分离前，用户仍可返回已有混音调整各声部。
-        if ( ImGui::BeginTabItem("分离") ) {
-            drawSetup();
-            ImGui::EndTabItem();
+        if ( !m_stemSource ) return;
+        // 同一个源可能有不止一个控制器。另一处切换后同步当前播放页；
+        // 设置页没有选中的播放页，因此仍停在原来的设置界面。
+        if ( m_lastPlaybackTab &&
+             *m_lastPlaybackTab != m_stemSource->mix().useStems )
+            m_restorePlaybackTab = true;
+        // 用源路径隔离 ImGui 的上一次选页，避免切换主音轨时沿用另一首歌的标签。
+        ImGui::PushID(m_sourcePath.c_str());
+        if ( ImGui::BeginTabBar("StemWorkspace") ) {
+            if ( ImGui::BeginTabItem(
+                     "原版播放", nullptr, playbackTabFlags(false)) ) {
+                selectPlaybackMode(false);
+                ImGui::EndTabItem();
+            }
+            if ( m_stemSource->mix().catalog &&
+                 ImGui::BeginTabItem(
+                     "分轨播放", nullptr, playbackTabFlags(true)) ) {
+                selectPlaybackMode(true);
+                drawTrackControls(dpiScale);
+                ImGui::EndTabItem();
+            }
+            if ( ImGui::BeginTabItem("分离设置") ) {
+                // 返回设置页后，下次进入播放页算作新的模式选择。
+                m_lastPlaybackTab.reset();
+                drawSetup();
+                if ( m_stemSource->mix().catalog )
+                    ImGui::TextUnformatted("分离完成，可切换到分轨播放。");
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
         }
-        // 本次结果可用时请求切换。页签下一帧才展开时需保留请求。
-        // 混音页签取决于分轨播放节点是否已构建，模型清单本身没有可听数据。
-        const auto mixerFlags = m_showMixer ? ImGuiTabItemFlags_SetSelected
-                                            : ImGuiTabItemFlags_None;
-        if ( m_playback &&
-             ImGui::BeginTabItem("混音台", nullptr, mixerFlags) ) {
-            m_showMixer = false;
-            ImGui::Spacing();
-            drawTrackControls(dpiScale);
-            if ( !m_error.empty() ) ImGui::TextWrapped("%s", m_error.c_str());
-            ImGui::EndTabItem();
+        ImGui::PopID();
+    }
+
+    /// @brief 控制器重新绑定时恢复已发布的播放页。
+    /// @warning UI 热路径；只读取模式标量，不复制目录。
+    ImGuiTabItemFlags playbackTabFlags(bool stems) const
+    {
+        return m_restorePlaybackTab && m_stemSource->mix().useStems == stems
+                   ? ImGuiTabItemFlags_SetSelected
+                   : ImGuiTabItemFlags_None;
+    }
+
+    /// @brief 选中播放页时只改变同源主音轨的模式，设置页不改变声音。
+    /// @warning UI 热路径；只有明确的模式变化才复制并发布配置。
+    void selectPlaybackMode(bool stems)
+    {
+        const auto& current = m_stemSource->mix();
+        if ( m_restorePlaybackTab ) {
+            // ImGui 可能先绘制默认标签再处理 SetSelected，此帧保留已存模式。
+            if ( stems == current.useStems ) {
+                m_restorePlaybackTab = false;
+                m_lastPlaybackTab    = stems;
+            }
+            return;
         }
-        ImGui::EndTabBar();
+        // 页签静止时不覆盖另一处对同一来源提交的设置。
+        if ( m_lastPlaybackTab == stems ) return;
+        m_lastPlaybackTab = stems;
+        if ( stems == current.useStems || !current.catalog ) return;
+        auto edited     = current;
+        edited.useStems = stems;
+        static_cast<void>(m_stemSource->publish(std::move(edited)));
     }
 
     /// @brief 排列模型、音源及当前作业，不在混音区重复显示部署控件。
@@ -472,229 +511,107 @@ private:
         // 工作线程只持有值快照和应用级池指针，不观察 UI 的后续选择。
         // 每个任务获得新的停止状态，上一任务的取消不会污染下一次启动。
         m_separationStop = std::stop_source{};
-        m_load           = files->enqueue(
-            [model  = *m_model,
-             source = Config::pathToUtf8(m_root /
-                                         Config::utf8ToPath(m_relativePath)),
-             environment =
-                 m_boundEnvironment ? *m_boundEnvironment : *m_environment,
-             stop = m_separationStop.get_token(),
-             decode] {
-                // 工作进程生成完一组结果后才进入解码，解码池不持有界面状态。
-                return runStemSeparation(model,
-                                         source,
-                                         environment.python,
-                                         environment.backend,
-                                         environment.cpu,
-                                         *decode,
-                                         stop);
-            });
+        m_load = files->enqueue([model       = *m_model,
+                                 source      = m_sourcePath,
+                                 environment = m_boundEnvironment
+                                                   ? *m_boundEnvironment
+                                                   : *m_environment,
+                                 stop        = m_separationStop.get_token(),
+                                 decode] {
+            // 工作进程生成完一组结果后才进入解码，解码池不持有界面状态。
+            return runStemSeparation(model,
+                                     source,
+                                     environment.python,
+                                     environment.backend,
+                                     environment.cpu,
+                                     *decode,
+                                     stop);
+        });
         if ( !m_load.valid() ) m_error = "无法提交分离任务。";
     }
 
-    /// @brief 成功准备新节点后才替换上一组试听。
-    /// @param result 文件任务返回的目录或可展示错误。
-    /// @details 播放节点和目录使用同一批 PCM，清单与轨道选择只在成功后替换。
-    /// 失败时原播放头和原组合仍有效。其他主轨控制器可能正在试听，
-    /// 新节点只在用户按下播放时占用共享输出。
-    /// @warning 控制线程低频发布。音频回调中不能构造或销毁调度。
+    /// @brief 将验证成功的分离结果装入当前主轨，保留该主轨的播放模式。
+    /// @warning 仅在后台任务就绪时发布；任务失败时保留上一次结果。
     void install(LoadResult result)
     {
-        // 文件级错误先于可见状态变更，失败的局部结果始终不会接入设备。
         if ( !result ) {
             m_error = result.error();
             return;
         }
-        // 选择和显示文本分别保存，绘制时无需创建文件名或读取文件系统。
-        // 完整路径留在目录内部，只有曲名参与窗口布局。
-        // 显示名可以重复，实际选择始终用完整路径查找。
-        std::vector<std::string> labels;
-        std::vector<std::string> ids;
-        for ( const auto& track : result->tracks() ) {
-            labels.push_back(
-                Config::pathToUtf8(Config::utf8ToPath(track.id).stem()));
-            ids.push_back(track.id);
-        }
-        // 默认选择全开；作业只生成数据，播放仍由用户明确触发。
-        auto playback = result->makePlayback(ids, BLOCK_FRAMES);
-        if ( !playback ) {
+        if ( !m_stemSource ) return;
+        const auto             count = result->tracks().size();
+        Audio::StemPlaybackMix mix{
+            .catalog =
+                std::make_shared<const Audio::StemAudition>(std::move(*result)),
+            .gains    = std::vector<float>(count, 1.0F),
+            .enabled  = std::vector<bool>(count, true),
+            .useStems = m_stemSource->mix().useStems,
+        };
+        // 不按索引套用旧推子；不同模型输出的声部顺序和数量可能不同。
+        if ( m_stemSource->publish(std::move(mix)) )
+            m_error.clear();
+        else
             m_error = "无法准备分轨播放。";
-            return;
-        }
-        // 先撤下本面板的旧节点；总线上其他控制器的试听继续。
-        releasePlayback();
-        // 在同一帧同步替换标签和状态，混音页不会绘制目录的半成品。
-        // 顺序提交目录与节点。未安装过节点时旧目录为空，释放逻辑相同。
-        m_catalog  = std::move(*result);
-        m_playback = std::move(*playback);
-        m_labels   = std::move(labels);
-        m_enabled.assign(m_labels.size(), true);
-        // 独听索引属于当前目录，更换声部后重新回到全轨试听。
-        m_solo.reset();
-        // 每次载入使用新轨道的电平，旧推子不按位置错误套到不同声部。
-        m_gains.assign(m_labels.size(), 1.0F);
-        // 仅在新结果安装成功后切页，失败时留在当前页面提示重试。
-        m_showMixer = true;
-        m_error.clear();
     }
 
-    /// @brief 绘制单独的试听传输与每轨启停控件。
-    /// @details 传输按钮发往公共播放节点，设备在音频块边界应用。
-    /// 按钮意图读取请求态，进度读取已发布的实际播放位置。
-    /// @warning UI 热路径。仅在交互改变选择时建调度，不读取文件。
-    /// @param dpiScale 当前窗口 DPI 比例，统一推子和滚动区域的物理尺寸。
+    /// @brief 绘制控制谱面主轨的声部推子、启用与独听。
+    /// @warning UI 热路径；空闲帧只借用状态，控件变化才复制最新组合。
     void drawTrackControls(float dpiScale)
     {
-        // 生命周期受当前渲染调用保护，使用引用而不复制节点所有权。
-        auto& node = *m_playback;
-        // 请求状态可早于设备反馈，按钮仍应对短时间内的重复点击作出响应。
-        // 该状态只驱动传输按钮，不把后台分离的进度当作播放状态。
-        const auto state = node.requestedState();
-        if ( FeedbackButton(
-                 state == Audio::AudioTimelinePlaybackState::Playing &&
-                         !node.finished()
-                     ? "暂停"
-                     : "播放") ) {
-            if ( state == Audio::AudioTimelinePlaybackState::Playing &&
-                 !node.finished() ) {
-                node.pause();
-            } else if ( Audio::AudioManager::instance().attachStemAudition(
-                            m_playback) ) {
-                // 分轨共享一个输出槽。主动播放既可开始新组，也可取回其他
-                // 控制器播放时被切走的输出，attach 会先停掉前一个节点。
-                m_error.clear();
-                // 已结束的声源重新播放时从第一帧开始。普通暂停仍恢复原位置。
-                if ( node.finished() ) node.seek(0);
-                node.play();
-            } else {
-                m_error = "无法接入音频输出。";
-            }
+        const auto& current = m_stemSource->mix();
+        if ( m_labelCatalog != current.catalog ) {
+            // 文件名只在目录变更时转为展示文本，连续拖动不解析路径。
+            m_labelCatalog = current.catalog;
+            m_labels.clear();
+            for ( const auto& track : current.catalog->tracks() )
+                m_labels.push_back(
+                    Config::pathToUtf8(Config::utf8ToPath(track.id).stem()));
         }
-        // 停止清空播放位置。暂停按钮则保留原帧。
-        ImGui::SameLine();
-        if ( FeedbackButton("停止") ) node.stop();
-        // UI 展示秒，设备使用采样帧。转换使用与解码同一个内部采样率。
-        const double rate = ice::ICEConfig::internal_format.samplerate;
-        const double zero = 0.0;
-        // 试听零点由载入的混音组决定，未选中的通道不会改变持续时间。
-        const double endSeconds =
-            static_cast<double>(m_catalog->endFrame()) / rate;
-        // 进度上限来自最长轨道，勾选较短音轨不会收缩进度范围。
-        double position = static_cast<double>(node.positionFrame()) / rate;
-        if ( ImGui::SliderScalar("播放位置",
-                                 ImGuiDataType_Double,
-                                 &position,
-                                 &zero,
-                                 &endSeconds,
-                                 "%.3f s",
-                                 ImGuiSliderFlags_AlwaysClamp) ) {
-            // 只把当前用户的拖动送入邮箱，普通进度刷新不会反向触发定位。
-            node.seek(static_cast<Audio::AudioTimelineFrame>(position * rate));
-        }
-        // 仅在值变化后计算 ID 列表，平时保留当前调度与共享缓存。
-        bool changed = false;
-        // 每条通道独立维护推子。静音与独听只影响选轨，不重置推子值。
-        // 横向排布给各通道同一种控制结构。长音轨列表仍可滚动。
-        // 子区域覆盖推子和启停按钮，滚动时仍可看到共享时间轴。
+        std::optional<Audio::StemPlaybackMix> edited;
+        /// @brief 在本帧首次变动时创建草稿，后续控件更新同一份组合。
+        const auto edit = [&]() -> Audio::StemPlaybackMix& {
+            if ( !edited ) edited = current;
+            return *edited;
+        };
         ImGui::BeginChild("StemMixer",
                           ImVec2(0, 230 * dpiScale),
                           ImGuiChildFlags_None,
                           ImGuiWindowFlags_HorizontalScrollbar);
         for ( std::size_t index = 0; index < m_labels.size(); ++index ) {
-            // 同一文件名可能来自不同目录，固定的索引作用域隔离控件状态。
             ImGui::PushID(static_cast<int>(index));
-            // vector<bool> 的位引用不能借给 ImGui，提交时用实际 bool。
-            // 推子、启用和独听共享同一个通道作用域，避免标签重复冲突。
             ImGui::BeginGroup();
-            // 显示名按普通文本输出，文件名中的 ImGui 分隔符不参与控件 ID。
             ImGui::TextUnformatted(m_labels[index].c_str());
-            changed |=
-                ImGui::VSliderFloat("##gain",
-                                    ImVec2(46 * dpiScale, 120 * dpiScale),
-                                    &m_gains[index],
-                                    0.0F,
-                                    1.0F,
-                                    "%.2f");
-            // 使用临时 bool 保存复选框结果，变更后才发布整套轨道选择。
-            bool enabled = m_enabled[index];
-            if ( FeedbackCheckbox("启用", &enabled) ) {
-                m_enabled[index] = enabled;
-                changed          = true;
-            }
+            float gain = current.gains[index];
+            if ( ImGui::VSliderFloat("##gain",
+                                     ImVec2(46 * dpiScale, 120 * dpiScale),
+                                     &gain,
+                                     0.0F,
+                                     1.0F,
+                                     "%.2f") )
+                edit().gains[index] = gain;
+
+            // 独听不改写启用位和推子，退出时恢复原来的组合。
+            bool enabled = current.enabled[index];
+            if ( FeedbackCheckbox("启用", &enabled) )
+                edit().enabled[index] = enabled;
             ImGui::SameLine();
-            if ( FeedbackSmallButton(m_solo == index ? "退出独听" : "独听") ) {
-                // 独听是临时监听状态。退出后恢复原先的静音组合及推子位置。
-                if ( m_solo == index )
-                    m_solo.reset();
+            if ( FeedbackSmallButton(current.solo == index ? "退出独听"
+                                                           : "独听") ) {
+                if ( current.solo == index )
+                    edit().solo.reset();
                 else
-                    m_solo = index;
-                changed = true;
+                    edit().solo = index;
             }
-            // 组宽由标签和控制按钮共同决定，下一轨接在完整列之后。
             ImGui::EndGroup();
             ImGui::PopID();
-            // 末尾不延长水平布局，子窗口自行计算滚动宽度。
             if ( index + 1 < m_labels.size() ) ImGui::SameLine();
         }
-        // 无论子区域是否被裁剪，EndChild 均须与 BeginChild 配对。
         ImGui::EndChild();
-        // 单帧即使修改多个控件，也只发布一次最新的完整组合。
-        if ( changed ) {
-            // 整批发布选择，共享播放头在下一个音频块继续推进。
-            // 所有推子值仍按目录传入。静音轨重新启用时可恢复其先前电平。
-            std::vector<std::string> selected;
-            // 目录与控件共享装载顺序，无需逐帧匹配完整路径。
-            const auto tracks = m_catalog->tracks();
-            for ( std::size_t index = 0; index < tracks.size(); ++index ) {
-                // 单人监听时暂时忽略启用位，退出后按保存的启用位恢复。
-                if ( m_solo ? *m_solo == index : m_enabled[index] ) {
-                    selected.push_back(tracks[index].id);
-                }
-            }
-            if ( auto generation = m_catalog->select(
-                     node, selected, BLOCK_FRAMES, m_gains) ) {
-                // 后续切换可覆盖尚未生效的选择，只跟踪最新一代。
-                m_pendingGeneration = *generation;
-            } else {
-                m_error = "无法切换试听音轨。";
-            }
-        }
-        // 只在存在发布请求时观察代次，确认音频线程接管后再回收退役调度。
-        // 若窗口折叠，旧状态会暂留至恢复绘制或下一次关闭。
-        if ( m_pendingGeneration != 0 ) {
-            static_cast<void>(node.reclaimRetiredSchedules());
-            // 时钟快照跨字段一致，竞争时下一帧再观察，无须同步等待。
-            const auto clock = node.clockSnapshot();
-            if ( clock.valid &&
-                 clock.scheduleGeneration >= m_pendingGeneration ) {
-                // 发布代次确认后再扫一次，处理两次观察间音频线程的退役。
-                static_cast<void>(node.reclaimRetiredSchedules());
-                m_pendingGeneration = 0;
-            }
-        }
+        // 同一画面上的多项输入只产生一次更新，下一音频块可看到完整组态。
+        if ( edited )
+            static_cast<void>(m_stemSource->publish(std::move(*edited)));
     }
 
-    /// @brief 静音并移除节点，再释放界面持有的目录和播放引用。
-    /// @details 节点调度在总线快照中拥有轨道生命周期，目录可独立释放。
-    /// 解绑按节点身份判断，关闭未播放的控制器不会中断其他音轨的试听。
-    /// 失效的代次也随目录清空，避免新节点代次从头计数时误判。
-    /// @warning 只能从 UI 控制线程调用。节点退役遵循引擎现有总线规则。
-    void releasePlayback()
-    {
-        if ( m_playback ) {
-            // 先停止再解绑，旧总线快照即使存留一块也能收到停止命令。
-            m_playback->stop();
-            Audio::AudioManager::instance().detachStemAudition(m_playback);
-            m_playback.reset();
-        }
-        m_catalog.reset();
-        m_pendingGeneration = 0;
-        m_showMixer         = false;
-    }
-
-    /// @brief 试听暂存容量。较大的回调输出由节点分段填充。
-    /// @details 固定上限避免随着歌曲长短调整实时暂存。
-    static constexpr std::size_t BLOCK_FRAMES = 1024;
     /// @brief 上一帧区域已展开，用于按交互刷新模型绑定。
     bool m_expanded = false;
     /// @brief 已提交的文件任务；仅在 ready 后消费其值。
@@ -703,21 +620,18 @@ private:
     /// @brief 当前主轨变化后丢弃尚未返回的旧轨结果。
     /// @details 旧任务仍需消费后才允许用新主轨启动分离。
     bool m_discardLoad = false;
-    /// @brief 等待音频块接纳的最新选择代次。
-    /// @details 零表示没有需要确认的调度，按钮静止时无需访问退役栈。
-    std::uint64_t m_pendingGeneration = 0;
-    /// @brief 当前试听可用的声部目录。
-    /// @details 目录与节点各自保有轨道缓存。拆图与目录的释放顺序无关。
-    std::optional<Audio::StemAudition> m_catalog;
-    /// @brief 工具与主混音总线共享节点，回调结束前持续有效。
-    /// @warning 热路径借用引用，仅在安装或释放时变更共享所有权。
-    std::shared_ptr<Audio::AudioTimelineMixerNode> m_playback;
-    /// @brief 打开时计算的可见文件名。
-    /// @details 与目录同序，切换选择时用索引关联，不用可见名称做身份。
+    /// @brief 当前文件在应用会话中共用的分轨状态，关闭本面板不丢弃它。
+    std::shared_ptr<Audio::StemPlaybackSource> m_stemSource;
+    /// @brief 当前源的绝对路径，仅在绑定变化时计算。
+    std::string m_sourcePath;
+    /// @brief 标签缓存所属的目录，仅在目录变化时更新。
+    std::shared_ptr<const Audio::StemAudition> m_labelCatalog;
+    /// @brief 目录顺序对应的可见声部名称。
     std::vector<std::string> m_labels;
-    /// @brief 当前组合，按目录顺序排列。
-    /// @details 使用本地 UI 状态，不从实时节点反向查询每个轨道。
-    std::vector<bool> m_enabled;
+    /// @brief 刚绑定时将标签选中状态与共享模式同步。
+    bool m_restorePlaybackTab = true;
+    /// @brief 上次实际绘制的播放页，避免两个同源控制器每帧争夺播放模式。
+    std::optional<bool> m_lastPlaybackTab;
     /// @brief 最近一次操作失败的提示，可包含后台返回的本地错误。
     /// @details 拥有完整文本，避免后台 future 销毁后仍持有借用字符串。
     std::string m_error;
@@ -745,15 +659,8 @@ private:
     /// @brief 部署停止信号与分离任务独立，避免跨作业取消。
     /// @details 每次提交前替换，已排队任务只持有对应代次的 token。
     std::stop_source m_deploymentStop;
-    /// @brief 新混音结果到达后切换页签。呈现后交还页签控制权。
-    /// @details 在页签首次获选后清空，避免覆盖用户后续的鼠标选择。
-    bool m_showMixer = false;
     /// @brief 本次推理取消信号，工作线程持有自身 token。
     std::stop_source m_separationStop;
-    /// @brief 目录索引对应推子位置，关轨和独听不改变设定。
-    std::vector<float> m_gains;
-    /// @brief 临时独听通道索引，空值播放已启用的组合。
-    std::optional<std::size_t> m_solo;
 };
 }  // namespace
 

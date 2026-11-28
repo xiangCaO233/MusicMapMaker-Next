@@ -2,10 +2,12 @@
 
 #include "audio/AudioTimelineTransport.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -108,5 +110,67 @@ private:
     AudioTimelineFrame m_sourceEndFrame;
     /// @brief 固定输入顺序确定浮点求和顺序。
     std::vector<StemAuditionTrack> m_tracks;
+};
+
+/// @brief 同一主音轨共用的分离结果、播放模式和调音台设置。
+struct StemPlaybackMix {
+    /// @brief 后台准备完毕的声部目录；为空时只能播放原版。
+    std::shared_ptr<const StemAudition> catalog;
+    /// @brief 目录顺序对应的线性推子值。
+    std::vector<float> gains;
+    /// @brief 目录顺序对应的通道启用状态。
+    std::vector<bool> enabled;
+    /// @brief 独听时只输出指定通道，保留各通道的启用设置。
+    std::optional<std::size_t> solo;
+    /// @brief 是否用分轨混音替换谱面中同源的主音轨。
+    bool useStems{};
+};
+
+/// @brief 共享主音轨的 UI 状态及传给谱面混音器的不可变快照。
+/// @details
+/// 界面线程独占状态写入。调度持有此对象，分轨发布不替换调度或重置播放头。
+class StemPlaybackSource final
+{
+public:
+    /// @brief 借用界面线程当前状态，任何新发布都会使引用失效。
+    [[nodiscard]] const StemPlaybackMix& mix() const noexcept;
+
+    /// @brief 发布完整调音台状态，未通过目录和参数校验时保留当前状态。
+    /// @warning 只在界面线程调用；可能分配或释放快照，回调不会执行此操作。
+    [[nodiscard]] bool publish(StemPlaybackMix mix);
+
+    /// @brief 在一次实时混音操作中借用分轨快照。
+    /// @warning 音频热路径：原版播放只查询一次指针；分轨播放不分配、不等待。
+    class Read final
+    {
+    public:
+        /// @brief 读取当前启用的混音，空来源或原版模式均返回空。
+        explicit Read(const StemPlaybackSource* source) noexcept;
+        /// @brief 结束借用，由界面线程负责回收退役快照。
+        ~Read();
+        Read(const Read&)            = delete;
+        Read& operator=(const Read&) = delete;
+        /// @brief 返回当前借用的分轨配置，原版模式为空。
+        [[nodiscard]] const StemPlaybackMix* get() const noexcept;
+
+    private:
+        /// @brief 需要退出读区时记录来源；由调用方的调度保活。
+        const StemPlaybackSource* m_source{};
+        /// @brief 本次读取的只读调音台状态。
+        const StemPlaybackMix* m_mix{};
+    };
+
+private:
+    /// @brief 最新界面状态，界面线程独占，可为空。
+    std::unique_ptr<const StemPlaybackMix> m_current;
+    /// @brief GUI 保留可能仍被回调借用的旧快照。
+    std::vector<std::unique_ptr<const StemPlaybackMix>> m_retired;
+    /// @brief 当前实时配置；空值表示原版。
+    /// @warning UI
+    /// 写、音频线程读。与读者计数保持顺序一致，避免旧配置被提前释放。
+    std::atomic<const StemPlaybackMix*> m_active{};
+    /// @brief 音频线程正在进行的分轨借用数。
+    /// @warning UI 读取以回收快照。进入必须早于指针读取，形成跨原子的回收保证。
+    mutable std::atomic<unsigned> m_readers{};
 };
 }  // namespace MMM::Audio

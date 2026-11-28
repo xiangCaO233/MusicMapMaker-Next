@@ -11,7 +11,7 @@ namespace MMM::UI
 class StemSeparationPanel
 {
 public:
-    /// @brief 释放分轨试听，并通知仍在运行的后台任务取消。
+    /// @brief 通知本面板尚未完成的后台任务取消。
     virtual ~StemSeparationPanel() = default;
 
     /// @brief 从控制器绑定的项目主轨显示模型目录、分离和混音。

@@ -144,6 +144,8 @@ private:
     std::size_t m_frameCount{ 0U };
 };
 
+class StemPlaybackSource;
+
 /// @brief 已在非实时线程完成解析和缓存的时间线音频片段。
 struct PreparedTimelineClip {
     /// @brief 谱面采样物件的稳定标识。
@@ -162,6 +164,9 @@ struct PreparedTimelineClip {
     /// 共享所有权仅用于保证音频回调期间缓存不被资源线程释放；该指针只在构造
     /// 和销毁节点时复制，process 热路径不会复制 shared_ptr。
     std::shared_ptr<const PreparedTimelineAudio> audio;
+    /// @brief 主音轨共用的可选分轨配置；离线导出与普通音效没有此绑定。
+    /// @warning 调度保活 UI 共享源，回调仅借用指针，热路径不复制所有权。
+    std::shared_ptr<const StemPlaybackSource> stemSource;
 };
 
 /// @brief 将多个自动采样按统一时间线混合的实时音频节点。

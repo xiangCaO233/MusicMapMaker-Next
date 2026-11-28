@@ -1162,6 +1162,80 @@ bool testStemAuditionRouting(MMM::Audio::AudioManager& manager,
     return audible && muted && restored;
 }
 
+/// @brief 验证活动谱面通过同源文件共享实时分轨，普通采样仍读原文件。
+/// @warning 集成测试专用；有界等待 SDL 测试设备产生可观察的电平。
+bool testSharedChartStemRouting(MMM::Audio::AudioManager& manager,
+                                const std::string&        samplePath)
+{
+    using namespace MMM::Audio;
+    auto* decode = MMM::Runtime::AppThreadPool::instance().get();
+    if ( !decode ) return false;
+    auto catalog =
+        StemAudition::loadAlignedFiles(std::array{ samplePath }, *decode);
+    if ( !catalog ) return false;
+
+    // 用带点目录的控制器路径绑定，谱面按规范路径装载同一首歌。
+    const auto path   = MMM::Config::utf8ToPath(samplePath);
+    const auto source = manager.getStemPlaybackSource(
+        MMM::Config::pathToUtf8(path.parent_path() / "." / path.filename()));
+    StemPlaybackMix mix{
+        .catalog  = std::make_shared<const StemAudition>(std::move(*catalog)),
+        .gains    = { 1.0F },
+        .enabled  = { true },
+        .useStems = true,
+    };
+    // 循环消除短素材自然播完的干扰。不同谱面使用独立 ID 和起播位置。
+    const double duration = static_cast<double>(mix.catalog->endFrame()) /
+                            ice::ICEConfig::internal_format.samplerate;
+    const auto   play = [&](const char* fingerprint, double start, bool main) {
+        manager.pause();
+        const auto loaded =
+            manager.loadAudioTimeline({ AudioTimelineLoadEvent{
+                                          .eventId               = 1,
+                                          .resourceKey           = fingerprint,
+                                          .filePath              = samplePath,
+                                          .effectiveStartSeconds = start,
+                                          .isMainTrack           = main,
+                                      } },
+                                      start + duration,
+                                      fingerprint);
+        if ( !loaded.success ||
+             !manager.setAudioTimelineLoop(start, start + duration) )
+            return false;
+        manager.seek(start);
+        manager.play();
+        return waitUntil([&] {
+            const auto clock = manager.getAudioTimelineClockSnapshot();
+            return clock.valid &&
+                   clock.scheduleGeneration == loaded.scheduleGeneration;
+        });
+    };
+    auto audible = [&] { return manager.getMainTrackLevelL() > 0.0F; };
+    auto silent  = [&] { return manager.getMainTrackLevelL() == 0.0F; };
+
+    // 全关后必须停止发声；后续用相同文件的普通采样必须仍可播放。
+    const bool first  = source->publish(mix) &&
+                        play("stem-chart-one", 0.0, true) && waitUntil(audible);
+    mix.enabled       = { false };
+    const bool second = first && source->publish(mix) && waitUntil(silent) &&
+                        play("stem-chart-two", 0.02, true) && waitUntil(silent);
+    // 在第二张谱面单独恢复声部，确认其当前调度也确实接收共享状态更新。
+    mix.enabled         = { true };
+    const bool shared   = second && source->publish(mix) && waitUntil(audible);
+    mix.enabled         = { false };
+    const bool effect   = shared && source->publish(mix) && waitUntil(silent) &&
+                          play("stem-effect", 0.0, false) && waitUntil(audible);
+    mix.useStems        = false;
+    const bool restored = source->publish(std::move(mix)) &&
+                          play("stem-chart-original", 0.0, true) &&
+                          waitUntil(audible);
+    manager.clearAudioTimelineLoop();
+    manager.unloadAudioTimeline(false);
+    if ( !(first && shared && effect && restored) )
+        XERROR("Shared chart stem routing failed");
+    return first && shared && effect && restored;
+}
+
 }  // namespace
 
 /// @brief 运行 AudioManager 自动采样时间线集成测试。
@@ -1217,6 +1291,7 @@ int main(int argc, char** argv)
         testSharedMainStretcher(manager, samplePath) &&
         testAuditionVolumeRouting(manager, samplePath) &&
         testStemAuditionRouting(manager, samplePath) &&
+        testSharedChartStemRouting(manager, samplePath) &&
         testQueuedSoundEffectShutdown(manager, samplePath);
 
     // 先停止音频后端和释放图，再关闭资源线程池。

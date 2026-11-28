@@ -5,6 +5,7 @@
 #include "audio/AudioTimelineResourceProcessor.h"
 #include "audio/AuditionSourceMixerNode.h"
 #include "audio/KeySoundControl.h"
+#include "audio/StemAudition.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
@@ -218,6 +219,25 @@ bool waitForTimelineScheduleRetirement(AudioTimelineMixerNode& node,
 
 }  // namespace
 
+/// @brief 使用实际源文件身份绑定分轨结果，资源 ID 不跨谱面或项目假定唯一。
+std::shared_ptr<StemPlaybackSource> AudioManager::getStemPlaybackSource(
+    const std::string& filePath)
+{
+    return m_timeline->stemPlaybackSource(filePath);
+}
+
+/// @brief 后台准备和界面绑定共用索引；规范化和分离均在锁外完成。
+std::shared_ptr<StemPlaybackSource>
+AudioManager::TimelinePlayback::stemPlaybackSource(const std::string& filePath)
+{
+    auto key = makeAudioPathSyncKey(filePath);
+    if ( key.empty() ) return {};
+    std::lock_guard lock(m_stemSourcesMutex);
+    auto&           source = m_stemSources[std::move(key)];
+    if ( !source ) source = std::make_shared<StemPlaybackSource>();
+    return source;
+}
+
 /// @brief 查找或建立自动采样与 HitEffect 共用的资源 DSP PCM。
 /// @param filePath 用于构造处理缓存身份的音频路径。
 /// @param track 已完成解码的源音轨。
@@ -360,6 +380,9 @@ std::shared_ptr<PreparedAudioTimeline> AudioManager::TimelinePlayback::prepare(
                        std::shared_ptr<const PreparedTimelineAudio>>
         preparedAudioByProcessingKey;
     preparedAudioByProcessingKey.reserve(events.size());
+    // 同源多次触发共用调音台；只为主音轨解析一次源文件身份。
+    std::unordered_map<std::string, std::shared_ptr<StemPlaybackSource>>
+          stemSourcesByPath;
     auto& firstLoadedTrack = prepared->m_firstTrack;
 
     // 同一文件可能被多个事件使用；一次收集离线需求，避免逐资源扫描整张事件表。
@@ -457,6 +480,13 @@ std::shared_ptr<PreparedAudioTimeline> AudioManager::TimelinePlayback::prepare(
             event.resourceConfig.muted
                 ? 0.0F
                 : sanitizedResourceVolume(event.resourceConfig.volume);
+        std::shared_ptr<StemPlaybackSource> stemSource;
+        if ( event.isMainTrack ) {
+            auto [source, inserted] =
+                stemSourcesByPath.try_emplace(event.filePath);
+            if ( inserted ) source->second = stemPlaybackSource(event.filePath);
+            stemSource = source->second;
+        }
         preparedClips.push_back(PreparedTimelineClip{
             // 负 startFrame 由 MixerNode 在时间线零点裁切。
             .eventId       = event.eventId,
@@ -465,6 +495,7 @@ std::shared_ptr<PreparedAudioTimeline> AudioManager::TimelinePlayback::prepare(
             .bgmTrackIndex = event.bgmTrackIndex,
             .volume = resourceVolume * sanitizedEventVolume(event.eventVolume),
             .audio  = std::move(preparedAudio),
+            .stemSource = std::move(stemSource),
         });
     }
 
@@ -908,6 +939,7 @@ bool AudioManager::loadBGM(const std::string&      filePath,
                                               .effectiveStartSeconds = 0.0,
                                               .eventVolume           = 1.0F,
                                               .resourceConfig        = config,
+                                              .isMainTrack           = true,
                                           } },
                                           0.0,
                                           fingerprint);

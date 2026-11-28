@@ -180,6 +180,7 @@ CanonicalBytes makeCanonicalEventBytes(
     appendString(bytes, event.filePath);
     appendFloat(bytes, event.eventVolume);
     appendTrackConfig(bytes, event.resourceConfig);
+    if ( event.isMainTrack ) bytes.push_back(1U);
     return bytes;
 }
 
@@ -496,6 +497,7 @@ AudioTimelineDescriptor buildAudioTimelineDescriptor(
             event.filePath       = pathIterator->second;
             event.resourceConfig = resource->m_config;
             if ( resource->m_type == AudioTrackType::Main ) {
+                event.isMainTrack = true;
                 // 主音轨倍率与音高属于全局实时预览；旧项目保存的资源值不得
                 // 触发整首音频离线处理，也不应改变谱面时长或描述符指纹。
                 event.resourceConfig.playbackSpeed = 1.0F;

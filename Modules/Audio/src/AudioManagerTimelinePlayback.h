@@ -12,6 +12,9 @@ namespace MMM::Audio
 /// @details 控制侧持有可修改的调度数据。回调仅操作已存在的节点和其发布的
 /// 不可变调度，不在这里分配或等待。
 struct AudioManager::TimelinePlayback {
+    /// @brief 按源文件复用分轨状态供界面与准备线程关联。
+    std::shared_ptr<StemPlaybackSource> stemPlaybackSource(
+        const std::string& filePath);
     /// @brief 解码唯一文件并生成可提交片段，不修改活动混音图。
     /// @warning 文件工作线程可执行。缓存未命中时允许等待解码及离线处理。
     std::shared_ptr<PreparedAudioTimeline> prepare(
@@ -93,6 +96,12 @@ struct AudioManager::TimelinePlayback {
     std::size_t m_missingClipCount{ 0U };
 
 private:
+    /// @brief 只保护主音轨分轨索引，实时混音不访问该容器。
+    std::mutex m_stemSourcesMutex;
+    /// @brief 会话期间保留分轨结果及模式，切谱或关闭控制器可继续复用。
+    std::unordered_map<std::string, std::shared_ptr<StemPlaybackSource>>
+        m_stemSources;
+
     /// @brief 保护分析来源交换，不用于加载、设备访问或实时回调。
     mutable std::mutex m_bgmAnalysisMutex;
     /// @brief 独立发布的可视化音轨、时长和代次。
