@@ -1,16 +1,20 @@
 #include "ui/walkthrough/WelcomeView.h"
 
+#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
 #include "config/skin/translation/Translation.h"
+#include "event/logic/LogicCommandEvent.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/DockNodeIds.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughModel.h"
 #include "ui/walkthrough/WalkthroughService.h"
 #include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
+#include <array>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <string>
@@ -34,6 +38,8 @@
 /// - WelcomeBody 是唯一纵向滚动区域；
 /// - WelcomeContent 在可用宽度内居中并限制阅读行长；
 /// - 首页目录最大宽度大于主题正文；
+/// - 桌面操作方式位于演练目录之前，两部分跟随同一视图滚动；
+/// - 触控外壳继续使用自己的交互入口，首页不引导切换到桌面方案；
 /// - “启动时显示”复选框固定在滚动区下方；
 /// - 保存错误会扩展页脚预留高度而不覆盖正文；
 /// - 动态窗口标题始终以 ###WelcomePage 固定内部 ID。
@@ -60,12 +66,84 @@
 /// 持久化边界：
 /// - 页面可见帧不扫描教程或图片目录；
 /// - 切换首页、章节或主题不写配置文件；
-/// - 只有用户改变“启动时显示”时调用 AppConfig::save；
+/// - 只有用户点击操作方案或改变“启动时显示”时可能调用 AppConfig::save；
 /// - 保存失败只显示错误，不回滚用户在内存中的即时选择；
 /// - 演练进度保存由 Service 在进度真正变化时独立处理。
 
 namespace MMM::UI
 {
+namespace
+{
+/// @brief 在演练目录前按长条和折线的绘制习惯介绍桌面操作方案。
+/// @param scale 欢迎页的内容缩放，用于布局断点和按钮高度。
+/// @param saveFailed 页脚共用的保存错误状态，允许重试当前选择。
+/// @warning 只在桌面首页绘制；配置发布与写盘仅由用户点击触发。
+/// @details 仅提交配置请求，UIManager 在安全帧完成运行态交接，
+/// 保证旧方案能够先收尾正在进行的鼠标或键盘手势。
+/// 选择的是编辑器全局偏好，后续演练使用同一个方案解释画布输入。
+/// 访问者可以浏览或直接进入演练；不响应引导也会保留原有方案。
+/// @post 成功保存后，本地配置和发往逻辑层的请求使用同一个方案标识。
+void drawWelcomeInteractionGuide(float scale, bool& saveFailed)
+{
+    auto& config    = Config::AppConfig::instance();
+    auto& requested = config.getEditorSettings().m_interactionProfileId;
+    // 与演练标题采用同一级字号，正文恢复到欢迎页的默认字号。
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.2F);
+    ImGui::TextUnformatted(TR_CACHE("ui.welcome.interaction.title").data());
+    ImGui::PopFont();
+    ImGui::TextWrapped("%s", TR_CACHE("ui.welcome.interaction.prompt").data());
+    ImGui::Spacing();
+
+    // 复用设置页已有的本地化方案名；ID 与配置值一致，不随语言改变。
+    /// @brief 将稳定的方案标识、本地化名称和手势说明绑定为一个选项。
+    struct Choice {
+        const char* id;            ///< 持久化的操作方案标识。
+        const char* name;          ///< 按钮上使用的设置页方案名称。
+        const char* instructions;  ///< 长条和折线对应的手势说明。
+    };
+    const std::array choices{
+        Choice{ "classic-desktop",
+                TR_CACHE("ui.interaction.classic_desktop").data(),
+                TR_CACHE("ui.welcome.interaction.shift_drag").data() },
+        Choice{ "mouse-only",
+                TR_CACHE("ui.interaction.mouse_only").data(),
+                TR_CACHE("ui.welcome.interaction.mouse_drag").data() },
+    };
+    // 宽窗口并排比较，窄窗口依次展示。说明跟随各列换行，不加横向滚动。
+    const int columns =
+        ImGui::GetContentRegionAvail().x >= 460.0F * scale ? 2 : 1;
+    if ( !ImGui::BeginTable(
+             "WelcomeInteractionGuide",
+             columns,
+             ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoPadOuterX) )
+        return;
+    for ( const auto& choice : choices ) {
+        // 同一循环支持一行两列或两行单列，缩放时按钮 ID 保持不变。
+        // 选中外观读取已请求的配置，设置页改动后无需单独同步欢迎页状态。
+        ImGui::TableNextColumn();
+        ImGui::PushID(choice.id);
+        const bool  selected = requested == choice.id;
+        const float width    = std::max(1.0F, ImGui::GetContentRegionAvail().x);
+        const float height   = std::max(ImGui::GetFrameHeight(), 32.0F * scale);
+        if ( FeedbackSelectableButton(
+                 choice.name, selected, { width, height }) &&
+             (!selected || saveFailed) ) {
+            // 与软件设置页走同一份配置命令；刷新页面和语言不覆写已有选择。
+            // 重复点击通常不产生写盘；上次保存失败时则允许原地重试。
+            requested = choice.id;
+            Interaction::dispatchCommand(Event::LogicCommandEvent(
+                Logic::CmdUpdateEditorConfig{ config.getEditorConfig() }));
+            saveFailed = !config.save();
+        }
+        // 用可换行的正文呈现手势，按钮标签保持简短，适合缩窄后的列。
+        // 将换行交给表格单元格，较长的本地化说明只增加该行的高度。
+        ImGui::TextWrapped("%s", choice.instructions);
+        ImGui::PopID();
+    }
+    ImGui::EndTable();
+}
+}  // namespace
+
 /// @brief 创建欢迎视图并使用稳定名称注册基础视图状态。
 /// @note 默认请求一次焦点和中心停靠，具体 Dock 节点在首次更新时解析。
 WelcomeView::WelcomeView() : IUIView("Welcome") {}
@@ -98,11 +176,12 @@ void WelcomeView::showHome()
     m_restoreChapter = true;
 }
 
-/// @brief 绘制欢迎首页的章节标签和主题卡片目录。
+/// @brief 绘制欢迎首页的操作引导、章节标签和主题卡片目录。
 /// @param manager 提供演练模型、进度和错误状态的 UI 管理器。
 /// @warning UI 热路径：首页可见时每帧遍历章节及其主题和步骤。
 /// @details 主题按服务预排序结果分组到章节标签；相同 order 值归入同一阶段，
 /// 卡片展示标题、入口提示及已完成步骤数，点击后在同一标签页进入正文。
+/// 桌面操作引导独立于演练服务目录，目录加载为空时仍能选择绘制方式。
 void WelcomeView::renderHome(UIManager* manager)
 {
     // 服务目录和进度由 UIManager 长期持有，本函数只借用只读引用。
@@ -120,6 +199,12 @@ void WelcomeView::renderHome(UIManager* manager)
     ImGui::PopFont();
     ImGui::TextDisabled("%s", TR("ui.welcome.subtitle").data());
     ImGui::Dummy({ 0, 30.0F * scale });
+    // 触控外壳的默认手势不通过桌面引导修改；首页正文与目录共用滚动区。
+    if ( manager->workspacePresentation().usesDesktopLayout() ) {
+        drawWelcomeInteractionGuide(scale, m_saveFailed);
+        // 给下面的章节目录保留间距；进入演练正文后不会绘制这块引导。
+        ImGui::Dummy({ 0, 22.0F * scale });
+    }
     // 演练目录标题使用次级字号，与产品主标题建立层次。
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.2F);
     ImGui::TextUnformatted(TR("ui.welcome.walkthroughs").data());
