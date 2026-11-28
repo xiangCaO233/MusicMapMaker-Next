@@ -134,6 +134,12 @@ public:
     /// @brief 显式选择模式；经典方案返回空以保留物理修饰键语义。
     /// @warning 每帧只读取 UI 线程标量，不访问选择集合。
     virtual std::optional<Logic::SelectionOperation> selectionOperation() const;
+    /// @brief 在框选起笔时解析本次集合操作。
+    /// @param ctrl 起笔时的 Ctrl 状态，适用范围由交互方案决定。
+    /// @return 显式框选模式，或交由调用方处理经典修饰键时返回空。
+    /// @warning 输入热路径只读取方案标量，不改写持久选择模式。
+    virtual std::optional<Logic::SelectionOperation> marqueeSelectionOperation(
+        bool ctrl) const;
     /// @brief 在未进行选择手势时切换纯鼠标选择模式。
     virtual void setSelectionOperation(Logic::SelectionOperation operation);
     /// @brief 显式折线擦除粒度；经典方案返回空以保留物理 Shift 的动态语义。

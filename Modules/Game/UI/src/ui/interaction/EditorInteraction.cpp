@@ -133,6 +133,16 @@ public:
     {
         m_selectionOperation = operation;
     }
+    /// @brief 默认替换模式下，Ctrl 仅让当前矩形追加到已有选区。
+    /// @warning 框选起笔只读取模式，显式减选和后续手势不受影响。
+    std::optional<Logic::SelectionOperation> marqueeSelectionOperation(
+        bool ctrl) const override
+    {
+        if ( ctrl &&
+             m_selectionOperation == Logic::SelectionOperation::Replace )
+            return Logic::SelectionOperation::Add;
+        return m_selectionOperation;
+    }
     /// @brief 纯鼠标默认局部擦除，不依赖 Shift 决定是否删除整条折线。
     /// @warning 仅返回 UI 本地标量，画布起笔后不再重读该设置。
     std::optional<bool> eraseWholePolyline() const override
@@ -316,6 +326,13 @@ std::optional<Logic::SelectionOperation>
 IEditorInteractionProfile::selectionOperation() const
 {
     return std::nullopt;
+}
+/// @brief 默认沿用方案的选择模式，经典桌面的修饰键仍由调用方解释。
+/// @warning 仅在框选起笔时查询 UI 线程标量，不访问会话状态。
+std::optional<Logic::SelectionOperation>
+IEditorInteractionProfile::marqueeSelectionOperation(bool) const
+{
+    return selectionOperation();
 }
 /// @brief 经典方案忽略模式设置，不引入隐藏的输入状态。
 void IEditorInteractionProfile::setSelectionOperation(Logic::SelectionOperation)

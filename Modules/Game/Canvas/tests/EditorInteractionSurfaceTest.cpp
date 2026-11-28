@@ -33,6 +33,7 @@
 #include <limits>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -1067,11 +1068,13 @@ bool testUnifiedSelectionGestureOwnership()
     io.MouseDoubleClickTime     = 0.0F;
     // 起笔命令按值保留，才能在帧结束后检查部位、领域与子索引。
     // 移动和结束分开计数，只有完整的事务序列才代表可用拖动。
-    int                              deletions = 0;
-    std::vector<Logic::EditTool>     switchedTools;
-    std::vector<Logic::CmdStartDrag> starts;
-    int                              marquees = 0, updates = 0, ends = 0;
-    auto&                            bus = Event::EventBus::instance();
+    int                                      deletions = 0;
+    std::vector<Logic::EditTool>             switchedTools;
+    std::vector<Logic::CmdStartDrag>         starts;
+    std::optional<Logic::SelectionOperation> marqueeOperation;
+    bool                                     marqueeCtrl = false;
+    int   marquees = 0, updates = 0, ends = 0;
+    auto& bus = Event::EventBus::instance();
     // 订阅正式事件出口，框选和拖动命令不能在同一笔中同时出现。
     // 订阅不应用命令，避免把逻辑层选择副作用混入本层命中测试。
     const auto subscription =
@@ -1085,8 +1088,12 @@ bool testUnifiedSelectionGestureOwnership()
                 starts.push_back(*start);
             deletions +=
                 std::holds_alternative<Logic::CmdDeleteSelected>(event.command);
-            marquees +=
-                std::holds_alternative<Logic::CmdStartMarquee>(event.command);
+            if ( const auto* marquee =
+                     std::get_if<Logic::CmdStartMarquee>(&event.command) ) {
+                ++marquees;
+                marqueeOperation = marquee->selectionOperation;
+                marqueeCtrl      = marquee->isCtrlDown;
+            }
             updates +=
                 std::holds_alternative<Logic::CmdUpdateDrag>(event.command);
             ends += std::holds_alternative<Logic::CmdEndDrag>(event.command);
@@ -1196,6 +1203,43 @@ bool testUnifiedSelectionGestureOwnership()
             updates,
             ends);
     passed &= marquees == 1 && starts.empty() && updates == 0 && ends == 0;
+    /// @brief 通过实际画布入口发布一次框选起笔和释放。
+    /// @param ctrl 是否在起笔前按下 Ctrl。
+    /// @note 起笔后释放 Ctrl，验证临时加选不改变后续手势的默认模式。
+    const auto dragMarquee = [&](bool ctrl) {
+        io.AddKeyEvent(ImGuiMod_Ctrl, ctrl);
+        frame(controller, snapshot, false, { 100, 100 });
+        marquees = 0;
+        frame(controller, snapshot, true, { 100, 100 });
+        io.AddKeyEvent(ImGuiMod_Ctrl, false);
+        frame(controller, snapshot, true, { 150, 250 });
+        frame(controller, snapshot, false, { 150, 250 });
+    };
+    dragMarquee(true);
+    passed &= marquees == 1 && marqueeCtrl && !marqueeOperation;
+    Interaction::synchronizeProfile("mouse-only", true);
+    Interaction::synchronizeProfile("mouse-only", true);
+    auto&      mouseProfile      = Interaction::activeProfile();
+    const auto originalOperation = mouseProfile.selectionOperation();
+    mouseProfile.setSelectionOperation(Logic::SelectionOperation::Replace);
+    dragMarquee(true);
+    passed &= marquees == 1 && marqueeCtrl &&
+              marqueeOperation == Logic::SelectionOperation::Add;
+    dragMarquee(false);
+    passed &= marquees == 1 && !marqueeCtrl &&
+              marqueeOperation == Logic::SelectionOperation::Replace;
+    mouseProfile.setSelectionOperation(Logic::SelectionOperation::Add);
+    dragMarquee(false);
+    passed &= marquees == 1 && !marqueeCtrl &&
+              marqueeOperation == Logic::SelectionOperation::Add;
+    mouseProfile.setSelectionOperation(Logic::SelectionOperation::Subtract);
+    dragMarquee(true);
+    passed &= marquees == 1 && marqueeCtrl &&
+              marqueeOperation == Logic::SelectionOperation::Subtract;
+    if ( originalOperation )
+        mouseProfile.setSelectionOperation(*originalOperation);
+    Interaction::synchronizeProfile("classic-desktop", true);
+    Interaction::synchronizeProfile("classic-desktop", true);
     // 旧抓取的 1 键仍可进入选择，但不能遮蔽用户将绘制重绑为 1 的意图。
     // 只修改内存配置，离开本用例前恢复完整绑定，避免污染后续菜单测试。
     auto& shortcuts =

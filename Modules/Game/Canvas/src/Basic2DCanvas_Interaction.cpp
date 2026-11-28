@@ -6588,15 +6588,17 @@ void Basic2DCanvasInteraction::handleInteractions(
                     }
                 } else if ( !m_pointerTapOnly ) {
                     // 框选起点使用当前画布局部坐标，逻辑层维护矩形终点。
+                    // 同一次起笔同时传递经典 Ctrl 状态与方案解析出的显式操作。
+                    const bool ctrl = UI::Interaction::modifier(
+                        UI::Interaction::Modifier::Control);
                     UI::Interaction::dispatchCommand(
                         Event::LogicCommandEvent(Logic::CmdStartMarquee{
                             m_cameraId,
                             localMousePos.x,
                             localMousePos.y,
-                            UI::Interaction::modifier(
-                                UI::Interaction::Modifier::Control),
+                            ctrl,
                             UI::Interaction::activeProfile()
-                                .selectionOperation(),
+                                .marqueeSelectionOperation(ctrl),
                             m_pointerCancellationEnabled }));
                 }
             } else if ( currentSnapshot->currentTool ==
