@@ -10,9 +10,14 @@
 #    include <SDL3/SDL_timer.h>
 #    include <nlohmann/json.hpp>
 
+#    include <algorithm>
+#    include <atomic>
 #    include <filesystem>
 #    include <fstream>
+#    include <iterator>
 #    include <memory>
+#    include <mutex>
+#    include <shared_mutex>
 #    include <string_view>
 #    include <system_error>
 #    include <utility>
@@ -21,12 +26,77 @@ namespace MMM::UI
 {
 namespace
 {
+/// @brief 串行化绑定配置的短读写，模型递归扫描和卸载不会持有这把锁。
+std::mutex bindingsMutex;
+/// @brief 成功写完绑定才推进序号，界面读取后用配置锁取得最新路径。
+/// @warning 控制器逐帧观察。序号仅表示刷新请求，不直接发布内存对象。
+std::atomic<std::uint64_t> bindingsRevision{};
+/// @brief 文件线程用共享锁保护推理和部署，卸载须独占。
+/// @warning 所有调用均使用尝试锁，界面与后台操作不会等待长时间推理。
+std::shared_mutex modelFilesMutex;
+/// @brief 新部署的归属凭证，兼容未来更新推理脚本的情形。
+constexpr auto MODEL_RECEIPT = ".mmm-stem-model";
+
 /// @brief 用户配置中的模型绑定文件，与外部 MSST 旧设置独立。
 /// @return 当前配置根下的专用 JSON 路径。
 /// @details 跟随配置根隔离，各桌面配置不会共享模型选择。
 std::filesystem::path bindingsPath()
 {
     return Config::AppPaths::configRootPath() / "stem-model-bindings.json";
+}
+
+/// @brief 验证独立普通文件的内容，避免把链接目标误认成安装凭证。
+bool matchesModelFile(const std::filesystem::path& path,
+                      std::string_view             expected)
+{
+    std::error_code error;
+    if ( !std::filesystem::is_regular_file(
+             std::filesystem::symlink_status(path, error)) ||
+         error )
+        return false;
+    // Windows 部署器可能用文本模式写出 CRLF；比较时按文本流读回。
+    const auto size = std::filesystem::file_size(path, error);
+    if ( error || size < expected.size() || size > expected.size() * 2 )
+        return false;
+    std::ifstream stream(path);
+    return stream && std::equal(std::istreambuf_iterator<char>(stream),
+                                std::istreambuf_iterator<char>(),
+                                expected.begin(),
+                                expected.end());
+}
+
+/// @brief 只卸载独立目录；现有旧部署可通过安装器生成的原版推理文件识别。
+bool isManagedStemModel(const StemCatalogEntry&      entry,
+                        const std::filesystem::path& root)
+{
+    if ( root.filename() != entry.id ) return false;
+    return matchesModelFile(root / MODEL_RECEIPT, entry.id) ||
+           matchesModelFile(root / "inference.py",
+                            std::string_view(STEM_DEPLOY_WORKER));
+}
+
+/// @brief 按稳定模型 ID 更新绑定。空路径移除键，其他配置保持原样。
+bool writeStemModelBinding(const StemCatalogEntry& entry,
+                           const std::string&      directory)
+{
+    const std::lock_guard lock(bindingsMutex);
+    if ( !Config::AppPaths::ensureConfigRootPath() ) return false;
+    nlohmann::json data;
+    {
+        std::ifstream stream(bindingsPath());
+        data = nlohmann::json::parse(stream, nullptr, false);
+    }
+    if ( !data.is_object() ) data = nlohmann::json::object();
+    if ( directory.empty() )
+        data.erase(entry.id);
+    else
+        data[entry.id] = directory;
+    // 先关闭读取句柄再原子替换配置文件，避免 Windows 共享冲突。
+    Config::StagedOutputFile file(bindingsPath());
+    file.stream() << data.dump(2);
+    if ( !file.commit() ) return false;
+    bindingsRevision.fetch_add(1, std::memory_order_relaxed);
+    return true;
 }
 }  // namespace
 
@@ -36,6 +106,7 @@ std::filesystem::path bindingsPath()
 /// @warning 首次打开工具调用。不得在模型表渲染时反复读取。
 std::array<std::string, STEM_MODEL_CATALOG.size()> readStemModelBindings()
 {
+    const std::lock_guard                              lock(bindingsMutex);
     std::array<std::string, STEM_MODEL_CATALOG.size()> paths;
     // 配置不包含权重和运行入口，只记录用户主动绑定的本地目录。
     std::ifstream stream(bindingsPath());
@@ -61,21 +132,86 @@ std::array<std::string, STEM_MODEL_CATALOG.size()> readStemModelBindings()
 bool saveStemModelBinding(const StemCatalogEntry& entry,
                           const std::string&      directory)
 {
-    if ( !Config::AppPaths::ensureConfigRootPath() ) return false;
-    // 控制器可以同时打开。读取最新磁盘副本，避免一个控制器的旧快照
-    // 覆盖另一个控制器刚保存的模型目录。
-    nlohmann::json data;
-    {
-        std::ifstream stream(bindingsPath());
-        data = nlohmann::json::parse(stream, nullptr, false);
+    const auto modelLock = tryLockStemModelFiles();
+    return modelLock && writeStemModelBinding(entry, directory);
+}
+
+/// @brief 观察是否需要重读磁盘，不通过序号读取任何共享对象。
+std::uint64_t stemModelBindingsRevision() noexcept
+{
+    return bindingsRevision.load(std::memory_order_relaxed);
+}
+
+/// @brief 后台推理和部署共用文件使用权，卸载中不开始读取。
+std::shared_lock<std::shared_mutex> tryLockStemModelFiles()
+{
+    return std::shared_lock(modelFilesMutex, std::try_to_lock);
+}
+
+/// @brief 统计已绑定模型的目录占用，不访问链接指向的共享运行时。
+std::optional<StemModelStorage> inspectStemModelStorage(
+    const StemCatalogEntry& entry, const std::string& directory)
+{
+    const auto lock = tryLockStemModelFiles();
+    if ( !lock ) return std::nullopt;
+    const auto      path = Config::utf8ToPath(directory);
+    std::error_code error;
+    if ( !std::filesystem::is_directory(
+             std::filesystem::symlink_status(path, error)) ||
+         error )
+        return std::nullopt;
+    StemModelStorage result{ .managed = isManagedStemModel(entry, path) };
+    std::filesystem::recursive_directory_iterator       file(path, error);
+    const std::filesystem::recursive_directory_iterator end;
+    for ( ; !error && file != end; file.increment(error) ) {
+        if ( std::filesystem::is_regular_file(file->symlink_status(error)) )
+            result.bytes += file->file_size(error);
     }
-    // 损坏的配置没有可合并的键；其余情况保留其它模型及未知条目。
-    if ( !data.is_object() ) data = nlohmann::json::object();
-    data[entry.id] = directory;
-    // 先关闭读取句柄再替换文件，兼容 Windows 文件共享约束。
-    Config::StagedOutputFile file(bindingsPath());
-    file.stream() << data.dump(2);
-    return file.commit();
+    if ( error ) return std::nullopt;
+    return result;
+}
+
+/// @brief 重新校验绑定，按所确认的方式卸载或解除关联。
+std::expected<void, std::string> removeStemModelBinding(
+    const StemCatalogEntry& entry, const std::string& directory,
+    bool removeFiles)
+{
+    const std::unique_lock lock(modelFilesMutex, std::try_to_lock);
+    if ( !lock ) return std::unexpected("有模型正在分离或部署，请稍后重试。");
+    const auto position =
+        std::ranges::find_if(STEM_MODEL_CATALOG, [&](const auto& item) {
+            return std::string_view(item.id) == entry.id;
+        });
+    // 对照磁盘，陈旧的控制器不能卸载用户刚在其他窗口绑定的目录。
+    if ( directory.empty() || position == STEM_MODEL_CATALOG.end() ||
+         readStemModelBindings()[position - STEM_MODEL_CATALOG.begin()] !=
+             directory )
+        return std::unexpected("模型绑定已变更，请重新打开模型目录。");
+    if ( removeFiles ) {
+        std::error_code error;
+        const auto      path = Config::utf8ToPath(directory);
+        const auto      root = std::filesystem::canonical(path, error);
+        if ( error || root != path || !isManagedStemModel(entry, root) )
+            return std::unexpected("无法确认这是 MMM 部署的模型目录。");
+
+        // 只清理安装器拥有的条目，目录内额外放入的用户文件不应被带走。
+        // 权重和环境先删，失败时保留归属信息，允许排除权限问题后重试。
+        for ( const auto* name : { "env",
+                                   "weights",
+                                   "model.json",
+                                   "inference.py",
+                                   MODEL_RECEIPT } ) {
+            std::filesystem::remove_all(root / name, error);
+            if ( error )
+                return std::unexpected(
+                    "无法完整删除模型文件。请检查目录权限后重试。");
+        }
+        if ( std::filesystem::is_empty(root, error) && !error )
+            std::filesystem::remove(root, error);
+    }
+    if ( !writeStemModelBinding(entry, {}) )
+        return std::unexpected("无法更新模型绑定。请检查配置目录权限。");
+    return {};
 }
 
 /// @brief 验证被选择的目录来自正确模型。
@@ -149,6 +285,8 @@ std::expected<BoundStemModel, std::string> deployStemModel(
     const StemCatalogEntry& entry, const std::string& parent,
     std::stop_token stop)
 {
+    const auto modelLock = tryLockStemModelFiles();
+    if ( !modelLock ) return std::unexpected("正在卸载模型，请稍后部署。");
     std::error_code error;
     const auto      selected =
         std::filesystem::canonical(Config::utf8ToPath(parent), error);
@@ -233,7 +371,14 @@ std::expected<BoundStemModel, std::string> deployStemModel(
                 "部署失败。请检查网络、磁盘空间及 Python venv 支持。");
         }
         // 后端成功后仍走绑定校验。半成品与错误型号都不能发布到界面。
-        return bindStemModel(entry, targetArg);
+        auto bound = bindStemModel(entry, targetArg);
+        if ( bound ) {
+            // 归属凭证让未来更换安装器版本后仍能识别本次部署。
+            Config::StagedOutputFile receipt(destination / MODEL_RECEIPT);
+            receipt.stream() << entry.id;
+            static_cast<void>(receipt.commit());
+        }
+        return bound;
     }
     // 所有候选都不存在或版本不兼容。给出可执行的安装信息，
     // 与网络及磁盘错误区分开。
