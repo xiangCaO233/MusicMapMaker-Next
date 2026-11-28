@@ -169,8 +169,16 @@ void prepareEqualizerPreviewFilters(
 /// - 子窗口为底部重置按钮预留固定一行空间；
 /// - 每个频段通过 PushID 隔离重复控件标签。
 ///
+/// 尺寸交互：
+/// - 响应图高度使用逻辑像素，绘图前统一应用窗口缩放；
+/// - 两种布局分别保留高度，切换触屏模式时可以恢复各自的显示尺寸；
+/// - 桌面标签和滑条仅在有足够宽度时同排；
+/// - 字号升高时优先保证坐标文字和数据区可读；
+/// - 曲线图变高时推子区根据剩余空间重新布局；
+/// - 整页滚动仍可到达最小高度的推子区及重置入口。
+///
 /// 数值约束：
-/// - 频率轴固定为 20 Hz 至 20 kHz 的对数尺度；
+/// - 频率轴使用对数尺度，初始显示 20 Hz 至 20 kHz；
 /// - 响应图纵轴与增益控件共享正负 24 dB 范围；
 /// - 串联响应在线性幅度域相乘后再转换为 dB；
 /// - 小于等于 1e-6 的综合幅度显示为 -120 dB；
@@ -257,33 +265,48 @@ void AudioTrackControllerUI::renderEQSection(AudioTrackConfig& config,
     std::array<ice::BiquadFilter, FIFTEEN_BAND_FREQUENCIES.size()> filters;
     prepareEqualizerPreviewFilters(config, frequencies, filters);
 
+    // 尺寸只影响布局。桌面与触屏各自保留草稿，不提交音频参数变更。
+    int& requestedPlotHeight = touch ? m_eqPlotHeight : m_eqDesktopPlotHeight;
+    const char* heightLabel  = TR("ui.audio_manager.eq_plot_height").data();
+    const float heightLabelWidth = ImGui::CalcTextSize(heightLabel).x;
+    const float heightGap        = ImGui::GetStyle().ItemSpacing.x;
+    const float heightRowWidth   = heightLabelWidth + heightGap + comboWidth;
+    const bool  inlineHeight     = !touch && heightRowWidth <= contentWidth;
+    // 翻译文本参与宽度测量，避免语言切换后把滑条挤到面板外。
+    if ( inlineHeight ) {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                             (contentWidth - heightRowWidth) * 0.5f);
+        ImGui::AlignTextToFramePadding();
+    }
+    ImGui::TextUnformatted(heightLabel);
+    if ( inlineHeight ) ImGui::SameLine();
     if ( touch ) {
-        // 高度草稿属于控制器，切换频段或重新渲染不能重置用户选择。
-        // 触摸高度与字号分别约束，大字体仍须完整显示当前数值。
-        // 尺寸是纯显示状态，不能复用下面的 changed 标记触发音频重算。
-        // 横向滑条复用既有触摸方向仲裁，纵向起手仍可滚动整页。
-        ImGui::TextUnformatted(TR("ui.audio_manager.eq_plot_height").data());
+        // 移动端保留最小触摸高度和横向仲裁，纵向起手仍可滚动整页。
         const auto padding = ImGui::GetStyle().FramePadding;
         ImGui::PushStyleVar(
             ImGuiStyleVar_FramePadding,
             ImVec2(padding.x,
                    std::max(padding.y,
                             (48.0f * scale - ImGui::GetFontSize()) * .5f)));
-        ImGui::SetNextItemWidth(-1);
-        // 禁止长按切换为键盘输入，手机无需唤出软键盘调整图表。
-        // 此处处理横向尺寸滑动，原生纵向滚动保留整页浏览能力。
-        FeedbackSliderInt("##EQPlotHeight",
-                          &m_eqPlotHeight,
-                          240,
-                          640,
-                          "%d",
-                          ImGuiSliderFlags_NoInput);
-        ImGui::PopStyleVar();
     }
+    ImGui::SetNextItemWidth(inlineHeight ? comboWidth : -1.0f);
+    // 禁止长按切换成输入框，拖动仅改变本控制器图表外框高度。
+    FeedbackSliderInt(
+        "##EQPlotHeight",
+        &requestedPlotHeight,
+        touch ? TOUCH_EQ_PLOT_MIN_HEIGHT : DESKTOP_EQ_PLOT_MIN_HEIGHT,
+        EQ_PLOT_MAX_HEIGHT,
+        "%d",
+        ImGuiSliderFlags_NoInput);
+    if ( touch ) ImGui::PopStyleVar();
+    // 每帧先读取拖动后的高度再建图，保证鼠标移动时及时更新外框。
     // 预留数据区需要的高度，而不是让字体和轴标签瓜分固定 150 像素。
     // 宽度跟随可调面板，超过屏幕的纵向内容继续使用原有窗口滚动。
-    const float plotHeight = audioEqualizerPlotHeight(
-        static_cast<float>(m_eqPlotHeight), scale, ImGui::GetFontSize(), touch);
+    const float plotHeight =
+        audioEqualizerPlotHeight(static_cast<float>(requestedPlotHeight),
+                                 scale,
+                                 ImGui::GetFontSize(),
+                                 touch);
     // 放大只改变显示区域，不改变频段、曲线采样数或滤波器计算量。
     // BeginPlot 与 EndPlot 仍在原分支配对，隐藏窗口不会遗留绘图状态。
     if ( ImPlot::BeginPlot("##EQCurve",
