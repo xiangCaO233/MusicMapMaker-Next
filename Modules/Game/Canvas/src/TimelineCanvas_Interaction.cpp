@@ -2018,8 +2018,11 @@ void TimelineCanvas::handleTimingCanvasPointerInput(const ImVec2& canvasPos,
                 refreshMarqueeScreenY();
                 m_timingMarqueeBaseSelection.clear();
                 // 一笔框选只解释一次模式；经典修饰键仍在起笔决定是否保留基线。
-                m_timingMarqueeOperation = selectionOperation.value_or(
-                    additiveSelection ? Logic::SelectionOperation::Add
+                m_timingMarqueeOperation =
+                    UI::Interaction::activeProfile()
+                        .marqueeSelectionOperation(ctrl)
+                        .value_or(additiveSelection
+                                      ? Logic::SelectionOperation::Add
                                       : Logic::SelectionOperation::Replace);
                 if ( m_timingMarqueeOperation !=
                      Logic::SelectionOperation::Replace ) {
