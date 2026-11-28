@@ -217,7 +217,7 @@ private:
             if ( ImGui::BeginTabItem("分离设置") ) {
                 // 返回设置页后，下次进入播放页算作新的模式选择。
                 m_lastPlaybackTab.reset();
-                drawSetup(*current);
+                drawSetup(*current, dpiScale);
                 cacheVisible = true;
                 if ( current->catalog )
                     ImGui::TextUnformatted("分离完成，可切换到分轨播放。");
@@ -264,7 +264,7 @@ private:
     /// @details 同一窗口一次只准备一个任务。运行时可取消当前部署或推理。
     /// 部署结果只参与模型选择，不更换本次分离的来源。
     /// @warning UI 热路径，仅在用户操作时提交命令。
-    void drawSetup(const Audio::StemPlaybackMix& current)
+    void drawSetup(const Audio::StemPlaybackMix& current, float dpiScale)
     {
         ImGui::Spacing();
         drawCacheControls(current);
@@ -273,7 +273,7 @@ private:
         // 取消按钮留在禁用区域外，无需中断播放即可结束文件任务。
         ImGui::BeginDisabled(m_load.valid() || m_deployment.valid() ||
                              m_cacheAction.valid());
-        drawSeparationControls();
+        drawSeparationControls(dpiScale);
         ImGui::EndDisabled();
 
         // 安装和推理的取消信号独立，各自只影响当前作业。
@@ -500,95 +500,140 @@ private:
         if ( !m_deployment.valid() ) m_error = "无法提交部署任务。";
     }
 
-    /// @brief 绘制目录表，按模型显示专长、已绑定状态和可用操作。
-    /// @details 目录条目和绑定位置按固定顺序对应，长路径通过悬停查看。
-    /// @warning 每帧只绘制缓存数据；点击时才解析新路径或提交后台任务。
-    void drawCatalog()
+    /// @brief 绘制同一模型的标识、环境和声部说明，标题可重新选中已有绑定。
+    /// @warning UI 热路径；只有用户选择模型时才重新验证文件。
+    void drawCatalogDetails(std::size_t index)
     {
-        // 优先把可拉伸列宽留给声部说明，部署按钮与说明文本分列。
-        constexpr auto flags =
-            ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
-            ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY;
-        // 目录增长时只扩展滚动内容，给主轨控制器保留操作和播放器空间。
-        // 以字体行距限定内容高度，维持 DPI 切换后的空间分配。
-        const auto tableHeight = 13.0F * ImGui::GetTextLineHeightWithSpacing();
-        if ( !ImGui::BeginTable(
-                 "StemModelCatalog", 4, flags, { 0.0F, tableHeight }) )
-            return;
-        ImGui::TableSetupColumn(
-            "模型", ImGuiTableColumnFlags_WidthStretch, 1.35F);
-        ImGui::TableSetupColumn(
-            "擅长声部", ImGuiTableColumnFlags_WidthStretch, 2.3F);
-        ImGui::TableSetupColumn(
-            "环境", ImGuiTableColumnFlags_WidthStretch, 0.65F);
-        ImGui::TableSetupColumn(
-            "操作", ImGuiTableColumnFlags_WidthStretch, 1.45F);
-        // 表头和内容共用列定义，缩放时仍可对齐模型状态与按钮。
-        ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableHeadersRow();
-        // 窄控制器内按可用列宽堆叠操作，避免绑定入口被右侧 Dock 裁掉。
-        // 取自当前 DPI 与皮肤字体计算，避免用固定像素阈值。
-        const float buttonSpacing = ImGui::GetStyle().ItemInnerSpacing.x;
-        const float inlineButtonWidth =
-            ImGui::CalcTextSize("部署").x + ImGui::CalcTextSize("绑定已有").x +
-            4.0F * ImGui::GetStyle().FramePadding.x + buttonSpacing;
-        for ( std::size_t index = 0; index < STEM_MODEL_CATALOG.size();
-              ++index ) {
-            const auto& entry = STEM_MODEL_CATALOG[index];
-            // 紧凑标签按目录语义换行，完整型号始终在悬停和当前模型中可见。
-            const char* label =
-                entry.catalogName ? entry.catalogName : entry.name;
-            // 渲染不探测目录是否还在。选择已有绑定时才重新验证，
-            // 已挂载磁盘暂时离线也不会拖慢每帧模型表。
-            const bool bound = !m_bindings[index].empty();
-            // 同名按钮按模型 ID 隔离，条目在将来增删或重排也不会串状态。
-            ImGui::PushID(entry.id);
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            if ( bound ) {
-                if ( FeedbackSelectable(label, m_selectedCatalog == index) ) {
-                    // 重新解析用户可能在 MMM 之外更新的模型清单。
-                    auto model = bindStemModel(entry, m_bindings[index]);
-                    if ( model )
-                        useBoundModel(index, std::move(*model), false);
-                    else
-                        m_error = model.error();
-                }
-            } else {
-                // 未部署条目只提供目录操作，不能成为当前分离目标。
-                ImGui::TextUnformatted(label);
+        const auto& entry     = STEM_MODEL_CATALOG[index];
+        const bool  bound     = !m_bindings[index].empty();
+        const bool  selected  = m_selectedCatalog == index;
+        const float available = ImGui::GetContentRegionAvail().x;
+        // 优先用完整名；只有确实放不下才用目录内预留的短标签。
+        const char* label =
+            entry.catalogName && ImGui::CalcTextSize(entry.name).x > available
+                ? entry.catalogName
+                : entry.name;
+        const auto labelSize = ImGui::CalcTextSize(label);
+        if ( bound ) {
+            const float width = std::min(available, labelSize.x);
+            if ( FeedbackSelectable(
+                     label, selected, 0, { width, labelSize.y }) ) {
+                // 重新读取绑定，兼容用户在 MMM 之外更新模型计划。
+                auto model = bindStemModel(entry, m_bindings[index]);
+                if ( model )
+                    useBoundModel(index, std::move(*model), false);
+                else
+                    m_error = model.error();
             }
-            if ( entry.catalogName && ImGui::IsItemHovered() )
-                ImGui::SetTooltip("%s", entry.name);
-            ImGui::TableSetColumnIndex(1);
-            ImGui::TextWrapped("%s", entry.stems);
-            // 说明作为声部名称的辅助层，但仍需在深色主题和行底色上可读。
-            auto descriptionColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-            descriptionColor.w *= 0.8F;
-            ImGui::PushStyleColor(ImGuiCol_Text, descriptionColor);
-            ImGui::TextWrapped("%s", entry.strengths);
-            ImGui::PopStyleColor();
-            // 状态只是持久化绑定的存在性，运行时校验交给实际选择动作。
-            ImGui::TableSetColumnIndex(2);
-            ImGui::TextUnformatted(bound ? "已绑定" : "未部署");
-            // 长路径不挤占模型说明，悬停即可核对存在哪个目录。
-            if ( bound && ImGui::IsItemHovered() ) {
-                ImGui::SetTooltip("%s", m_bindings[index].c_str());
-            }
-            ImGui::TableSetColumnIndex(3);
-            // 使用列宽判断排版，同一工具在浮窗宽屏可并排，窄 Dock 则上下排列。
-            const bool inlineButtons =
-                ImGui::GetContentRegionAvail().x >= inlineButtonWidth;
-            // 保留部署入口以便更换磁盘；部署程序会拒绝覆盖已有目录。
-            if ( FeedbackSmallButton("部署") )
-                chooseModelDirectory(index, true);
-            // 已部署到别处时直接重新绑定，跳过下载和安装。
-            if ( inlineButtons ) ImGui::SameLine(0.0F, buttonSpacing);
-            if ( FeedbackSmallButton("绑定已有") )
-                chooseModelDirectory(index, false);
-            ImGui::PopID();
+        } else {
+            ImGui::TextWrapped("%s", label);
         }
-        ImGui::EndTable();
+        if ( label == entry.catalogName )
+            ImGui::SetItemTooltip("%s", entry.name);
+
+        const char* status = selected ? "当前模型"
+                             : bound  ? "已绑定"
+                                      : "未部署";
+        const float gap    = ImGui::GetStyle().ItemSpacing.x;
+        if ( labelSize.y <= ImGui::GetTextLineHeight() &&
+             labelSize.x + gap + ImGui::CalcTextSize(status).x <= available )
+            ImGui::SameLine(0.0F, gap);
+        ImGui::TextDisabled("%s", status);
+        if ( bound ) ImGui::SetItemTooltip("%s", m_bindings[index].c_str());
+
+        ImGui::TextWrapped("%s", entry.stems);
+        // 弱化补充说明，主信息和正文仍使用当前皮肤的对比度。
+        auto descriptionColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+        descriptionColor.w *= 0.8F;
+        ImGui::PushStyleColor(ImGuiCol_Text, descriptionColor);
+        ImGui::TextWrapped("%s", entry.strengths);
+        ImGui::PopStyleColor();
+    }
+
+    /// @brief 等宽操作按钮按可用宽度并排或堆叠，避免窄面板裁剪绑定入口。
+    /// @warning UI 热路径；只有按钮激活时进入原生目录选择器。
+    void drawCatalogActions(std::size_t index, float minWidth, float height,
+                            float detailsHeight)
+    {
+        const float available =
+            std::max(1.0F, ImGui::GetContentRegionAvail().x);
+        const float gap           = ImGui::GetStyle().ItemSpacing.x;
+        const bool  inlineButtons = available >= minWidth * 2.0F + gap;
+        const float width =
+            inlineButtons ? (available - gap) * 0.5F : available;
+        // 宽面板以左侧说明的实际换行高度居中，窄面板在说明下另起一行。
+        const float actionsHeight =
+            inlineButtons ? height
+                          : 2.0F * height + ImGui::GetStyle().ItemSpacing.y;
+        if ( detailsHeight > actionsHeight )
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() +
+                                 (detailsHeight - actionsHeight) * 0.5F);
+        if ( FeedbackButton("部署", { width, height }) )
+            chooseModelDirectory(index, true);
+        if ( inlineButtons ) ImGui::SameLine(0.0F, gap);
+        if ( FeedbackButton("绑定已有", { width, height }) )
+            chooseModelDirectory(index, false);
+    }
+
+    /// @brief 模型以分隔行呈现。宽面板右侧放操作，窄面板放在说明下方。
+    /// @warning UI 热路径；目录高度、留白和断点只使用字体、DPI 和可用空间。
+    void drawCatalog(float dpiScale)
+    {
+        const auto& style    = ImGui::GetStyle();
+        const float font     = ImGui::GetFontSize();
+        const float paddingX = std::max(12.0F * dpiScale, font * 0.65F);
+        const float paddingY = std::max(10.0F * dpiScale, font * 0.5F);
+        const float gap      = std::max(8.0F * dpiScale, style.ItemSpacing.x);
+        const float minButtonWidth =
+            ImGui::CalcTextSize("绑定已有").x + paddingX * 2.0F;
+        const float buttonHeight = std::max(32.0F * dpiScale, font + paddingY);
+        const float actionWidth  = 2.0F * minButtonWidth + gap;
+        // 右侧预留完整按钮宽度，左侧仍至少容纳足够的说明文字才拆成两列。
+        const bool wide =
+            ImGui::GetContentRegionAvail().x >=
+            actionWidth + font * 21.0F + 4.0F * paddingX + style.ScrollbarSize;
+        constexpr auto flags =
+            ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH |
+            ImGuiTableFlags_PadOuterX | ImGuiTableFlags_ScrollY |
+            ImGuiTableFlags_SizingStretchProp;
+        // 固定视口可让目录独立滚动，保留下方的分离操作入口。
+        const float tableHeight = 17.0F * ImGui::GetTextLineHeightWithSpacing();
+        ImGui::Spacing();
+        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, { paddingX, paddingY });
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                            { gap, std::max(5.0F * dpiScale, font * 0.25F) });
+        if ( ImGui::BeginTable("StemModelCatalog",
+                               wide ? 2 : 1,
+                               flags,
+                               { 0.0F, tableHeight }) ) {
+            ImGui::TableSetupColumn("模型", ImGuiTableColumnFlags_WidthStretch);
+            if ( wide )
+                ImGui::TableSetupColumn("操作",
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        actionWidth + 1.0F);
+            for ( std::size_t index = 0; index < STEM_MODEL_CATALOG.size();
+                  ++index ) {
+                ImGui::PushID(STEM_MODEL_CATALOG[index].id);
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                const float detailsTop = ImGui::GetCursorScreenPos().y;
+                drawCatalogDetails(index);
+                const float detailsHeight =
+                    ImGui::GetItemRectMax().y - detailsTop;
+                if ( wide )
+                    ImGui::TableSetColumnIndex(1);
+                else
+                    ImGui::Spacing();
+                drawCatalogActions(index,
+                                   minButtonWidth,
+                                   buttonHeight,
+                                   wide ? detailsHeight : 0.0F);
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        ImGui::PopStyleVar(2);
+        ImGui::Spacing();
     }
 
     /// @brief 展示高级外部模型导入选项，兼容已有的用户自定义 MSST 工作流。
@@ -643,12 +688,12 @@ private:
     /// @brief 按目录、音源和作业的顺序组织分离面板。
     /// @details 是否可分离由当前模型、音源及有效后端共同决定。
     /// @warning 只显示缓存状态；分离及模型部署均提交后台执行。
-    void drawSeparationControls()
+    void drawSeparationControls(float dpiScale)
     {
-        // 目录是默认入口。已知模型的声部在表格中呈现，无需再重复一份列表。
+        // 目录是默认入口。已知模型的声部在目录行中呈现，无需再重复一份列表。
         if ( ImGui::CollapsingHeader("模型目录",
                                      ImGuiTreeNodeFlags_DefaultOpen) ) {
-            drawCatalog();
+            drawCatalog(dpiScale);
         }
         // 运行时解释器只属于高级配置，普通目录模型绑定后即可使用。
         if ( ImGui::CollapsingHeader("高级 · 自定义模型") )
