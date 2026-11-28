@@ -1078,6 +1078,102 @@ bool testDownwardBrushCreatesZeroLengthHold()
     return true;
 }
 
+/// @brief 验证尾部自动连接只消费唯一重合的根对象。
+/// @return 唯一 Flick 能连接，多目标时原对象完整保留，且撤销重做一致。
+/// @details 用真实画笔投影取得尾部，再为该坐标构造重合目标。
+/// @note 同时覆盖两个可延伸的根，以及普通 Note 与 Flick 重合的情况。
+bool testBrushTailConnectsOnlyUniqueTarget()
+{
+    using MMM::NoteType;
+    using namespace MMM::Logic;
+    for ( const auto secondType : { std::optional<NoteType>{},
+                                    std::optional{ NoteType::HOLD },
+                                    std::optional{ NoteType::NOTE } } ) {
+        SessionContext context;
+        configureObjectEditingCanvas(context);
+        context.lastConfig.settings.enablePolylineEditing = true;
+        DrawTool tool;
+        tool.handleStartBrush(context,
+                              CmdStartBrush{ .cameraId    = "Basic2DCanvas",
+                                             .mouseX      = 150.0F,
+                                             .mouseY      = 300.0F,
+                                             .isShiftDown = true,
+                                             .isCtrlDown  = true });
+        tool.handleUpdateBrush(context,
+                               CmdUpdateBrush{ .cameraId    = "Basic2DCanvas",
+                                               .mouseX      = 150.0F,
+                                               .mouseY      = 100.0F,
+                                               .isShiftDown = true,
+                                               .isCtrlDown  = true });
+        // 先确认手势确实生成了有效长条，再用实际终点定位候选。
+        if ( context.brushState.type != NoteType::HOLD ||
+             context.brushState.duration <= 0.0 )
+            return false;
+        const double start = context.brushState.time;
+        const double tail  = start + context.brushState.duration;
+        const int    track = context.brushState.track;
+
+        NoteComponent flick;
+        flick.m_type       = NoteType::FLICK;
+        flick.m_timestamp  = tail;
+        flick.m_trackIndex = track;
+        flick.m_dtrack     = 1;
+        const auto flickId = context.noteRegistry.create();
+        context.noteRegistry.emplace<NoteComponent>(flickId, flick);
+        if ( secondType ) {
+            // 两个根完全同轨同拍，但几何不同，无法从重合位置确定拼接顺序。
+            NoteComponent other = flick;
+            other.m_type        = *secondType;
+            other.m_duration    = *secondType == NoteType::HOLD ? 0.5 : 0.0;
+            other.m_dtrack      = 0;
+            const auto otherId  = context.noteRegistry.create();
+            context.noteRegistry.emplace<NoteComponent>(otherId, other);
+        }
+        tool.handleEndBrush(context,
+                            CmdEndBrush{ .cameraId = "Basic2DCanvas" });
+
+        // 共用提交和 Redo 断言，避免只看创建数量而遗漏段几何或被吞掉的原物件。
+        const auto valid = [&] {
+            const auto notes = context.noteRegistry.view<const NoteComponent>();
+            std::size_t roots     = 0;
+            bool        hasResult = false;
+            for ( const auto entity : notes ) {
+                const auto& note = notes.get<const NoteComponent>(entity);
+                if ( note.m_isSubNote ) continue;
+                ++roots;
+                if ( !near(note.m_timestamp, start) ) continue;
+                if ( secondType ) {
+                    hasResult = note.m_type == NoteType::HOLD &&
+                                note.m_subNotes.empty() &&
+                                near(start + note.m_duration, tail);
+                } else {
+                    hasResult =
+                        note.m_type == NoteType::POLYLINE &&
+                        note.m_subNotes.size() == 2 &&
+                        note.m_subNotes.back().type == NoteType::FLICK &&
+                        note.m_subNotes.back().dtrack == 1;
+                }
+            }
+            return hasResult && roots == (secondType ? 3U : 1U) &&
+                   context.noteRegistry.valid(flickId) ==
+                       secondType.has_value();
+        };
+        if ( !valid() ) {
+            XERROR("Brush tail connection changed the wrong roots");
+            return false;
+        }
+        context.actionStack.undo(context);
+        // 输入根必须可恢复，且 Undo 只留下原来的候选集合。
+        if ( !context.noteRegistry.valid(flickId) ||
+             context.noteRegistry.view<NoteComponent>().size() !=
+                 (secondType ? 2U : 1U) )
+            return false;
+        context.actionStack.redo(context);
+        if ( !valid() ) return false;
+    }
+    return true;
+}
+
 /// @brief 验证滑键头部及折线节点向下多次拖动不生成零长度 Hold，也不丢失滑键。
 /// @details
 /// 分别构造根 Flick 与末节点为 Flick 的 Polyline，对半拍、一拍和两拍反向更新，
@@ -9204,6 +9300,7 @@ int main()
                    testWalkthroughPlacementRollback() &&
                    testWalkthroughPolylinePlacementRollback() &&
                    testDownwardBrushCreatesZeroLengthHold() &&
+                   testBrushTailConnectsOnlyUniqueTarget() &&
                    testDownwardFlickAndPolylineRemainSlides() &&
                    testPolylinePreservesHorizontalFirstGestureOrder() &&
                    testBmsEditingHidesBgmLanes() &&
