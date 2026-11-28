@@ -64,7 +64,9 @@ add_library(
   src/OfflineAnalysisEQ.cpp
   src/SoundEffectPool.cpp
   # 多轨试听和区间取样复用实时排程及源帧坐标。
-  src/StemAudition.cpp)
+  src/StemAudition.cpp
+  # 分离产物与调音台使用本机代次清单，恢复不依赖推理环境。
+  src/StemPlaybackStorage.cpp)
 
 target_link_libraries(
   Audio

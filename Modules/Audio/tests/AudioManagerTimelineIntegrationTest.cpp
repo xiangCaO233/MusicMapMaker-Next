@@ -1,10 +1,13 @@
 #include "audio/AudioManager.h"
 #include "audio/AudioTimelineMixerNode.h"
 #include "audio/StemAudition.h"
+#include "audio/StemPlaybackStorage.h"
 #include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
 
 #include "config/AppConfig.h"
+#include "config/AppPaths.h"
+#include "config/StagedFile.h"
 #include "log/colorful-log.h"
 #include "runtime/AppThreadPool.h"
 
@@ -1236,6 +1239,99 @@ bool testSharedChartStemRouting(MMM::Audio::AudioManager& manager,
     return first && shared && effect && restored;
 }
 
+/// @brief 验证磁盘全量恢复、后台设置保存及已失效的分轨文件回退。
+/// @warning 测试隔离目录内复制短 WAV，等待真实解码与设备回调。
+bool testPersistedChartStems(MMM::Audio::AudioManager& manager,
+                             const std::string&        samplePath)
+{
+    using namespace MMM::Audio;
+    if ( !MMM::Config::AppPaths::ensureConfigRootPath() ) return false;
+    MMM::Config::ScopedTemporaryDirectory fixture(
+        MMM::Config::AppPaths::configRootPath(), "stem-reopen-");
+    if ( fixture.path().empty() ) return false;
+    const auto      originalFile = fixture.path() / "original.wav";
+    std::error_code error;
+    if ( !std::filesystem::copy_file(
+             MMM::Config::utf8ToPath(samplePath), originalFile, error) ||
+         error )
+        return false;
+    const auto original = MMM::Config::pathToUtf8(originalFile);
+    const auto identity = readStemSourceIdentity(original);
+    auto*      decode   = MMM::Runtime::AppThreadPool::instance().get();
+    if ( !identity || !decode ) return false;
+
+    const std::array files{ samplePath };
+    auto             catalog = StemAudition::loadAlignedFiles(files, *decode);
+    if ( !catalog ) return false;
+    StemPlaybackMix saved{
+        .catalog  = std::make_shared<const StemAudition>(std::move(*catalog)),
+        .gains    = { 0.25F },
+        .enabled  = { false },
+        .useStems = true,
+    };
+    saved.settingsPath = storeStemPlaybackResult(*identity, files, saved);
+    if ( saved.settingsPath.empty() ) return false;
+    // 失败的再次分离不能覆盖先前成功发布的清单。
+    if ( !storeStemPlaybackResult(
+              *identity, std::array{ original + ".missing" }, saved)
+              .empty() )
+        return false;
+
+    // 从未发布到内存的主轨只通过谱面加载进入管理器，模拟应用重启的空状态。
+    const double duration = static_cast<double>(saved.catalog->endFrame()) /
+                            ice::ICEConfig::internal_format.samplerate;
+    const auto   loaded =
+        manager.loadAudioTimeline({ AudioTimelineLoadEvent{
+                                      .eventId     = 1,
+                                      .resourceKey = "persisted-main",
+                                      .filePath    = original,
+                                      .isMainTrack = true,
+                                  } },
+                                  duration,
+                                  "persisted-stem-timeline");
+    const auto source   = manager.getStemPlaybackSource(original);
+    const auto restored = source->mix();
+    bool       ok = loaded.success && restored->catalog && restored->useStems &&
+                    restored->gains == saved.gains &&
+                    restored->enabled == saved.enabled;
+
+    // 连续发布两份调音台状态，后台文件任务必须以最后一次编辑结束。
+    auto change    = *restored;
+    change.gains   = { 0.5F };
+    change.enabled = { true };
+    change.solo    = 0;
+    ok             = ok && source->publish(change);
+    source->queueSettingsSave();
+    change.useStems = false;
+    ok              = ok && source->publish(change);
+    source->queueSettingsSave();
+    ok = ok && waitUntil([&] {
+             auto reopened = loadStoredStemPlayback(original, *decode);
+             return reopened && !reopened->useStems &&
+                    reopened->gains == change.gains &&
+                    reopened->enabled == change.enabled &&
+                    reopened->solo == change.solo;
+         });
+
+    // 缓存里的某条 WAV 丢失时整组不可用，不能只播剩下几轨。
+    if ( restored->catalog ) {
+        const auto missing =
+            MMM::Config::utf8ToPath(restored->catalog->tracks().front().id);
+        ok = std::filesystem::remove(missing, error) && !error && ok;
+        ok = !loadStoredStemPlayback(original, *decode) && ok;
+    }
+    // 同路径更新原曲后，包括当前进程在内都不再关联旧的内存分轨。
+    const auto previousTime =
+        std::filesystem::last_write_time(originalFile, error);
+    if ( error ) return false;
+    std::filesystem::last_write_time(originalFile, previousTime + 5s, error);
+    ok = !error && !manager.getStemPlaybackSource(original)->mix()->catalog &&
+         !loadStoredStemPlayback(original, *decode) && ok;
+    manager.unloadAudioTimeline(false);
+    if ( !ok ) XERROR("Persisted chart stem restoration failed");
+    return ok;
+}
+
 }  // namespace
 
 /// @brief 运行 AudioManager 自动采样时间线集成测试。
@@ -1292,6 +1388,7 @@ int main(int argc, char** argv)
         testAuditionVolumeRouting(manager, samplePath) &&
         testStemAuditionRouting(manager, samplePath) &&
         testSharedChartStemRouting(manager, samplePath) &&
+        testPersistedChartStems(manager, samplePath) &&
         testQueuedSoundEffectShutdown(manager, samplePath);
 
     // 先停止音频后端和释放图，再关闭资源线程池。

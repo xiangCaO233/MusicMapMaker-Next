@@ -6,7 +6,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -124,20 +126,32 @@ struct StemPlaybackMix {
     std::optional<std::size_t> solo;
     /// @brief 是否用分轨混音替换谱面中同源的主音轨。
     bool useStems{};
+    /// @brief 本代分轨的本机设置路径。空路径表示未能持久化的会话结果。
+    std::filesystem::path settingsPath;
 };
 
 /// @brief 共享主音轨的 UI 状态及传给谱面混音器的不可变快照。
 /// @details
-/// 界面线程独占状态写入。调度持有此对象，分轨发布不替换调度或重置播放头。
+/// 后台恢复与界面编辑通过短锁发布；音频回调不取锁或重置播放头。
 class StemPlaybackSource final
+    : public std::enable_shared_from_this<StemPlaybackSource>
 {
 public:
-    /// @brief 借用界面线程当前状态，任何新发布都会使引用失效。
-    [[nodiscard]] const StemPlaybackMix& mix() const noexcept;
+    /// @brief 取得供界面或后台保存使用的不可变状态句柄。
+    /// @warning 每次绘制只取得一次，不能在音频回调复制所有权或取锁。
+    [[nodiscard]] std::shared_ptr<const StemPlaybackMix> mix() const;
 
     /// @brief 发布完整调音台状态，未通过目录和参数校验时保留当前状态。
-    /// @warning 只在界面线程调用；可能分配或释放快照，回调不会执行此操作。
+    /// @warning 控制或准备线程调用；文件读取和快照析构均在锁外。
     [[nodiscard]] bool publish(StemPlaybackMix mix);
+
+    /// @brief 从本机保存的结果恢复一次；已经发布的结果优先。
+    /// @warning 仅资源准备或独立文件线程调用，可能等待解码。
+    void restore(const std::string& filePath, ice::ThreadPool& decodePool);
+
+    /// @brief 将最新调音台设置提交给后台文件池，拖动期间合并连续更新。
+    /// @warning 不做文件 I/O；仅在实际编辑或安装新结果时调用。
+    void queueSettingsSave();
 
     /// @brief 在一次实时混音操作中借用分轨快照。
     /// @warning 音频热路径：原版播放只查询一次指针；分轨播放不分配、不等待。
@@ -161,10 +175,21 @@ public:
     };
 
 private:
-    /// @brief 最新界面状态，界面线程独占，可为空。
-    std::unique_ptr<const StemPlaybackMix> m_current;
-    /// @brief GUI 保留可能仍被回调借用的旧快照。
-    std::vector<std::unique_ptr<const StemPlaybackMix>> m_retired;
+    /// @brief 内部发布入口，后台恢复不得覆盖用户已完成的新结果。
+    [[nodiscard]] bool publishMix(StemPlaybackMix mix, bool onlyIfEmpty);
+    /// @brief 写出最新快照，保持同一来源的设置写入有序。
+    /// @warning 仅文件工作线程执行，落盘期间不持有混音状态锁。
+    void saveQueuedSettings();
+    /// @brief 短时保护非实时快照及保存任务状态。
+    mutable std::mutex m_mixMutex;
+    /// @brief 归并同一来源的并发加载，不重复解码整组分离文件。
+    std::once_flag m_restored;
+    /// @brief 已经有文件任务负责处理本源后续更新。
+    bool m_saveQueued{};
+    /// @brief 最新发布状态，可为空；普通线程通过短锁复制持有权。
+    std::shared_ptr<const StemPlaybackMix> m_current;
+    /// @brief 保存可能仍被回调借用的旧快照，析构移到发布锁外。
+    std::vector<std::shared_ptr<const StemPlaybackMix>> m_retired;
     /// @brief 当前实时配置；空值表示原版。
     /// @warning UI
     /// 写、音频线程读。与读者计数保持顺序一致，避免旧配置被提前释放。

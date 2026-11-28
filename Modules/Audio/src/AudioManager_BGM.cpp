@@ -6,6 +6,7 @@
 #include "audio/AuditionSourceMixerNode.h"
 #include "audio/KeySoundControl.h"
 #include "audio/StemAudition.h"
+#include "audio/StemPlaybackStorage.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
@@ -230,8 +231,16 @@ std::shared_ptr<StemPlaybackSource> AudioManager::getStemPlaybackSource(
 std::shared_ptr<StemPlaybackSource>
 AudioManager::TimelinePlayback::stemPlaybackSource(const std::string& filePath)
 {
-    auto key = makeAudioPathSyncKey(filePath);
+    const auto identity = readStemSourceIdentity(filePath);
+    auto       key = identity ? identity->path : makeAudioPathSyncKey(filePath);
     if ( key.empty() ) return {};
+    if ( identity ) {
+        // 同一应用内重新打开项目时，更新过的原曲也要获得独立的恢复状态。
+        key += '\0';
+        key += std::to_string(identity->size);
+        key += ':';
+        key += identity->modified;
+    }
     std::lock_guard lock(m_stemSourcesMutex);
     auto&           source = m_stemSources[std::move(key)];
     if ( !source ) source = std::make_shared<StemPlaybackSource>();
@@ -484,7 +493,12 @@ std::shared_ptr<PreparedAudioTimeline> AudioManager::TimelinePlayback::prepare(
         if ( event.isMainTrack ) {
             auto [source, inserted] =
                 stemSourcesByPath.try_emplace(event.filePath);
-            if ( inserted ) source->second = stemPlaybackSource(event.filePath);
+            if ( inserted ) {
+                source->second = stemPlaybackSource(event.filePath);
+                // 进入活动图前恢复模式，不要求先打开分轨面板。
+                if ( source->second )
+                    source->second->restore(event.filePath, *threadPool);
+            }
             stemSource = source->second;
         }
         preparedClips.push_back(PreparedTimelineClip{

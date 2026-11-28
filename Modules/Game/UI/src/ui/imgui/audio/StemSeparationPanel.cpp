@@ -65,6 +65,16 @@ public:
             m_stemSource =
                 Audio::AudioManager::instance().getStemPlaybackSource(
                     m_sourcePath);
+            // 非活动谱面或尚未打开的主轨也可从面板恢复；同源后台准备自动去重。
+            auto& runtime = Runtime::AppThreadPool::instance();
+            if ( auto* files = runtime.getFileThreadPool();
+                 files && runtime.get() && m_stemSource ) {
+                files->enqueue([source = m_stemSource,
+                                path   = m_sourcePath,
+                                decode = runtime.get()] {
+                    source->restore(path, *decode);
+                });
+            }
             m_restorePlaybackTab = true;
             m_lastPlaybackTab.reset();
             m_error.clear();
@@ -133,30 +143,34 @@ private:
     }
 
     /// @brief 文件任务返回的不可变目录，错误在 UI 线程显示。
-    using LoadResult = std::expected<Audio::StemAudition, std::string>;
+    using LoadResult = std::expected<Audio::StemPlaybackMix, std::string>;
 
     /// @brief 切换原版、分轨播放和模型设置。
     /// @warning UI 热路径；仅在播放页改变时发布新状态。
     void drawWorkspace(float dpiScale)
     {
         if ( !m_stemSource ) return;
+        const auto current = m_stemSource->mix();
         // 同一个源可能有不止一个控制器。另一处切换后同步当前播放页；
         // 设置页没有选中的播放页，因此仍停在原来的设置界面。
-        if ( m_lastPlaybackTab &&
-             *m_lastPlaybackTab != m_stemSource->mix().useStems )
+        if ( m_lastPlaybackTab && *m_lastPlaybackTab != current->useStems )
             m_restorePlaybackTab = true;
         // 用源路径隔离 ImGui 的上一次选页，避免切换主音轨时沿用另一首歌的标签。
         ImGui::PushID(m_sourcePath.c_str());
         if ( ImGui::BeginTabBar("StemWorkspace") ) {
             if ( ImGui::BeginTabItem(
-                     "原版播放", nullptr, playbackTabFlags(false)) ) {
-                selectPlaybackMode(false);
+                     "原版播放",
+                     nullptr,
+                     playbackTabFlags(false, current->useStems)) ) {
+                selectPlaybackMode(false, *current);
                 ImGui::EndTabItem();
             }
-            if ( m_stemSource->mix().catalog &&
+            if ( current->catalog &&
                  ImGui::BeginTabItem(
-                     "分轨播放", nullptr, playbackTabFlags(true)) ) {
-                selectPlaybackMode(true);
+                     "分轨播放",
+                     nullptr,
+                     playbackTabFlags(true, current->useStems)) ) {
+                selectPlaybackMode(true, *current);
                 drawTrackControls(dpiScale);
                 ImGui::EndTabItem();
             }
@@ -164,7 +178,7 @@ private:
                 // 返回设置页后，下次进入播放页算作新的模式选择。
                 m_lastPlaybackTab.reset();
                 drawSetup();
-                if ( m_stemSource->mix().catalog )
+                if ( current->catalog )
                     ImGui::TextUnformatted("分离完成，可切换到分轨播放。");
                 ImGui::EndTabItem();
             }
@@ -175,18 +189,17 @@ private:
 
     /// @brief 控制器重新绑定时恢复已发布的播放页。
     /// @warning UI 热路径；只读取模式标量，不复制目录。
-    ImGuiTabItemFlags playbackTabFlags(bool stems) const
+    ImGuiTabItemFlags playbackTabFlags(bool stems, bool current) const
     {
-        return m_restorePlaybackTab && m_stemSource->mix().useStems == stems
+        return m_restorePlaybackTab && current == stems
                    ? ImGuiTabItemFlags_SetSelected
                    : ImGuiTabItemFlags_None;
     }
 
     /// @brief 选中播放页时只改变同源主音轨的模式，设置页不改变声音。
     /// @warning UI 热路径；只有明确的模式变化才复制并发布配置。
-    void selectPlaybackMode(bool stems)
+    void selectPlaybackMode(bool stems, const Audio::StemPlaybackMix& current)
     {
-        const auto& current = m_stemSource->mix();
         if ( m_restorePlaybackTab ) {
             // ImGui 可能先绘制默认标签再处理 SetSelected，此帧保留已存模式。
             if ( stems == current.useStems ) {
@@ -201,7 +214,8 @@ private:
         if ( stems == current.useStems || !current.catalog ) return;
         auto edited     = current;
         edited.useStems = stems;
-        static_cast<void>(m_stemSource->publish(std::move(edited)));
+        if ( m_stemSource->publish(std::move(edited)) )
+            m_stemSource->queueSettingsSave();
     }
 
     /// @brief 排列模型、音源及当前作业，不在混音区重复显示部署控件。
@@ -520,6 +534,7 @@ private:
                                                    ? *m_boundEnvironment
                                                    : *m_environment,
                                  stop        = m_separationStop.get_token(),
+                                 useStems    = m_stemSource->mix()->useStems,
                                  decode] {
             // 工作进程生成完一组结果后才进入解码，解码池不持有界面状态。
             return runStemSeparation(model,
@@ -528,7 +543,8 @@ private:
                                      environment.backend,
                                      environment.cpu,
                                      *decode,
-                                     stop);
+                                     stop,
+                                     useStems);
         });
         if ( !m_load.valid() ) m_error = "无法提交分离任务。";
     }
@@ -542,26 +558,24 @@ private:
             return;
         }
         if ( !m_stemSource ) return;
-        const auto             count = result->tracks().size();
-        Audio::StemPlaybackMix mix{
-            .catalog =
-                std::make_shared<const Audio::StemAudition>(std::move(*result)),
-            .gains    = std::vector<float>(count, 1.0F),
-            .enabled  = std::vector<bool>(count, true),
-            .useStems = m_stemSource->mix().useStems,
-        };
-        // 不按索引套用旧推子；不同模型输出的声部顺序和数量可能不同。
-        if ( m_stemSource->publish(std::move(mix)) )
-            m_error.clear();
-        else
+        result->useStems  = m_stemSource->mix()->useStems;
+        const bool stored = !result->settingsPath.empty();
+        // 保留当前模式；文件任务期间仍可能切回原版。
+        if ( m_stemSource->publish(std::move(*result)) ) {
+            m_stemSource->queueSettingsSave();
+            m_error =
+                stored ? "" : "分离结果可在本次运行使用，但写入本机缓存失败。";
+        } else {
             m_error = "无法准备分轨播放。";
+        }
     }
 
     /// @brief 绘制控制谱面主轨的声部推子、启用与独听。
     /// @warning UI 热路径；空闲帧只借用状态，控件变化才复制最新组合。
     void drawTrackControls(float dpiScale)
     {
-        const auto& current = m_stemSource->mix();
+        const auto  snapshot = m_stemSource->mix();
+        const auto& current  = *snapshot;
         if ( m_labelCatalog != current.catalog ) {
             // 文件名只在目录变更时转为展示文本，连续拖动不解析路径。
             m_labelCatalog = current.catalog;
@@ -694,8 +708,8 @@ private:
         }
         ImGui::PopStyleVar();
         // 同一画面上的多项输入只产生一次更新，下一音频块可看到完整组态。
-        if ( edited )
-            static_cast<void>(m_stemSource->publish(std::move(*edited)));
+        if ( edited && m_stemSource->publish(std::move(*edited)) )
+            m_stemSource->queueSettingsSave();
     }
 
     /// @brief 上一帧区域已展开，用于按交互刷新模型绑定。
