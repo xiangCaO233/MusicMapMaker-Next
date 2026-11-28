@@ -20,6 +20,7 @@
 #    include <cfloat>
 #    include <chrono>
 #    include <cstddef>
+#    include <cstdint>
 #    include <expected>
 #    include <filesystem>
 #    include <future>
@@ -92,7 +93,9 @@ public:
         const bool expanded = ImGui::CollapsingHeader("声部分离");
         if ( expanded ) {
             // 重新展开可读取其他音轨控制器新部署的模型。
-            if ( !m_expanded ) restoreBindings();
+            if ( !m_expanded ||
+                 m_bindingsRevision != stemModelBindingsRevision() )
+                restoreBindings();
             drawWorkspace(dpiScale);
         } else {
             m_cacheVisible = false;
@@ -106,7 +109,18 @@ private:
     void restoreBindings()
     {
         // 读取最新目录只刷新目录状态，不把用户手工选中的模型自动切走。
-        m_bindings = readStemModelBindings();
+        m_bindingsRevision = stemModelBindingsRevision();
+        auto paths         = readStemModelBindings();
+        if ( m_selectedCatalog &&
+             paths[*m_selectedCatalog] != m_bindings[*m_selectedCatalog] ) {
+            // 另一个控制器卸载或改绑后，旧环境不能再次发起推理。
+            m_selectedCatalog.reset();
+            m_model.reset();
+            m_boundEnvironment.reset();
+        }
+        m_bindings            = std::move(paths);
+        m_modelStorage        = {};
+        m_refreshModelStorage = true;
         if ( !m_environment ) {
             // 自定义模型与目录中各项使用不同设置文件，旧 MSST 入口不做迁移。
             m_environment = loadStemSeparationEnvironment();
@@ -164,6 +178,18 @@ private:
                 m_restorePlaybackTab = true;
             }
             m_refreshCache = true;
+        }
+        if ( m_modelStorageScan.valid() &&
+             m_modelStorageScan.wait_for(0s) == std::future_status::ready ) {
+            auto storage = m_modelStorageScan.get();
+            // 换绑后丢弃旧扫描，避免显示路径和大小来自不同的部署目录。
+            if ( !m_refreshModelStorage ) m_modelStorage = std::move(storage);
+        }
+        if ( m_modelRemoval.valid() &&
+             m_modelRemoval.wait_for(0s) == std::future_status::ready ) {
+            auto result = m_modelRemoval.get();
+            if ( !result ) m_error = result.error();
+            m_refreshModelStorage = true;
         }
         // 部署不依赖主轨路径。面板折叠时也可保存已就绪的模型。
         if ( m_deployment.valid() &&
@@ -272,7 +298,7 @@ private:
         // 后台任务持有已经冻结的输入，禁用操作可避免进度与新选择相互矛盾。
         // 取消按钮留在禁用区域外，无需中断播放即可结束文件任务。
         ImGui::BeginDisabled(m_load.valid() || m_deployment.valid() ||
-                             m_cacheAction.valid());
+                             m_cacheAction.valid() || m_modelRemoval.valid());
         drawSeparationControls(dpiScale);
         ImGui::EndDisabled();
 
@@ -288,6 +314,7 @@ private:
             ImGui::TextUnformatted("正在分离主音轨…");
             if ( FeedbackButton("取消分离") ) m_separationStop.request_stop();
         }
+        if ( m_modelRemoval.valid() ) ImGui::TextUnformatted("正在移除模型…");
         // 统一在触发入口下方报告结果，失败时不清理已有效的模型或音轨。
         if ( !m_error.empty() ) ImGui::TextWrapped("%s", m_error.c_str());
     }
@@ -327,6 +354,22 @@ private:
         }
     }
 
+    /// @brief 以二进制单位显示目录中文件的总大小。
+    /// @warning 缓存与模型目录共用展示格式，不做文件访问。
+    static void drawDiskUsage(std::uintmax_t bytes)
+    {
+        if ( bytes < 1024 )
+            ImGui::Text("占用：%llu B", static_cast<unsigned long long>(bytes));
+        else if ( bytes < 1024 * 1024 )
+            ImGui::Text("占用：%.2f KiB", static_cast<double>(bytes) / 1024);
+        else if ( bytes < 1024 * 1024 * 1024 )
+            ImGui::Text("占用：%.2f MiB",
+                        static_cast<double>(bytes) / (1024 * 1024));
+        else
+            ImGui::Text("占用：%.2f GiB",
+                        static_cast<double>(bytes) / (1024 * 1024 * 1024));
+    }
+
     /// @brief 展示一个模型的本机文件，并将操作限制在该模型。
     /// @warning UI 热路径；只使用后台已取得的统计，不访问文件系统。
     void drawCacheEntry(const Audio::StemPlaybackCacheInfo& cache,
@@ -339,19 +382,7 @@ private:
         ImGui::TextWrapped("%s", cache.modelName.c_str());
         if ( selected ) ImGui::TextDisabled("当前使用");
         ImGui::TextWrapped("位置：%s", cache.directory.c_str());
-        if ( cache.bytes < 1024 )
-            ImGui::Text("占用：%llu B",
-                        static_cast<unsigned long long>(cache.bytes));
-        else if ( cache.bytes < 1024 * 1024 )
-            ImGui::Text("占用：%.2f KiB",
-                        static_cast<double>(cache.bytes) / 1024);
-        else if ( cache.bytes < 1024 * 1024 * 1024 )
-            ImGui::Text("占用：%.2f MiB",
-                        static_cast<double>(cache.bytes) / (1024 * 1024));
-        else
-            ImGui::Text(
-                "占用：%.2f GiB",
-                static_cast<double>(cache.bytes) / (1024 * 1024 * 1024));
+        drawDiskUsage(cache.bytes);
         if ( !cache.reusable )
             ImGui::TextDisabled("此缓存无法用于当前版本的原音频。");
 
@@ -445,7 +476,11 @@ private:
         m_model            = std::move(bound.model);
         m_selectedCatalog  = index;
         m_boundEnvironment = std::move(bound.environment);
-        m_bindings[index]  = std::move(bound.directory);
+        if ( m_bindings[index] != bound.directory ) {
+            m_modelStorage[index].reset();
+            m_refreshModelStorage = true;
+        }
+        m_bindings[index] = std::move(bound.directory);
         // 若配置目录不可写，保持本次会话可用，提示重启时会丢失新绑定。
         if ( persist && !saveStemModelBinding(STEM_MODEL_CATALOG[index],
                                               m_bindings[index]) ) {
@@ -541,6 +576,14 @@ private:
         ImGui::TextDisabled("%s", status);
         if ( bound ) ImGui::SetItemTooltip("%s", m_bindings[index].c_str());
 
+        if ( bound ) {
+            if ( const auto& storage = m_modelStorage[index] )
+                drawDiskUsage(storage->bytes);
+            else
+                ImGui::TextDisabled(
+                    "%s",
+                    m_modelStorageScan.valid() ? "正在统计占用…" : "占用未知");
+        }
         ImGui::TextWrapped("%s", entry.stems);
         // 弱化补充说明，主信息和正文仍使用当前皮肤的对比度。
         auto descriptionColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
@@ -562,9 +605,10 @@ private:
         const float width =
             inlineButtons ? (available - gap) * 0.5F : available;
         // 宽面板以左侧说明的实际换行高度居中，窄面板在说明下另起一行。
+        const bool  bound = !m_bindings[index].empty();
+        const int   rows  = (inlineButtons ? 1 : 2) + (bound ? 1 : 0);
         const float actionsHeight =
-            inlineButtons ? height
-                          : 2.0F * height + ImGui::GetStyle().ItemSpacing.y;
+            rows * height + (rows - 1) * ImGui::GetStyle().ItemSpacing.y;
         if ( detailsHeight > actionsHeight )
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() +
                                  (detailsHeight - actionsHeight) * 0.5F);
@@ -573,12 +617,97 @@ private:
         if ( inlineButtons ) ImGui::SameLine(0.0F, gap);
         if ( FeedbackButton("绑定已有", { width, height }) )
             chooseModelDirectory(index, false);
+        if ( bound || m_modelConfirmIndex == index )
+            drawModelRemoval(index, { available, height });
+    }
+
+    /// @brief 在每行确认文件删除范围；绑定的外部环境可以解除关联。
+    /// @warning UI 热路径，递归清理由确认事件提交给文件线程。
+    void drawModelRemoval(std::size_t index, ImVec2 size)
+    {
+        constexpr const char* confirmation = "移除模型##ModelRemoval";
+        const auto&           storage      = m_modelStorage[index];
+        const bool            managed      = storage && storage->managed;
+        if ( !m_bindings[index].empty() ) {
+            ImGui::BeginDisabled(m_modelStorageScan.valid());
+            if ( FeedbackButton(managed ? "删除模型" : "解除绑定", size) ) {
+                // 确认框打开期间即使收到其他窗口的改绑，也保留用户看到的路径。
+                m_modelConfirmIndex       = index;
+                m_modelConfirmPath        = m_bindings[index];
+                m_modelConfirmRemoveFiles = managed;
+                ImGui::OpenPopup(confirmation);
+            }
+            ImGui::EndDisabled();
+        }
+        if ( m_modelConfirmIndex != index ) return;
+        if ( ImGui::BeginPopupModal(
+                 confirmation, nullptr, ImGuiWindowFlags_AlwaysAutoResize) ) {
+            ImGui::TextWrapped("%s", STEM_MODEL_CATALOG[index].name);
+            ImGui::TextWrapped("%s", m_modelConfirmPath.c_str());
+            ImGui::TextWrapped(
+                "%s",
+                m_modelConfirmRemoveFiles
+                    ? "删除此模型的权重、独立环境和分离脚本？已生成的分轨缓"
+                      "存将保留。"
+                    : "解除此模型的目录绑定？目录里的文件将保留。");
+            // 默认落在取消按钮，防止打开确认框后误按回车。
+            if ( FeedbackButton("取消") ) {
+                m_modelConfirmIndex.reset();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SetItemDefaultFocus();
+            ImGui::SameLine();
+            if ( FeedbackButton(m_modelConfirmRemoveFiles ? "确认删除"
+                                                          : "确认解除") ) {
+                startModelRemoval(index);
+                m_modelConfirmIndex.reset();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
+
+    /// @brief 为模型表的一次刷新提交独立磁盘扫描。
+    /// @warning 从目录打开或绑定变化触发，渲染不遍历文件。
+    void scanModelStorage()
+    {
+        auto* files = Runtime::AppThreadPool::instance().getFileThreadPool();
+        if ( !files ) return;
+        m_refreshModelStorage = false;
+        m_modelStorageScan    = files->enqueue([bindings = m_bindings] {
+            ModelStorageRows rows;
+            for ( std::size_t index = 0; index < bindings.size(); ++index ) {
+                if ( !bindings[index].empty() )
+                    rows[index] = inspectStemModelStorage(
+                        STEM_MODEL_CATALOG[index], bindings[index]);
+            }
+            return rows;
+        });
+    }
+
+    /// @brief 固定确认时的绑定位置，后台会再次核对其仍然有效。
+    /// @warning 仅按钮确认触发，窗口关闭也不会取消已提交的卸载。
+    void startModelRemoval(std::size_t index)
+    {
+        m_error.clear();
+        if ( auto* files =
+                 Runtime::AppThreadPool::instance().getFileThreadPool() )
+            m_modelRemoval =
+                files->enqueue([entry     = STEM_MODEL_CATALOG[index],
+                                directory = m_modelConfirmPath,
+                                managed   = m_modelConfirmRemoveFiles] {
+                    return removeStemModelBinding(entry, directory, managed);
+                });
+        if ( !m_modelRemoval.valid() ) m_error = "无法提交模型移除任务。";
     }
 
     /// @brief 模型以分隔行呈现。宽面板右侧放操作，窄面板放在说明下方。
     /// @warning UI 热路径；目录高度、留白和断点只使用字体、DPI 和可用空间。
     void drawCatalog(float dpiScale)
     {
+        if ( m_refreshModelStorage && !m_modelStorageScan.valid() &&
+             !m_modelRemoval.valid() )
+            scanModelStorage();
         const auto& style    = ImGui::GetStyle();
         const float font     = ImGui::GetFontSize();
         const float paddingX = std::max(12.0F * dpiScale, font * 0.65F);
@@ -747,6 +876,9 @@ private:
                                  stop        = m_separationStop.get_token(),
                                  playback    = m_stemSource,
                                  decode]() -> LoadResult {
+            const auto modelFiles = tryLockStemModelFiles();
+            if ( !modelFiles )
+                return std::unexpected("正在卸载模型，请稍后分离。");
             // 同源控制器不能在推理或发布期间删除缓存，也不能并行重复推理。
             const auto lock = playback->tryLockCache();
             if ( !lock ) return std::unexpected("此音轨已有分离或清理任务。");
@@ -968,6 +1100,25 @@ private:
     /// @brief 按模型目录顺序记录长期绑定位置。
     /// @details 本机配置以稳定 ID 序列化，UI 顺序不会成为磁盘格式。
     std::array<std::string, STEM_MODEL_CATALOG.size()> m_bindings;
+    /// @brief 最近观察到的共享绑定提交序号，避免重复加载配置。
+    std::uint64_t m_bindingsRevision{};
+    /// @brief 每条目录行的文件统计，未扫描或目录不可用时为空。
+    using ModelStorageRows =
+        std::array<std::optional<StemModelStorage>, STEM_MODEL_CATALOG.size()>;
+    /// @brief 本面板最近一轮有效扫描的展示快照。
+    ModelStorageRows m_modelStorage;
+    /// @brief 模型目录访问可耗时，绘制线程仅在就绪时取回。
+    std::future<ModelStorageRows> m_modelStorageScan;
+    /// @brief 绑定改变或重开目录时触发一次扫描。
+    bool m_refreshModelStorage = true;
+    /// @brief 删除结果与当前主轨无关，切换主轨也继续消费。
+    std::future<std::expected<void, std::string>> m_modelRemoval;
+    /// @brief 当前确认框所属的模型行，供改绑后维持原来的弹窗 ID。
+    std::optional<std::size_t> m_modelConfirmIndex;
+    /// @brief 弹窗打开时冻结的目录，防止确认无意指向另一部署。
+    std::string m_modelConfirmPath;
+    /// @brief 弹窗所承诺的删除范围，不随异步统计变化。
+    bool m_modelConfirmRemoveFiles = false;
     /// @brief 正在部署的目录行，完成后将结果存至该行。
     /// @details 与当前选择独立，只有部署 future 有效时参与绘制与发布。
     std::size_t m_deployingIndex = 0;

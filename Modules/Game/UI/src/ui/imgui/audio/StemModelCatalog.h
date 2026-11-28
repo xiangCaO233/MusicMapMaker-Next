@@ -3,7 +3,10 @@
 #include "StemSeparationJob.h"
 
 #include <array>
+#include <cstdint>
 #include <expected>
+#include <optional>
+#include <shared_mutex>
 #include <stop_token>
 #include <string>
 
@@ -86,10 +89,37 @@ struct BoundStemModel {
     std::string directory;
 };
 
+/// @brief 一个模型目录的常规文件大小及应用卸载权限。
+struct StemModelStorage {
+    /// @brief 目录下常规文件的逻辑字节数，外部链接目标不计入。
+    std::uintmax_t bytes{};
+    /// @brief 目录能确认为独立部署；外部导入仅支持解除绑定。
+    bool managed{};
+};
+
+/// @brief 后台读取绑定目录的占用及归属。
+/// @warning 扫描可遍历运行环境和模型权重目录，不能从渲染线程执行。
+std::optional<StemModelStorage> inspectStemModelStorage(
+    const StemCatalogEntry& entry, const std::string& directory);
+
+/// @brief 移除仍与确认路径匹配的绑定，可选卸载应用部署的文件。
+/// @warning 后台文件任务；删除与推理互斥，失败返回界面可显示的原因。
+std::expected<void, std::string> removeStemModelBinding(
+    const StemCatalogEntry& entry, const std::string& directory,
+    bool removeFiles);
+
+/// @brief 在后台任务内保活推理或部署正在访问的模型文件。
+/// @warning 在同一文件线程获取及释放；有卸载进行时立即返回未持锁状态。
+std::shared_lock<std::shared_mutex> tryLockStemModelFiles();
+
 /// @brief 读取每个模型的目录绑定，缺失条目为空。
 /// @return 按当前目录排序的路径，持久化格式以模型 ID 查找。
 /// @warning 文件操作，仅首次打开工具调用。
 std::array<std::string, STEM_MODEL_CATALOG.size()> readStemModelBindings();
+
+/// @brief 用配置提交序号让同时打开的控制器刷新共享绑定。
+/// @warning 渲染线程仅做 relaxed 原子读取；实际配置由后台卸载或低频绑定写入。
+std::uint64_t stemModelBindingsRevision() noexcept;
 
 /// @brief 原子合并一个模型绑定，保留其他控制器已保存的目录。
 /// @param entry 用户确认绑定的目录条目。
