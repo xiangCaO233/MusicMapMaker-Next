@@ -149,7 +149,9 @@ std::expected<StemSeparationModel, std::string> readStemSeparationModel(
         model.stems.push_back(name);
     }
     // 保留冻结快照，避免点击分离时重新读取发生变化的描述文件。
-    model.plan = plan.dump();
+    model.plan     = plan.dump();
+    model.cacheKey = Audio::makeStemCacheModelKey(
+        Config::pathToUtf8(configPath.lexically_normal()) + "\n" + model.plan);
     return model;
 }
 
@@ -269,9 +271,11 @@ std::expected<Audio::StemPlaybackMix, std::string> runStemSeparation(
     Audio::StemPlaybackMix mix{
         .catalog =
             std::make_shared<const Audio::StemAudition>(std::move(*audition)),
-        .gains    = std::vector<float>(tracks.size(), 1.0F),
-        .enabled  = std::vector<bool>(tracks.size(), true),
-        .useStems = useStems,
+        .gains          = std::vector<float>(tracks.size(), 1.0F),
+        .enabled        = std::vector<bool>(tracks.size(), true),
+        .useStems       = useStems,
+        .cacheModelKey  = model.cacheKey,
+        .cacheModelName = model.name,
     };
     mix.settingsPath =
         Audio::storeStemPlaybackResult(*identity, tracks, mix, stop);

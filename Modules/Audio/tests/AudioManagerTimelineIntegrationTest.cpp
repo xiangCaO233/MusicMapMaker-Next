@@ -1239,7 +1239,7 @@ bool testSharedChartStemRouting(MMM::Audio::AudioManager& manager,
     return first && shared && effect && restored;
 }
 
-/// @brief 验证磁盘全量恢复、后台设置保存及已失效的分轨文件回退。
+/// @brief 验证磁盘恢复、设置保存、失效回退和分轨缓存清理。
 /// @warning 测试隔离目录内复制短 WAV，等待真实解码与设备回调。
 bool testPersistedChartStems(MMM::Audio::AudioManager& manager,
                              const std::string&        samplePath)
@@ -1271,6 +1271,23 @@ bool testPersistedChartStems(MMM::Audio::AudioManager& manager,
     };
     saved.settingsPath = storeStemPlaybackResult(*identity, files, saved);
     if ( saved.settingsPath.empty() ) return false;
+    // 重复分离会保留旧代次，显示的空间与删除范围必须覆盖两份。
+    const auto firstCache  = readStemPlaybackCache(original);
+    saved.settingsPath     = storeStemPlaybackResult(*identity, files, saved);
+    const auto secondCache = readStemPlaybackCache(original);
+    if ( saved.settingsPath.empty() || !firstCache || !secondCache ||
+         firstCache->size() != 1 || secondCache->size() != 1 ||
+         secondCache->front().bytes <= firstCache->front().bytes ||
+         MMM::Config::utf8ToPath(secondCache->front().directory) !=
+             saved.settingsPath.parent_path().parent_path() )
+        return false;
+    // 旧安装没有模型选择文件，仍必须按旧版清单恢复。
+    if ( !std::filesystem::remove(
+             saved.settingsPath.parent_path().parent_path() /
+                 "active-model.json",
+             error) ||
+         error )
+        return false;
     // 失败的再次分离不能覆盖先前成功发布的清单。
     if ( !storeStemPlaybackResult(
               *identity, std::array{ original + ".missing" }, saved)
@@ -1327,6 +1344,77 @@ bool testPersistedChartStems(MMM::Audio::AudioManager& manager,
     std::filesystem::last_write_time(originalFile, previousTime + 5s, error);
     ok = !error && !manager.getStemPlaybackSource(original)->mix()->catalog &&
          !loadStoredStemPlayback(original, *decode) && ok;
+    // 让删除从分轨模式开始，验证已有混音节点立即回到原版。
+    change.useStems        = true;
+    ok                     = source->publishSettings(change) && ok;
+    const auto deleteError = source->deleteCachedPlayback(original, "");
+    const auto emptyCache  = readStemPlaybackCache(original);
+    ok = !deleteError && emptyCache && emptyCache->empty() &&
+         !StemPlaybackSource::Read(source.get()).get() &&
+         !source->mix()->catalog && !source->publishSettings(change) &&
+         !loadStoredStemPlayback(original, *decode) &&
+         std::filesystem::is_regular_file(originalFile, error) && !error && ok;
+    // 两个模型共用原曲时仍有独立目录和混音配置，重开以选中模型为准。
+    const auto currentIdentity = readStemSourceIdentity(original);
+    if ( !currentIdentity ) return false;
+    // 保留一次旧格式结果，验证和两个具名模型共存时删除互不影响。
+    saved.settingsPath =
+        storeStemPlaybackResult(*currentIdentity, files, saved);
+    if ( saved.settingsPath.empty() ) return false;
+    auto firstModel           = saved;
+    firstModel.cacheModelKey  = "model-a";
+    firstModel.cacheModelName = "模型 A";
+    firstModel.settingsPath =
+        storeStemPlaybackResult(*currentIdentity, files, firstModel);
+    auto secondModel           = saved;
+    secondModel.cacheModelKey  = "model-b";
+    secondModel.cacheModelName = "模型 B";
+    secondModel.gains          = { 0.75F };
+    secondModel.settingsPath =
+        storeStemPlaybackResult(*currentIdentity, files, secondModel);
+    const auto models        = readStemPlaybackCache(original);
+    const auto reopened      = loadStoredStemPlayback(original, *decode);
+    const auto currentSource = manager.getStemPlaybackSource(original);
+    const auto validCache    = [](const StemPlaybackCacheInfo& cache) {
+        return cache.reusable && cache.bytes > 0;
+    };
+    ok = ok && models && models->size() == 3 &&
+         std::ranges::all_of(*models, validCache) &&
+         firstModel.settingsPath.parent_path().parent_path() !=
+             secondModel.settingsPath.parent_path().parent_path() &&
+         reopened && reopened->cacheModelKey == secondModel.cacheModelKey &&
+         reopened->gains == secondModel.gains;
+    const auto activate = [&](const StemPlaybackMix& model) {
+        return !currentSource->activateCachedPlayback(
+            original, model.cacheModelKey, *decode);
+    };
+    ok = activate(firstModel) &&
+         currentSource->mix()->gains == firstModel.gains && ok;
+
+    // 立即切走再返回也要恢复刚编辑的推子，不能用另一模型覆盖待保存快照。
+    auto editedFirst  = *currentSource->mix();
+    editedFirst.gains = { 0.4F };
+    ok                = currentSource->publishSettings(editedFirst) && ok;
+    currentSource->queueSettingsSave();
+    ok = activate(secondModel) &&
+         currentSource->mix()->gains == secondModel.gains &&
+         activate(firstModel) &&
+         currentSource->mix()->gains == editedFirst.gains && ok;
+    const auto reopenedAfterSwitch = loadStoredStemPlayback(original, *decode);
+    // 删除非活动缓存保持当前播放；删除活动缓存才退回原版。
+    ok = reopenedAfterSwitch &&
+         reopenedAfterSwitch->cacheModelKey == firstModel.cacheModelKey &&
+         !currentSource->deleteCachedPlayback(original,
+                                              secondModel.cacheModelKey) &&
+         currentSource->mix()->useStems && ok;
+    ok = !currentSource->deleteCachedPlayback(original,
+                                              firstModel.cacheModelKey) &&
+         !currentSource->mix()->catalog &&
+         !loadStoredStemPlayback(original, *decode) && ok;
+    const auto remaining = readStemPlaybackCache(original);
+    ok = remaining && remaining->size() == 1 &&
+         remaining->front().modelKey.empty() &&
+         !currentSource->deleteCachedPlayback(original, "") && ok;
     manager.unloadAudioTimeline(false);
     if ( !ok ) XERROR("Persisted chart stem restoration failed");
     return ok;
