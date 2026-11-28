@@ -1207,15 +1207,19 @@ bool testUnifiedSelectionGestureOwnership()
             updates,
             ends);
     passed &= marquees == 1 && starts.empty() && updates == 0 && ends == 0;
+    // macOS 的 ImGui 会映射 Ctrl 和 Super，并把物理 Ctrl + 左键解释为右键。
+    // 框选和点选都要模拟同一个逻辑 Ctrl，避免框选在 macOS 上走另一鼠标入口。
+    const ImGuiKey selectionModifier =
+        io.ConfigMacOSXBehaviors ? ImGuiMod_Super : ImGuiMod_Ctrl;
     /// @brief 通过实际画布入口发布一次框选起笔和释放。
     /// @param ctrl 是否在起笔前按下 Ctrl。
     /// @note 起笔后释放 Ctrl，验证临时加选不改变后续手势的默认模式。
     const auto dragMarquee = [&](bool ctrl) {
-        io.AddKeyEvent(ImGuiMod_Ctrl, ctrl);
+        io.AddKeyEvent(selectionModifier, ctrl);
         frame(controller, snapshot, false, { 100, 100 });
         marquees = 0;
         frame(controller, snapshot, true, { 100, 100 });
-        io.AddKeyEvent(ImGuiMod_Ctrl, false);
+        io.AddKeyEvent(selectionModifier, false);
         frame(controller, snapshot, true, { 150, 250 });
         frame(controller, snapshot, false, { 150, 250 });
     };
@@ -1256,10 +1260,6 @@ bool testUnifiedSelectionGestureOwnership()
     snapshot.hitboxes.front().y = 0;
     snapshot.hitboxes.front().h = 180;
     mouseProfile.setSelectionOperation(Logic::SelectionOperation::Replace);
-    // ImGui 在 macOS 行为下会按其修饰键规则投递事件。
-    // 测试发出供交互入口读取的实际键，不直接覆盖输入层的 Ctrl 标志。
-    const ImGuiKey clickModifier =
-        io.ConfigMacOSXBehaviors ? ImGuiMod_Super : ImGuiMod_Ctrl;
     /// @brief 通过正式画布事件点击一个目标并应用唯一的选择命令。
     /// @param entity 已注册到当前隔离会话中的目标。
     /// @param ctrl 是否在点击前持有加减选修饰键。
@@ -1271,7 +1271,8 @@ bool testUnifiedSelectionGestureOwnership()
         // 保留命中框的几何位置，只替换实体 ID，使后面的快速点击真正处于
         // 双击位置容差内。若改变坐标，错误的双击跳转分支可能永远无法触发。
         snapshot.hitboxes.front().entity = entity;
-        io.AddKeyEvent(clickModifier, ctrl);
+        // 与框选共用平台映射，修饰键仍通过实际事件队列进入画布。
+        io.AddKeyEvent(selectionModifier, ctrl);
         frame(controller, snapshot, false, { 110, 100 });
         clicks.clear();
         starts.clear();
