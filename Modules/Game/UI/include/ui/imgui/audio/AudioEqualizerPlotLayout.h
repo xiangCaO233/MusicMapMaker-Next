@@ -20,20 +20,29 @@ inline AudioEqualizerBandHeights audioEqualizerBandHeights(float scale,
              std::max(144.0f * scale, 4 * fontHeight) };
 }
 
-/// @brief 计算 EQ 响应图外框高度；桌面保持原有像素高度。
-/// @param requestedHeight 触屏用户选择的逻辑高度，不写入音频或谱面参数。
+/// @brief 每个平台允许的最小逻辑高度，供尺寸控件和绘图布局共同使用。
+inline constexpr int DESKTOP_EQ_PLOT_MIN_HEIGHT = 120;
+/// @brief 触屏使用更大的最小绘图区，轴文字不会挤占全部内容。
+inline constexpr int TOUCH_EQ_PLOT_MIN_HEIGHT = 240;
+/// @brief 限制可调图表高度，超过窗口的内容仍由外层滚动。
+inline constexpr int EQ_PLOT_MAX_HEIGHT = 640;
+
+/// @brief 计算 EQ 响应图外框高度，逻辑尺寸只换算一次。
+/// @param requestedHeight 用户选择的逻辑高度，不写入音频或谱面参数。
 /// @param scale 当前窗口内容倍率，逻辑高度只在这里换算一次。
 /// @param fontHeight 当前实际字号，防止坐标轴占满高 DPI 绘图区。
 /// @param touch 是否使用独立移动布局。
-/// @details 至少十行文字高度同时容纳刻度、轴标题和可读的数据区域。
+/// @details 为刻度、轴标题和实际绘图区预留字号相关的最小高度。
 /// 更大的用户选择仍然生效；面板不足时由外层内容滚动而非压缩曲线。
 /// @warning UI 每帧常量级测量，无分配、配置写入或音频线程访问。
 inline float audioEqualizerPlotHeight(float requestedHeight, float scale,
                                       float fontHeight, bool touch)
 {
-    // 桌面沿用原高度，不借触屏适配改变原有窗口节奏。
-    if ( !touch ) return 150.0f;
-    return std::max(
-        { 240.0f * scale, requestedHeight * scale, fontHeight * 10.0f });
+    const auto minHeight = static_cast<float>(
+        touch ? TOUCH_EQ_PLOT_MIN_HEIGHT : DESKTOP_EQ_PLOT_MIN_HEIGHT);
+    // 对异常或过小请求钳制后，再按实际字号避免坐标装饰挤掉数据区。
+    const float logicalHeight = std::clamp(
+        requestedHeight, minHeight, static_cast<float>(EQ_PLOT_MAX_HEIGHT));
+    return std::max(logicalHeight * scale, fontHeight * (touch ? 10.0f : 9.0f));
 }
 }  // namespace MMM::UI
