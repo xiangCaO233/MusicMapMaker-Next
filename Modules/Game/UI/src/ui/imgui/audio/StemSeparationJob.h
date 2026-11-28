@@ -50,8 +50,8 @@ std::expected<StemSeparationModel, std::string> readStemSeparationModel(
 
 /// @brief 在外部环境内执行分离并将校验通过的结果读入试听目录。
 /// @warning 阻塞调用，只能交给后台文件池。decodePool 必须为独立线程池。
-std::expected<Audio::StemAudition, std::string> runStemSeparation(
+std::expected<Audio::StemPlaybackMix, std::string> runStemSeparation(
     const StemSeparationModel& model, const std::string& source,
     const std::string& interpreter, const std::string& backend, bool cpu,
-    ice::ThreadPool& decodePool, std::stop_token stop);
+    ice::ThreadPool& decodePool, std::stop_token stop, bool useStems);
 }  // namespace MMM::UI

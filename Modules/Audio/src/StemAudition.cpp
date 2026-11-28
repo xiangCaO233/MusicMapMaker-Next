@@ -1,10 +1,14 @@
 #include "audio/StemAudition.h"
 
 #include "audio/AudioTimelineMixerNode.h"
+#include "audio/StemPlaybackStorage.h"
+#include "log/colorful-log.h"
+#include "runtime/AppThreadPool.h"
 
 #include <ice/config/config.hpp>
 #include <ice/manage/AudioBuffer.hpp>
 #include <ice/manage/AudioPool.hpp>
+#include <ice/thread/ThreadPool.hpp>
 
 
 #include <algorithm>
@@ -15,16 +19,22 @@
 
 namespace MMM::Audio
 {
-/// @brief 返回 UI 独占的状态；尚未完成分离时共享空的默认设置。
-const StemPlaybackMix& StemPlaybackSource::mix() const noexcept
+/// @brief 复制当前非实时状态；首次准备期间返回原版的默认状态。
+std::shared_ptr<const StemPlaybackMix> StemPlaybackSource::mix() const
 {
-    static const StemPlaybackMix empty;
-    return m_current ? *m_current : empty;
+    static const auto     empty = std::make_shared<const StemPlaybackMix>();
+    const std::lock_guard lock(m_mixMutex);
+    return m_current ? m_current : empty;
 }
 
-/// @brief 向已有谱面调度一次性发布完整分轨组合。
-/// @warning UI 控制路径，实时回调只借用不可变快照。
+/// @brief 发布由用户调整或新任务准备的完整调音台状态。
 bool StemPlaybackSource::publish(StemPlaybackMix mix)
+{
+    return publishMix(std::move(mix), false);
+}
+
+/// @brief 串行发布控制快照，恢复作业只填充仍为空的来源。
+bool StemPlaybackSource::publishMix(StemPlaybackMix mix, bool onlyIfEmpty)
 {
     if ( !mix.catalog || mix.catalog->tracks().empty() ) return false;
     const auto count = mix.catalog->tracks().size();
@@ -34,17 +44,71 @@ bool StemPlaybackSource::publish(StemPlaybackMix mix)
     for ( auto& gain : mix.gains )
         gain = std::isfinite(gain) ? std::clamp(gain, 0.0F, 1.0F) : 0.0F;
 
-    auto next = std::make_unique<const StemPlaybackMix>(std::move(mix));
-    // 先断开旧指针，再检查读者。顺序一致保证新进入的读者只能取得新指针，
-    // 仍可持有旧指针的读者则在本次检查之前进入读区。
-    m_active.store(next->useStems ? next.get() : nullptr);
-    if ( m_readers.load() == 0U ) {
-        m_retired.clear();
-    } else if ( m_current ) {
-        m_retired.push_back(std::move(m_current));
+    auto next = std::make_shared<const StemPlaybackMix>(std::move(mix));
+    std::shared_ptr<const StemPlaybackMix>              previous;
+    std::vector<std::shared_ptr<const StemPlaybackMix>> reclaimed;
+    {
+        const std::lock_guard lock(m_mixMutex);
+        if ( onlyIfEmpty && m_current ) return false;
+        // 先断开旧指针，再检查读者。顺序一致保证仍可持有旧指针的读者
+        // 必然在本次检查之前进入读区。
+        m_active.store(next->useStems ? next.get() : nullptr);
+        previous = std::exchange(m_current, std::move(next));
+        if ( m_readers.load() == 0U ) {
+            reclaimed.swap(m_retired);
+        } else if ( previous ) {
+            m_retired.push_back(std::move(previous));
+        }
     }
-    m_current = std::move(next);
+    // 退役目录可能拥有整首歌的 PCM，不能在界面读取的短锁内析构。
     return true;
+}
+
+/// @brief 同源准备任务只读取一次本地结果，且不会将旧文件覆盖新任务结果。
+void StemPlaybackSource::restore(const std::string& filePath,
+                                 ice::ThreadPool&   decodePool)
+{
+    std::call_once(m_restored, [&] {
+        if ( mix()->catalog ) return;
+        if ( auto restored = loadStoredStemPlayback(filePath, decodePool) )
+            static_cast<void>(publishMix(std::move(*restored), true));
+    });
+}
+
+/// @brief 每个来源只安排一份后台写入任务，任务持有来源直到保存完成。
+void StemPlaybackSource::queueSettingsSave()
+{
+    auto* files  = Runtime::AppThreadPool::instance().getFileThreadPool();
+    auto  source = weak_from_this().lock();
+    if ( !files || !source ) return;
+    {
+        const std::lock_guard lock(m_mixMutex);
+        if ( m_saveQueued || !m_current || m_current->settingsPath.empty() )
+            return;
+        m_saveQueued = true;
+    }
+    auto job = files->enqueue(
+        [source = std::move(source)] { source->saveQueuedSettings(); });
+    if ( !job.valid() ) {
+        const std::lock_guard lock(m_mixMutex);
+        m_saveQueued = false;
+    }
+}
+
+/// @brief 磁盘只接收有序快照；保存期间的变化合并到最新一次状态。
+void StemPlaybackSource::saveQueuedSettings()
+{
+    for ( ;; ) {
+        const auto snapshot = mix();
+        if ( !snapshot->settingsPath.empty() &&
+             !storeStemPlaybackSettings(*snapshot) )
+            XWARN("Could not save stem playback settings");
+        const std::lock_guard lock(m_mixMutex);
+        if ( m_current == snapshot ) {
+            m_saveQueued = false;
+            return;
+        }
+    }
 }
 
 /// @brief 只对实际启用分轨的来源进入读区，避免原版主轨走原子读改写。

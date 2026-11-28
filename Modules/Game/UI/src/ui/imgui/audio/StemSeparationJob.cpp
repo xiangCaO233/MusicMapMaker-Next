@@ -2,6 +2,7 @@
 
 #ifndef __ANDROID__
 #    include "StemSeparationWorker.h"
+#    include "audio/StemPlaybackStorage.h"
 #    include "config/AppPaths.h"
 #    include "config/StagedFile.h"
 #    include "config/Utf8Path.h"
@@ -160,14 +161,17 @@ std::expected<StemSeparationModel, std::string> readStemSeparationModel(
 /// @param cpu 允许在无 GPU 的环境强制使用 CPU。
 /// @param decodePool 与本文件任务分离的解码池，避免后台线程等待自身。
 /// @param stop 由界面提交取消；后台将它转发为当前作业私有标记。
+/// @param useStems 任务开始时的播放模式，用于首次写入新分离结果。
 /// @return 完全驻留且源帧对齐的试听目录，或错误原因。
 /// @warning 仅后台文件池可调用。可能等待模型推理、转换及音频解码。
-std::expected<Audio::StemAudition, std::string> runStemSeparation(
+std::expected<Audio::StemPlaybackMix, std::string> runStemSeparation(
     const StemSeparationModel& model, const std::string& source,
     const std::string& interpreter, const std::string& backend, bool cpu,
-    ice::ThreadPool& decodePool, std::stop_token stop)
+    ice::ThreadPool& decodePool, std::stop_token stop, bool useStems)
 {
     if ( stop.stop_requested() ) return std::unexpected("已取消分离。");
+    const auto identity = Audio::readStemSourceIdentity(source);
+    if ( !identity ) return std::unexpected("无法读取原音频文件。");
     std::error_code error;
     // 临时区独立于工程，退出时清理也不会访问原曲所在目录。
     const auto temp = std::filesystem::temp_directory_path(error);
@@ -257,9 +261,23 @@ std::expected<Audio::StemAudition, std::string> runStemSeparation(
     // 单轨解码失败时整组仍不发布，旧试听节点由 UI 保留。
     auto audition = Audio::StemAudition::loadAlignedFiles(tracks, decodePool);
     if ( !audition ) return std::unexpected("无法解码分离产物。");
-    // 返回目录拥有缓存的解码音频，不借用已准备被收回的工作目录。
-    // 利用移动保留 PCM 缓存的单一持有关系，不复制成第二套样本。
-    return std::move(*audition);
+    if ( stop.stop_requested() ) return std::unexpected("已取消分离。");
+    if ( Audio::readStemSourceIdentity(source) != identity )
+        return std::unexpected("分离期间原音频已变更。");
+
+    // 保存解码通过的完整一代。提交失败仍可使用内存结果，但不会替换旧清单。
+    Audio::StemPlaybackMix mix{
+        .catalog =
+            std::make_shared<const Audio::StemAudition>(std::move(*audition)),
+        .gains    = std::vector<float>(tracks.size(), 1.0F),
+        .enabled  = std::vector<bool>(tracks.size(), true),
+        .useStems = useStems,
+    };
+    mix.settingsPath =
+        Audio::storeStemPlaybackResult(*identity, tracks, mix, stop);
+    if ( mix.settingsPath.empty() && stop.stop_requested() )
+        return std::unexpected("已取消分离。");
+    return mix;
 }
 }  // namespace MMM::UI
 #endif
