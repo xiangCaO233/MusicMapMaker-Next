@@ -14,7 +14,9 @@
 #    include <ice/thread/ThreadPool.hpp>
 #    include <imgui.h>
 
+#    include <algorithm>
 #    include <array>
+#    include <cfloat>
 #    include <chrono>
 #    include <cstddef>
 #    include <expected>
@@ -24,6 +26,7 @@
 #    include <optional>
 #    include <stop_token>
 #    include <string>
+#    include <string_view>
 #    include <utility>
 #    include <vector>
 
@@ -563,9 +566,25 @@ private:
             // 文件名只在目录变更时转为展示文本，连续拖动不解析路径。
             m_labelCatalog = current.catalog;
             m_labels.clear();
-            for ( const auto& track : current.catalog->tracks() )
-                m_labels.push_back(
-                    Config::pathToUtf8(Config::utf8ToPath(track.id).stem()));
+            // 常见模型的声部使用短中文名；自定义模型保留原文件名。
+            constexpr std::array<std::pair<std::string_view, std::string_view>,
+                                 6>
+                names{ { { "vocals", "人声" },
+                         { "drums", "鼓组" },
+                         { "bass", "贝斯" },
+                         { "guitar", "吉他" },
+                         { "piano", "钢琴" },
+                         { "other", "其他" } } };
+            for ( const auto& track : current.catalog->tracks() ) {
+                auto name =
+                    Config::pathToUtf8(Config::utf8ToPath(track.id).stem());
+                const auto it =
+                    std::ranges::find_if(names, [&](const auto& entry) {
+                        return entry.first == name;
+                    });
+                if ( it != names.end() ) name = it->second;
+                m_labels.push_back(std::move(name));
+            }
         }
         std::optional<Audio::StemPlaybackMix> edited;
         /// @brief 在本帧首次变动时创建草稿，后续控件更新同一份组合。
@@ -573,40 +592,107 @@ private:
             if ( !edited ) edited = current;
             return *edited;
         };
-        ImGui::BeginChild("StemMixer",
-                          ImVec2(0, 230 * dpiScale),
-                          ImGuiChildFlags_None,
-                          ImGuiWindowFlags_HorizontalScrollbar);
-        for ( std::size_t index = 0; index < m_labels.size(); ++index ) {
-            ImGui::PushID(static_cast<int>(index));
-            ImGui::BeginGroup();
-            ImGui::TextUnformatted(m_labels[index].c_str());
-            float gain = current.gains[index];
-            if ( ImGui::VSliderFloat("##gain",
-                                     ImVec2(46 * dpiScale, 120 * dpiScale),
-                                     &gain,
-                                     0.0F,
-                                     1.0F,
-                                     "%.2f") )
-                edit().gains[index] = gain;
-
-            // 独听不改写启用位和推子，退出时恢复原来的组合。
-            bool enabled = current.enabled[index];
-            if ( FeedbackCheckbox("启用", &enabled) )
-                edit().enabled[index] = enabled;
-            ImGui::SameLine();
-            if ( FeedbackSmallButton(current.solo == index ? "退出独听"
-                                                           : "独听") ) {
-                if ( current.solo == index )
-                    edit().solo.reset();
-                else
-                    edit().solo = index;
+        const auto& style = ImGui::GetStyle();
+        const float width = ImGui::GetContentRegionAvail().x;
+        const float em    = ImGui::GetFontSize();
+        // 宽窗口两组并排；窄 Dock 直接改为单列声部，不生成内部横向滚动。
+        const int   groups = width >= 44.0F * em && m_labels.size() > 1 ? 2 : 1;
+        const float groupWidth  = width / static_cast<float>(groups);
+        const bool  compact     = groupWidth < 18.0F * em;
+        const char* muteLabel   = compact ? "M" : "静音";
+        const char* soloLabel   = compact ? "S" : "独听";
+        const float buttonWidth = std::max(ImGui::CalcTextSize(muteLabel).x,
+                                           ImGui::CalcTextSize(soloLabel).x) +
+                                  2.0F * style.FramePadding.x;
+        // 保留足够宽的音量滑块；长模型文件名限制在自己的列内并提供完整提示。
+        const float nameWidth =
+            std::clamp(groupWidth * 0.23F, 2.0F * em, 7.0F * em);
+        ImGui::PushStyleVar(
+            ImGuiStyleVar_CellPadding,
+            ImVec2(style.CellPadding.x,
+                   std::max(3.0F * dpiScale, style.CellPadding.y)));
+        const float tableTop = ImGui::GetCursorScreenPos().y;
+        if ( ImGui::BeginTable("StemMixer",
+                               groups * 4,
+                               ImGuiTableFlags_RowBg |
+                                   ImGuiTableFlags_BordersInnerH |
+                                   ImGuiTableFlags_SizingFixedFit) ) {
+            for ( int group = 0; group < groups; ++group ) {
+                ImGui::TableSetupColumn(
+                    "##name", ImGuiTableColumnFlags_WidthFixed, nameWidth);
+                ImGui::TableSetupColumn(
+                    "##gain", ImGuiTableColumnFlags_WidthStretch, 1.0F);
+                ImGui::TableSetupColumn(
+                    "##mute", ImGuiTableColumnFlags_WidthFixed, buttonWidth);
+                ImGui::TableSetupColumn(
+                    "##solo", ImGuiTableColumnFlags_WidthFixed, buttonWidth);
             }
-            ImGui::EndGroup();
-            ImGui::PopID();
-            if ( index + 1 < m_labels.size() ) ImGui::SameLine();
+            std::optional<float> dividerX;
+            for ( std::size_t index = 0; index < m_labels.size(); ++index ) {
+                // 同一声部始终使用目录索引作为 ID，改变列数不会重置音量。
+                ImGui::PushID(static_cast<int>(index));
+                const bool audible = current.solo ? *current.solo == index
+                                                  : current.enabled[index];
+                const bool muted   = !current.enabled[index];
+                const bool solo    = current.solo == index;
+                ImGui::TableNextColumn();
+                // 以右组第一列的实际边缘定位，兼容列取整和主题单元格内边距。
+                if ( groups == 2 && index == 1 )
+                    dividerX =
+                        ImGui::GetCursorScreenPos().x - style.CellPadding.x;
+                ImGui::AlignTextToFramePadding();
+                if ( !audible )
+                    ImGui::PushStyleColor(ImGuiCol_Text,
+                                          style.Colors[ImGuiCol_TextDisabled]);
+                const auto* name = m_labels[index].c_str();
+                ImGui::TextUnformatted(name);
+                if ( !audible ) ImGui::PopStyleColor();
+                if ( ImGui::CalcTextSize(name).x > nameWidth )
+                    ImGui::SetItemTooltip("%s", name);
+
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                // UI 用百分数表示电平，发布时仍使用混音器的线性倍率。
+                float percent = current.gains[index] * 100.0F;
+                if ( ImGui::SliderFloat("##gain",
+                                        &percent,
+                                        0.0F,
+                                        100.0F,
+                                        "%.0f%%",
+                                        ImGuiSliderFlags_AlwaysClamp) )
+                    edit().gains[index] = percent * 0.01F;
+
+                ImGui::TableNextColumn();
+                if ( FeedbackSelectableButton(
+                         muteLabel, muted, ImVec2(buttonWidth, 0)) )
+                    edit().enabled[index] = muted;
+                ImGui::SetItemTooltip("%s", muted ? "取消静音" : "静音");
+
+                ImGui::TableNextColumn();
+                // 独听状态用选中色提示，退出后恢复通道原有的静音组合。
+                if ( FeedbackSelectableButton(
+                         soloLabel, solo, ImVec2(buttonWidth, 0)) ) {
+                    if ( solo )
+                        edit().solo.reset();
+                    else
+                        edit().solo = index;
+                }
+                ImGui::SetItemTooltip("%s", solo ? "退出独听" : "独听");
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+            if ( dividerX ) {
+                // 在表格合并绘制通道后画线，避免被斑马纹盖住或被单元格裁剪。
+                const float tableBottom =
+                    ImGui::GetCursorScreenPos().y - style.ItemSpacing.y;
+                ImGui::GetWindowDrawList()->AddLine(
+                    ImVec2(*dividerX, tableTop),
+                    ImVec2(*dividerX, tableBottom),
+                    ImGui::GetColorU32(ImGuiCol_Text, 0.35F),
+                    std::max(1.0F, dpiScale));
+            }
         }
-        ImGui::EndChild();
+        ImGui::PopStyleVar();
         // 同一画面上的多项输入只产生一次更新，下一音频块可看到完整组态。
         if ( edited )
             static_cast<void>(m_stemSource->publish(std::move(*edited)));
