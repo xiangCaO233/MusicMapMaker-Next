@@ -6521,11 +6521,26 @@ void Basic2DCanvasInteraction::handleInteractions(
         UI::Interaction::mouseClicked(ImGuiMouseButton_Left, false);
     const bool leftDoubleClicked =
         UI::Interaction::mouseDoubleClicked(ImGuiMouseButton_Left);
+    // 点选只在框选工具命中物件的按下边沿解析。空白起笔仍从框选路径
+    // 读取自己的集合操作，避免 Ctrl 点选规则取代 Ctrl 追加框选。
+    const bool selectionHit =
+        leftClicked && isHovered &&
+        currentSnapshot->currentTool == Logic::EditTool::Marquee &&
+        hoveredEntity != entt::null;
+    const bool clickCtrl =
+        selectionHit &&
+        UI::Interaction::modifier(UI::Interaction::Modifier::Control);
+    const auto selectionClick =
+        selectionHit
+            ? UI::Interaction::activeProfile().clickSelection(clickCtrl)
+            : UI::Interaction::SelectionClick{};
+    // 单击与双击共享同一个鼠标按下事件。先判定该按下归属，
+    // 使快速 Ctrl 点选不会在第二次按下时触发播放头定位。
     const bool leftSeekClicked =
         isMouseInTrackLayout && currentSnapshot->isHoveringCanvas &&
         currentSnapshot->hasBeatmap && !currentSnapshot->isPlaying &&
         currentSnapshot->currentTool != Logic::EditTool::Draw &&
-        leftDoubleClicked;
+        leftDoubleClicked && !selectionClick.m_selectionOnly;
     // 双击 seek 排除 Draw 工具，防止双击创建物件时意外跳转播放头。
 
     if ( leftSeekClicked ) {
@@ -6555,23 +6570,20 @@ void Basic2DCanvasInteraction::handleInteractions(
                 // 框选工具在实体上按下时先选择并转为对象拖拽；空白处才开始
                 // 新框选矩形。
                 if ( hoveredEntity != entt::null ) {
-                    const auto operation =
-                        UI::Interaction::activeProfile().selectionOperation();
-                    // 经典方案不指定集合操作，继续由 Ctrl 决定选择切换。
-                    // 纯鼠标模式由命令明确携带，不能只用 clearOthers 模拟减选。
-                    UI::Interaction::dispatchCommand(
-                        Event::LogicCommandEvent(Logic::CmdSelectEntity{
-                            hoveredEntity,
-                            !UI::Interaction::modifier(
-                                UI::Interaction::Modifier::Control),
-                            hoveredObjectKind,
-                            operation }));
+                    // 默认 Ctrl 点选复用逻辑层的单实体切换；显式模式独立携带。
+                    UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
+                        Logic::CmdSelectEntity{ hoveredEntity,
+                                                !clickCtrl,
+                                                hoveredObjectKind,
+                                                selectionClick.m_operation }));
                     // 减选点击只改变集合，不能把刚移出的对象再次加入拖动事务。
                     // 追加和替换仍可拖动已选集合，保留常规批量移动。
                     // 已分类的轻点只选中；拖动门槛属于输入策略，不能用空动作
                     // 代替选择，否则未保存标记和重做分支都会被无意义地改变。
                     if ( !m_pointerTapOnly && !currentSnapshot->isPlaying &&
-                         operation != Logic::SelectionOperation::Subtract ) {
+                         !selectionClick.m_selectionOnly &&
+                         selectionClick.m_operation !=
+                             Logic::SelectionOperation::Subtract ) {
                         // 播放时仍允许选择查看，但不允许改变对象位置。
                         // 按下处的命中部位与子索引随命令一起入队，避免拖拽工具
                         // 在稍后的逻辑帧误读到另一处悬停状态。

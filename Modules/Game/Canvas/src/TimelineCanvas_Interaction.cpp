@@ -1980,8 +1980,7 @@ void TimelineCanvas::handleTimingCanvasPointerInput(const ImVec2& canvasPos,
                 // 减选只更新集合，不建立拖动事务或框选矩形。
                 m_isTimingMarqueeSelecting = false;
                 m_timingMarqueeBaseSelection.clear();
-                if ( !selectTimingTarget(
-                         hoveredTarget->entity, true, additiveSelection) ) {
+                if ( !selectTimingTarget(hoveredTarget->entity, ctrl, shift) ) {
                     m_isTimingDragging       = false;
                     m_timingDragPreviewDelta = 0.0;
                     m_timingDragEntries.clear();

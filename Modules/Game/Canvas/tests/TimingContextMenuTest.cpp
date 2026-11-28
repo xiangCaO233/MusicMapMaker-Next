@@ -558,6 +558,16 @@ bool checkMenu()
     frame(canvas, snapshot, narrow, true);
     frame(canvas, snapshot, narrow);
     passed &= Access::count(canvas) == 1 && Access::contains(canvas, 42);
+    // 纯鼠标替换模式下真实 Ctrl 点选第二项可追加，再点一次恢复原集合。
+    const ImGuiKey inputModifier =
+        ImGui::GetIO().ConfigMacOSXBehaviors ? ImGuiMod_Super : ImGuiMod_Ctrl;
+    ImGui::GetIO().AddKeyEvent(inputModifier, true);
+    tap(second);
+    passed &= Access::count(canvas) == 2 && Access::contains(canvas, 43);
+    tap(second);
+    passed &= Access::count(canvas) == 1 && Access::contains(canvas, 42);
+    ImGui::GetIO().AddKeyEvent(inputModifier, false);
+    frame(canvas, snapshot, first);
     // 抓取工具的追加保留组；减选不能启动拖动或发布移动命令。
     // 上一笔替换框不保留多选基线，框外 Scroll 应已从集合中移除。
     snapshot.currentTool = Logic::EditTool::Move;
@@ -603,8 +613,6 @@ bool checkMenu()
     tap(first);
     // 经典追加读取逻辑 Ctrl；macOS 注入对应的物理 Command。
     // 不沿用纯鼠标模式，也不改写 KeyCtrl 来绕过平台事件处理。
-    const ImGuiKey inputModifier =
-        ImGui::GetIO().ConfigMacOSXBehaviors ? ImGuiMod_Super : ImGuiMod_Ctrl;
     ImGui::GetIO().AddKeyEvent(inputModifier, true);
     // 经典分支读取真实物理修饰键，不能被上次的纯鼠标减选模式覆盖。
     tap(second);

@@ -19,18 +19,19 @@ namespace MMM::Canvas
 {
 /// @brief 将命中目标并入或移出本地 Timing 选择，不直接修改谱面数据。
 /// @param entity 已由调用方按泳道、部位和可选设置验证过的目标。
-/// @param preserveGroup 直接拖动已选项时保留组，菜单替换操作不保留。
-/// @param additiveSelection 经典 Ctrl/Shift 的切换意图，显式方案模式优先。
+/// @param ctrl 点选时的 Ctrl 状态，可触发纯鼠标临时切换。
+/// @param shift 经典组合选择使用的 Shift 状态。
 /// @details 本函数不验证目标是否可选，框选与直接拖动由调用方分别校验门禁。
 /// 返回值只控制后续拖动，单纯更新选择不会向逻辑层提交谱面修改。
 /// @return 可以从该目标开始拖动时返回真，减选操作返回假。
 /// @warning 只在点击边沿操作本地集合，不读 ECS 或等待逻辑线程。
-bool TimelineCanvas::selectTimingTarget(entt::entity entity, bool preserveGroup,
-                                        bool additiveSelection)
+bool TimelineCanvas::selectTimingTarget(entt::entity entity, bool ctrl,
+                                        bool shift)
 {
-    const bool wasSelected = m_selectedTimingEntities.contains(entity);
-    const auto operation =
-        UI::Interaction::activeProfile().selectionOperation();
+    const bool wasSelected       = m_selectedTimingEntities.contains(entity);
+    const bool additiveSelection = ctrl || shift;
+    const auto click = UI::Interaction::activeProfile().clickSelection(ctrl);
+    const auto operation = click.m_operation;
     // 纯鼠标的减选是差集，重复点击不反向加入对象，也不能拖动被移出的对象。
     if ( operation == Logic::SelectionOperation::Subtract ) {
         m_selectedTimingEntities.erase(entity);
@@ -43,11 +44,10 @@ bool TimelineCanvas::selectTimingTarget(entt::entity entity, bool preserveGroup,
     }
     const bool replace = operation == Logic::SelectionOperation::Replace ||
                          (!operation && !additiveSelection);
-    // 已选项保留整组移动；菜单的替换操作只留下直接点击的目标。
-    if ( replace && (!preserveGroup || !wasSelected) )
-        m_selectedTimingEntities.clear();
+    // 普通点击已选项保留整组移动，点击未选项才替换原集合。
+    if ( replace && !wasSelected ) m_selectedTimingEntities.clear();
     m_selectedTimingEntities.insert(entity);
-    return true;
+    return !click.m_selectionOnly;
 }
 
 /// @brief 全选 Timing 画布可见的可编辑目标，与键盘入口保持同一过滤规则。

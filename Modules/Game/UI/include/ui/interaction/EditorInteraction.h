@@ -45,6 +45,13 @@ enum class Surface {
 };
 /// @brief 指针修饰语义，保留 Ctrl 与 Command 的独立配置能力。
 enum class Modifier { Control, Shift, Alt, Super };
+/// @brief 点选操作及当前点击能否转为对象拖动。
+struct SelectionClick {
+    /// @brief 显式集合运算；空值由调用方按修饰键解析选择切换。
+    std::optional<Logic::SelectionOperation> m_operation;
+    /// @brief 只切换选中状态，跳过移动和双击定位等指针手势。
+    bool m_selectionOnly{};
+};
 /// @brief 相机指针意图独立于键盘修饰，供鼠标及后续触控入口共用。
 struct CameraPointerOptions {
     /// @brief 中键导航沿观察平面平移；关闭时绕观察中心旋转。
@@ -134,6 +141,9 @@ public:
     /// @brief 显式选择模式；经典方案返回空以保留物理修饰键语义。
     /// @warning 每帧只读取 UI 线程标量，不访问选择集合。
     virtual std::optional<Logic::SelectionOperation> selectionOperation() const;
+    /// @brief 解析命中对象的点选方式；空值沿用调用方的修饰键切换语义。
+    /// @warning 点击边沿调用，不修改右键菜单选定的持久模式。
+    virtual SelectionClick clickSelection(bool ctrl) const;
     /// @brief 在框选起笔时解析本次集合操作。
     /// @param ctrl 起笔时的 Ctrl 状态，适用范围由交互方案决定。
     /// @return 显式框选模式，或交由调用方处理经典修饰键时返回空。

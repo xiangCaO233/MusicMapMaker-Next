@@ -446,7 +446,14 @@ bool TimelineCanvas::handleInterpolationBody(const ImVec2& position,
                 segment.time,
                 segment.time + segment.interpolation.m_duration,
                 segment.interpolation.m_samplesPerSecond);
-        if ( UI::Interaction::mouseDoubleClicked(ImGuiMouseButton_Left) ) {
+        // 纯鼠标默认模式中的 Ctrl 点选优先由时间线选择入口处理。
+        // 正文双击处理位于同一事件链，不能再次把这次按下升级为参数编辑。
+        if ( UI::Interaction::mouseDoubleClicked(ImGuiMouseButton_Left) &&
+             !(m_currentSnapshot->currentTool == Logic::EditTool::Marquee &&
+               UI::Interaction::activeProfile()
+                   .clickSelection(UI::Interaction::modifier(
+                       UI::Interaction::Modifier::Control))
+                   .m_selectionOnly) ) {
             // 段首不必在可见区；双击正文仍能编辑整个原始段落。
             m_isTimingDragging       = false;
             m_isTimingDrawPreviewing = false;
